@@ -578,41 +578,40 @@ void Expander::process(const std::string &text, std::string &out, std::string &m
   }
 }
 
-std::vector<std::string> Expander::split_ifs(const std::string &s, const std::string &mask) {
+std::vector<std::pair<std::string, std::string>> Expander::split_ifs(const std::string &s,
+                                                                     const std::string &mask) {
   std::string ifs = sh_.ifs();
-  std::vector<std::string> fields;
-  std::string cur;
+  std::vector<std::pair<std::string, std::string>> fields;
+  std::string cur, curm;
   bool have = false;
   auto is_ifs = [&](char c) { return ifs.find(c) != std::string::npos; };
   auto is_ws = [&](char c) { return c == ' ' || c == '\t' || c == '\n'; };
+  auto flush = [&]() { fields.emplace_back(cur, curm); cur.clear(); curm.clear(); have = false; };
   size_t i = 0;
   while (i < s.size()) {
     char c = s[i];
     bool q = mask[i] == '1';
     if (!q && c == FIELD_SEP) {
-      fields.push_back(cur);
-      cur.clear();
-      have = false;
+      flush();
       i++;
       continue;
     }
     if (!q && is_ifs(c)) {
       if (is_ws(c)) {
-        if (have) { fields.push_back(cur); cur.clear(); have = false; }
+        if (have) flush();
         while (i < s.size() && mask[i] != '1' && is_ifs(s[i]) && is_ws(s[i])) i++;
       } else {
-        fields.push_back(cur);
-        cur.clear();
-        have = false;
+        flush();
         i++;
       }
       continue;
     }
     cur += c;
+    curm += mask[i];
     have = true;
     i++;
   }
-  if (have) fields.push_back(cur);
+  if (have) flush();
   return fields;
 }
 
@@ -634,6 +633,18 @@ std::vector<std::string> Expander::glob_field(const std::string &field, const st
   return matches;
 }
 
+// Does BRACED contain a quote character, so that expanding to empty still
+// yields one (empty) field -- e.g. "" or "$empty" -- unlike an unquoted empty
+// expansion such as $empty, which yields no field at all.
+static bool has_quote_char(const std::string &s) {
+  for (size_t i = 0; i < s.size(); i++) {
+    char c = s[i];
+    if (c == '\\') { i++; continue; }
+    if (c == '\'' || c == '"') return true;
+  }
+  return false;
+}
+
 std::vector<std::string> Expander::expand_args(const std::vector<Word> &words) {
   std::vector<std::string> result;
   for (const Word &w : words) {
@@ -641,13 +652,13 @@ std::vector<std::string> Expander::expand_args(const std::vector<Word> &words) {
       std::string tilded = expand_leading_tilde(sh_, braced);
       std::string out, mask;
       process(tilded, out, mask, false);
-      for (const std::string &field : split_ifs(out, mask)) {
-        // recompute a mask for the field for globbing: chars from split lost
-        // their per-char mask, so treat all as unquoted (glob may act). This is
-        // a simplification; quoted metachars in split output are rare.
-        std::string fmask(field.size(), '0');
-        for (const std::string &g : glob_field(field, fmask)) result.push_back(g);
+      auto fields = split_ifs(out, mask);
+      if (fields.empty() && has_quote_char(braced)) {
+        result.emplace_back();  // quoted null -> one empty field
+        continue;
       }
+      for (const auto &fm : fields)
+        for (const std::string &g : glob_field(fm.first, fm.second)) result.push_back(g);
     }
   }
   return result;

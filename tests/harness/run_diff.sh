@@ -85,6 +85,14 @@ scripts=(
   'echo $LINENO; echo $LINENO; x=1; echo $LINENO'
   's=$SECONDS; echo "$s"; echo $((SECONDS>=0))'
   'echo $(($$ == $$)) $((BASHPID>0)) $((EPOCHSECONDS>1000000000))'
+  'printf "%q " hello "a b" "it'\''s" "" "*.x" "\$v" "a,b" "~x"; echo'
+  'printf "%b|" "\101" "\0101" "\x41" "a\tb"; echo'
+  'printf -v out "%s=%05d" foo 7; echo "[$out]"'
+  'printf "%-8s|%5.2f|%3d\n" hi 3.14159 42'
+  'echo "*.md"; echo '\''*.md'\''; x="*"; echo "$x"'
+  'printf "<%s>" "" a ""; echo'
+  'set -- "" x ""; echo $#; for a in "$@"; do echo "[$a]"; done'
+  'v="a b"; printf "<%s>" "$v"; echo; printf "<%s>" $v; echo'
 )
 
 fails=0

@@ -45,7 +45,10 @@ class Expander {
   void expand_dollar(const std::string &text, size_t &i, bool dq, std::string &out,
                      std::string &mask);
 
-  std::vector<std::string> split_ifs(const std::string &s, const std::string &mask);
+  // Split into fields on IFS; each field carries its per-character quote mask
+  // so pathname expansion can tell quoted metacharacters from unquoted ones.
+  std::vector<std::pair<std::string, std::string>> split_ifs(const std::string &s,
+                                                             const std::string &mask);
   std::vector<std::string> glob_field(const std::string &field, const std::string &mask);
 };
 

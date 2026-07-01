@@ -56,6 +56,60 @@ std::string decode_escapes(const std::string &s) {
   return out;
 }
 
+// printf %b: like echo -e but also interprets octal (\nnn, \0nnn) and hex
+// (\xHH) escapes, and \c which stops all further output.
+std::string decode_b(const std::string &s, bool &stop) {
+  std::string out;
+  stop = false;
+  for (size_t i = 0; i < s.size(); i++) {
+    if (s[i] != '\\' || i + 1 >= s.size()) { out += s[i]; continue; }
+    char e = s[++i];
+    switch (e) {
+      case 'n': out += '\n'; break;
+      case 't': out += '\t'; break;
+      case 'r': out += '\r'; break;
+      case 'a': out += '\a'; break;
+      case 'b': out += '\b'; break;
+      case 'f': out += '\f'; break;
+      case 'v': out += '\v'; break;
+      case '\\': out += '\\'; break;
+      case 'c': stop = true; return out;
+      case 'x': {
+        int v = 0, k = 0;
+        while (k < 2 && i + 1 < s.size() && std::isxdigit((unsigned char)s[i + 1])) {
+          char h = s[++i];
+          v = v * 16 + (h <= '9' ? h - '0' : (std::tolower(h) - 'a' + 10));
+          k++;
+        }
+        out += static_cast<char>(v);
+        break;
+      }
+      case '0': {
+        // \0nnn : the 0 is a prefix; up to 3 octal digits follow.
+        int v = 0, k = 0;
+        while (k < 3 && i + 1 < s.size() && s[i + 1] >= '0' && s[i + 1] <= '7') {
+          v = v * 8 + (s[++i] - '0');
+          k++;
+        }
+        out += static_cast<char>(v);
+        break;
+      }
+      case '1': case '2': case '3':
+      case '4': case '5': case '6': case '7': {
+        int v = e - '0', k = 1;
+        while (k < 3 && i + 1 < s.size() && s[i + 1] >= '0' && s[i + 1] <= '7') {
+          v = v * 8 + (s[++i] - '0');
+          k++;
+        }
+        out += static_cast<char>(v);
+        break;
+      }
+      default: out += '\\'; out += e; break;
+    }
+  }
+  return out;
+}
+
 int bi_echo(Shell &, const std::vector<std::string> &argv) {
   size_t i = 1;
   bool newline = true, escapes = false;
@@ -83,10 +137,84 @@ int bi_echo(Shell &, const std::vector<std::string> &argv) {
   return 0;
 }
 
-int bi_printf(Shell &, const std::vector<std::string> &argv) {
-  if (argv.size() < 2) return 0;
-  std::string fmt = argv[1];
-  size_t argi = 2;
+// ---- %q shell-quoting (matches bash's sh_backslash_quote / ansic_quote) ----
+bool q_needs_ansic(const std::string &s) {
+  for (unsigned char c : s)
+    if (c < 32 || c == 127) return true;
+  return false;
+}
+std::string q_ansic(const std::string &s) {
+  std::string r = "$'";
+  for (unsigned char c : s) {
+    switch (c) {
+      case '\n': r += "\\n"; break;
+      case '\t': r += "\\t"; break;
+      case '\r': r += "\\r"; break;
+      case '\\': r += "\\\\"; break;
+      case '\'': r += "\\'"; break;
+      case '\a': r += "\\a"; break;
+      case '\b': r += "\\b"; break;
+      case '\f': r += "\\f"; break;
+      case '\v': r += "\\v"; break;
+      default:
+        if (c < 32 || c == 127) {
+          char b[8];
+          std::snprintf(b, sizeof b, "\\%03o", c);
+          r += b;
+        } else {
+          r += static_cast<char>(c);
+        }
+    }
+  }
+  r += '\'';
+  return r;
+}
+std::string shell_quote(const std::string &s) {
+  if (s.empty()) return "''";
+  if (q_needs_ansic(s)) return q_ansic(s);
+  // Characters bash leaves unescaped, plus alphanumerics; `~' and `#' are only
+  // safe when they do not start the string.
+  static const char *safe = "#%+-./:=@_~";
+  std::string r;
+  for (size_t i = 0; i < s.size(); i++) {
+    unsigned char c = s[i];
+    bool ok = std::isalnum(c) || (c != 0 && std::strchr(safe, c) != nullptr);
+    if (ok && i == 0 && (c == '~' || c == '#')) ok = false;
+    if (!ok) r += '\\';
+    r += static_cast<char>(c);
+  }
+  return r;
+}
+
+// Format one numeric/string conversion with width/precision via snprintf.
+template <typename T>
+void append_formatted(std::string &out, const std::string &spec, T value) {
+  int need = std::snprintf(nullptr, 0, spec.c_str(), value);
+  if (need < 0) return;
+  std::vector<char> buf(static_cast<size_t>(need) + 1);
+  std::snprintf(buf.data(), buf.size(), spec.c_str(), value);
+  out.append(buf.data(), static_cast<size_t>(need));
+}
+
+int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
+  // Options: -v NAME (assign to a variable), -- (end of options).
+  size_t ai = 1;
+  bool to_var = false;
+  std::string vname;
+  while (ai < argv.size() && argv[ai].size() >= 2 && argv[ai][0] == '-') {
+    if (argv[ai] == "--") { ai++; break; }
+    if (argv[ai] == "-v" && ai + 1 < argv.size()) {
+      to_var = true;
+      vname = argv[ai + 1];
+      ai += 2;
+      continue;
+    }
+    break;
+  }
+  if (ai >= argv.size()) return 0;
+  std::string fmt = argv[ai++];
+  size_t argi = ai;
+  std::string out;
   auto next = [&]() -> std::string {
     return argi < argv.size() ? argv[argi++] : std::string();
   };
@@ -96,30 +224,61 @@ int bi_printf(Shell &, const std::vector<std::string> &argv) {
     for (size_t i = 0; i < fmt.size(); i++) {
       char c = fmt[i];
       if (c == '\\' && i + 1 < fmt.size()) {
-        std::string e = decode_escapes(fmt.substr(i, 2));
-        std::fwrite(e.data(), 1, e.size(), stdout);
+        out += decode_escapes(fmt.substr(i, 2));
         i++;
       } else if (c == '%' && i + 1 < fmt.size()) {
-        // find conversion char
         size_t j = i + 1;
         while (j < fmt.size() && std::strchr("-+ #0123456789.", fmt[j])) j++;
-        if (j >= fmt.size()) { std::fputc('%', stdout); break; }
+        if (j >= fmt.size()) { out += '%'; break; }
         char conv = fmt[j];
         std::string spec = fmt.substr(i, j - i + 1);
-        if (conv == '%') { std::fputc('%', stdout); }
-        else if (conv == 's') { std::string a = next(); std::printf(spec.c_str(), a.c_str()); consumed_any = true; }
-        else if (conv == 'c') { std::string a = next(); std::fputc(a.empty() ? '\0' : a[0], stdout); consumed_any = true; }
-        else if (conv == 'd' || conv == 'i' || conv == 'x' || conv == 'X' || conv == 'o' || conv == 'u') {
-          std::string a = next(); std::printf(spec.c_str(), static_cast<long>(std::strtol(a.c_str(), nullptr, 0))); consumed_any = true;
-        } else if (conv == 'f' || conv == 'g' || conv == 'e') {
-          std::string a = next(); std::printf(spec.c_str(), std::strtod(a.c_str(), nullptr)); consumed_any = true;
-        } else { std::fwrite(spec.data(), 1, spec.size(), stdout); }
+        if (conv == '%') {
+          out += '%';
+        } else if (conv == 'q') {
+          out += shell_quote(next());
+          consumed_any = true;
+        } else if (conv == 'b') {
+          bool stop = false;
+          out += decode_b(next(), stop);
+          consumed_any = true;
+          if (stop) { argi = argv.size(); i = fmt.size(); break; }
+        } else if (conv == 's') {
+          append_formatted(out, spec, next().c_str());
+          consumed_any = true;
+        } else if (conv == 'c') {
+          std::string a = next();
+          if (!a.empty()) out += a[0];
+          consumed_any = true;
+        } else if (conv == 'd' || conv == 'i' || conv == 'x' || conv == 'X' ||
+                   conv == 'o' || conv == 'u') {
+          std::string sp = spec;
+          sp.insert(sp.size() - 1, "l");  // promote to long
+          append_formatted(out, sp, std::strtol(next().c_str(), nullptr, 0));
+          consumed_any = true;
+        } else if (conv == 'f' || conv == 'F' || conv == 'g' || conv == 'G' ||
+                   conv == 'e' || conv == 'E') {
+          append_formatted(out, spec, std::strtod(next().c_str(), nullptr));
+          consumed_any = true;
+        } else {
+          out += spec;
+        }
         i = j;
       } else {
-        std::fputc(c, stdout);
+        out += c;
       }
     }
   } while (argi < argv.size() && consumed_any);
+
+  if (to_var) {
+    auto lb = vname.find('[');
+    if (lb != std::string::npos && !vname.empty() && vname.back() == ']') {
+      sh.array_set(vname.substr(0, lb), vname.substr(lb + 1, vname.size() - lb - 2), out);
+    } else {
+      sh.set(vname, out);
+    }
+  } else {
+    std::fwrite(out.data(), 1, out.size(), stdout);
+  }
   return 0;
 }
 
