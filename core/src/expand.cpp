@@ -146,6 +146,8 @@ std::string Expander::param_value(const std::string &name, bool &set) {
 // Expand a ${...} body (without the braces).  Returns the value; sets `split`
 // if the result is subject to word splitting (always, for consistency here).
 static std::string expand_brace_body(Expander &, Shell &, const std::string &);
+static std::string apply_param_op(Expander &, Shell &, const std::string &name,
+                                  std::string val, bool set, const std::string &rest);
 
 // Detect NAME[@] / NAME[*] with an optional leading `#' (count) or `!' (keys).
 static bool array_ref(const std::string &body, char &lead, std::string &name, char &sel) {
@@ -162,6 +164,26 @@ static bool array_ref(const std::string &body, char &lead, std::string &name, ch
     return true;
   }
   return false;
+}
+
+// Detect NAME[@]OP / NAME[*]OP where OP is an operator applied element-wise
+// (case-mod ^ , ; pattern removal # % ; substitution / ; transform @).  Slicing
+// (:offset) and default (:-) forms act on the array as a whole and are excluded.
+static bool array_op_ref(const std::string &body, std::string &name, char &sel,
+                         std::string &rest) {
+  if (body.empty() || !(std::isalpha(static_cast<unsigned char>(body[0])) || body[0] == '_'))
+    return false;
+  size_t p = 0;
+  while (p < body.size() && (std::isalnum(static_cast<unsigned char>(body[p])) || body[p] == '_')) p++;
+  name = body.substr(0, p);
+  if (p + 3 > body.size() || body[p] != '[' ||
+      (body[p + 1] != '@' && body[p + 1] != '*') || body[p + 2] != ']')
+    return false;
+  sel = body[p + 1];
+  rest = body.substr(p + 3);
+  if (rest.empty()) return false;
+  char c = rest[0];
+  return c == '^' || c == ',' || c == '#' || c == '%' || c == '/' || c == '@';
 }
 
 void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::string &out,
@@ -262,6 +284,29 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
               if (k) { out += FIELD_SEP; mask += '0'; }
               for (char c : items[k]) { out += c; mask += '0'; }
             }
+          }
+        }
+        i = end + 1;
+        return;
+      }
+      // ${a[@]OP} / ${a[*]OP}: apply OP to each element.
+      std::string aoname, arest;
+      char asel;
+      if (array_op_ref(body, aoname, asel, arest)) {
+        std::vector<std::string> items = sh_.array_values(aoname);
+        for (std::string &it : items) it = apply_param_op(*this, sh_, aoname, it, true, arest);
+        if (asel == '*' && dq) {
+          std::string is = sh_.ifs();
+          std::string j = is.empty() ? std::string() : std::string(1, is[0]);
+          for (size_t k = 0; k < items.size(); k++) {
+            if (k) for (char c : j) { out += c; mask += '1'; }
+            for (char c : items[k]) { out += c; mask += '1'; }
+          }
+        } else {
+          char m = (asel == '@' && dq) ? '1' : '0';
+          for (size_t k = 0; k < items.size(); k++) {
+            if (k) { out += FIELD_SEP; mask += '0'; }
+            for (char c : items[k]) { out += c; mask += m; }
           }
         }
         i = end + 1;
@@ -424,7 +469,14 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
   }
   if (length) return std::to_string(val.size());
   std::string rest = b.substr(p);
+  return apply_param_op(ex, sh, name, val, set, rest);
+}
 
+// Apply the operator suffix `rest' (everything after the name/subscript) of a
+// ${...} expansion to a single value.  Factored out of expand_brace_body so
+// array expansions can apply it to each element of ${a[@]} / ${a[*]}.
+static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &name,
+                                  std::string val, bool set, const std::string &rest) {
   if (rest.empty()) return val;
 
   auto expand_word = [&](const std::string &w) { return ex.expand_no_split(w); };

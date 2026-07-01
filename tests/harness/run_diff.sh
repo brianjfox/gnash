@@ -121,6 +121,10 @@ scripts=(
   'x=${ echo hello world; }; echo "[$x]"'
   'n=0; y=${ n=42; echo captured; }; echo "$y n=$n"'
   'v=${ for i in 1 2 3; do echo -n "$i"; done; }; echo "$v"'
+  'a=(foo bar baz); echo "${a[@]^}"; echo "${a[@]^^}"'
+  'a=(file.txt doc.pdf); echo "${a[@]%.*}"; echo "${a[@]#*.}"'
+  'a=(one two); echo "${a[@]/o/O}"; echo "${a[*]^^}"'
+  'a=(hi bye); echo "${a[@]@Q}"'
 )
 
 fails=0
