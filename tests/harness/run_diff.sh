@@ -113,6 +113,11 @@ scripts=(
   'wc -l < <(seq 1 5) | tr -d " "'
   'while read l; do echo "got:$l"; done < <(printf "p\nq\n")'
   'sort <(echo 3; echo 1; echo 2) | tr "\n" ","; echo'
+  'declare -a arr=(1 2 3); echo "${#arr[@]} ${arr[1]}"'
+  'declare -a a=(one "two three" four); echo "${#a[@]}: ${a[1]}"'
+  'declare -A m=([x]=1 [y]=2); echo "${m[x]}${m[y]} ${#m[@]}"'
+  'y="hi there"; declare z=$y; echo "$z"; declare -i n=3+4; echo "$n"'
+  'f(){ local -a la=(p q r); echo "${la[2]}"; }; f'
 )
 
 fails=0

@@ -59,6 +59,10 @@ class Expander {
 // Brace expansion on a single word (textual, pre-expansion).
 std::vector<std::string> brace_expand(const std::string &text);
 
+// Apply a NAME=VALUE / NAME[i]=VALUE / NAME=(...) assignment word to the shell
+// (used by declare/local/readonly for array and scalar values).
+void apply_assignment_word(Shell &sh, const std::string &word);
+
 }  // namespace gnash::core
 
 #endif  // GNASH_CORE_EXPAND_HPP

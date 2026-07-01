@@ -236,6 +236,37 @@ void gather_pipeline(const Command *c, std::vector<const Command *> &stages) {
 
 }  // namespace
 
+namespace {
+// A NAME= / NAME+= / NAME[sub]= prefix (an assignment word for a builtin).
+bool is_assignment_word_text(const std::string &w) {
+  size_t i = 0;
+  if (i >= w.size() || !(std::isalpha(static_cast<unsigned char>(w[i])) || w[i] == '_'))
+    return false;
+  while (i < w.size() && (std::isalnum(static_cast<unsigned char>(w[i])) || w[i] == '_')) i++;
+  if (i < w.size() && w[i] == '[') {
+    int d = 1;
+    i++;
+    while (i < w.size() && d) { if (w[i] == '[') d++; else if (w[i] == ']') d--; i++; }
+  }
+  if (i < w.size() && w[i] == '+') i++;
+  return i < w.size() && w[i] == '=';
+}
+
+bool is_assignment_builtin(const std::string &cmd) {
+  return cmd == "declare" || cmd == "typeset" || cmd == "local" || cmd == "readonly";
+}
+}  // namespace
+
+void apply_assignment_word(Shell &sh, const std::string &word) {
+  Expander ex(sh);
+  Assign a;
+  if (!parse_assign(word, a)) return;
+  if (a.sub || a.is_array)
+    apply_array_assign(sh, ex, a);
+  else
+    sh.set(a.name, ex.expand_assignment(a.value));
+}
+
 int Executor::run(const Command *c) {
   if (!c || unwinding()) return sh_.last_status;
 
@@ -415,7 +446,14 @@ int Executor::run_simple(const SimpleCommand *c) {
       }
     } else {
       prefix = false;
-      for (const std::string &f : ex.expand_args({w})) argv.push_back(f);
+      // For an assignment builtin (declare/local/readonly/typeset), a name=value
+      // argument is an assignment word: pass it through raw so it is neither
+      // word-split nor globbed and array literals survive; the builtin expands
+      // and parses it itself.
+      if (!argv.empty() && is_assignment_builtin(argv[0]) && is_assignment_word_text(w.text))
+        argv.push_back(w.text);
+      else
+        for (const std::string &f : ex.expand_args({w})) argv.push_back(f);
     }
   }
 

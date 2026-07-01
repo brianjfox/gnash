@@ -796,15 +796,24 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
   }
   for (; i < argv.size(); i++) {
     const std::string &a = argv[i];
+    size_t nend = a.find_first_of("[=");
+    std::string name = (nend == std::string::npos) ? a : a.substr(0, nend);
     size_t eq = a.find('=');
-    std::string name = eq == std::string::npos ? a : a.substr(0, eq);
     if (local && !global) sh.make_local(name);
     if (mk_assoc) sh.make_array(name, true);
     else if (mk_array) sh.make_array(name, false);
     if (eq != std::string::npos) {
       std::string val = a.substr(eq + 1);
-      if (integer) { bool ok = true; val = std::to_string(eval_arith(sh, val, &ok)); }
-      sh.set(name, val);
+      bool arraylit = val.size() >= 2 && val.front() == '(' && val.back() == ')';
+      bool subscript = nend != std::string::npos && a[nend] == '[';
+      if (arraylit || subscript) {
+        apply_assignment_word(sh, a);  // NAME=(...) or NAME[i]=...
+      } else {
+        Expander ex(sh);
+        val = ex.expand_assignment(val);  // arg arrives raw (assignment builtin)
+        if (integer) { bool ok = true; val = std::to_string(eval_arith(sh, val, &ok)); }
+        sh.set(name, val);
+      }
     }
     Variable &v = sh.vars[name];
     if (readonly) v.readonly = true;
