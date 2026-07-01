@@ -105,6 +105,9 @@ scripts=(
   'cd /usr/bin; echo "$PWD"; cd ../lib; echo "$PWD"'
   'cd /tmp && pushd /usr >/dev/null && pushd /bin >/dev/null; echo "n=$(dirs | wc -w)"; popd >/dev/null; popd >/dev/null; pwd'
   'cd /tmp; pushd /usr >/dev/null; pushd /bin >/dev/null; pushd +1 >/dev/null; pwd'
+  'printf "a\nb\nc\n" > /tmp/gm.$$; mapfile -t x < /tmp/gm.$$; printf "<%s>" "${x[@]}"; echo " n=${#x[@]}"; rm -f /tmp/gm.$$'
+  'printf "1\n2\n3\n4\n" > /tmp/gm.$$; mapfile -t -s1 -n2 y < /tmp/gm.$$; echo "${y[*]}"; rm -f /tmp/gm.$$'
+  'printf "p:q:r:" > /tmp/gm.$$; readarray -t -d: z < /tmp/gm.$$; printf "[%s]" "${z[@]}"; echo; rm -f /tmp/gm.$$'
 )
 
 fails=0

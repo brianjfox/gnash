@@ -588,6 +588,64 @@ int bi_popd(Shell &sh, const std::vector<std::string> &argv) {
   return bi_dirs(sh, {"dirs"});
 }
 
+// ---- mapfile / readarray -------------------------------------------------
+
+int bi_mapfile(Shell &sh, const std::vector<std::string> &argv) {
+  bool strip = false, haveO = false;
+  char delim = '\n';
+  long count = 0, origin = 0, skip = 0;
+  int fd = 0;
+  std::string name = "MAPFILE";
+  size_t i = 1;
+  for (; i < argv.size(); i++) {
+    const std::string &a = argv[i];
+    if (a.size() < 2 || a[0] != '-' || a == "--") { if (a == "--") i++; break; }
+    char opt = a[1];
+    if (opt == 't') { strip = true; continue; }
+    std::string val = a.size() > 2 ? a.substr(2)
+                     : (i + 1 < argv.size() && std::strchr("dnOsuCc", opt) ? argv[++i] : "");
+    switch (opt) {
+      case 'd': delim = val.empty() ? '\0' : val[0]; break;
+      case 'n': count = std::atol(val.c_str()); break;
+      case 'O': origin = std::atol(val.c_str()); haveO = true; break;
+      case 's': skip = std::atol(val.c_str()); break;
+      case 'u': fd = std::atoi(val.c_str()); break;
+      case 'c': case 'C': break;  // callback quantum -- accepted, not invoked
+      default: break;
+    }
+  }
+  if (i < argv.size()) name = argv[i];
+
+  std::string data;
+  char buf[4096];
+  ssize_t r;
+  while ((r = read(fd, buf, sizeof buf)) > 0) data.append(buf, static_cast<size_t>(r));
+
+  // Split into records, keeping the delimiter; a trailing empty record (data
+  // ended exactly on a delimiter) is not counted.
+  std::vector<std::string> recs;
+  size_t p = 0;
+  while (p < data.size()) {
+    size_t q = data.find(delim, p);
+    if (q == std::string::npos) { recs.push_back(data.substr(p)); break; }
+    recs.push_back(data.substr(p, q - p + 1));
+    p = q + 1;
+  }
+  if (skip > 0 && static_cast<size_t>(skip) < recs.size())
+    recs.erase(recs.begin(), recs.begin() + skip);
+  else if (skip > 0)
+    recs.clear();
+  if (count > 0 && static_cast<size_t>(count) < recs.size()) recs.resize(count);
+
+  if (!haveO) sh.unset(name);  // default: replace the whole array
+  for (size_t k = 0; k < recs.size(); k++) {
+    std::string v = recs[k];
+    if (strip && !v.empty() && v.back() == delim) v.pop_back();
+    sh.array_set(name, std::to_string(origin + static_cast<long>(k)), v);
+  }
+  return 0;
+}
+
 int bi_export(Shell &sh, const std::vector<std::string> &argv) {
   for (size_t i = 1; i < argv.size(); i++) {
     size_t eq = argv[i].find('=');
@@ -706,7 +764,7 @@ bool is_builtin_name(const std::string &n) {
       "read", "test", "[", "shift", "exit", "return", "break", "continue", "eval",
       "source", ".", "local", "declare", "typeset", "readonly", "let", "type", "trap",
       "umask", "getopts", "exec", "command", "times", "wait", "jobs", "fg", "bg",
-      "disown", "kill", "suspend", "dirs", "pushd", "popd", nullptr};
+      "disown", "kill", "suspend", "dirs", "pushd", "popd", "mapfile", "readarray", nullptr};
   for (int i = 0; names[i]; i++)
     if (n == names[i]) return true;
   return false;
@@ -892,6 +950,7 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
   else if (cmd == "dirs") st = bi_dirs(sh, argv);
   else if (cmd == "pushd") st = bi_pushd(sh, argv);
   else if (cmd == "popd") st = bi_popd(sh, argv);
+  else if (cmd == "mapfile" || cmd == "readarray") st = bi_mapfile(sh, argv);
   else if (cmd == "export") st = bi_export(sh, argv);
   else if (cmd == "unset") st = bi_unset(sh, argv);
   else if (cmd == "set") st = bi_set(sh, argv);
