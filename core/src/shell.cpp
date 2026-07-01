@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <csignal>
 #include <ctime>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -92,6 +93,55 @@ bool Shell::dynamic_var(const std::string &name, std::string &out) {
     return true;
   }
   return false;
+}
+
+namespace {
+volatile sig_atomic_t g_trap_pending[NSIG];
+
+void trap_signal_handler(int sig) {
+  if (sig > 0 && sig < NSIG) g_trap_pending[sig] = 1;
+}
+
+// Canonical trap name for a signal number (matching how `trap' stores keys).
+const char *signum_to_trapname(int sig) {
+  switch (sig) {
+    case SIGHUP: return "HUP";   case SIGINT: return "INT";
+    case SIGQUIT: return "QUIT"; case SIGTERM: return "TERM";
+    case SIGUSR1: return "USR1"; case SIGUSR2: return "USR2";
+    case SIGALRM: return "ALRM"; case SIGPIPE: return "PIPE";
+    case SIGTSTP: return "TSTP"; case SIGCONT: return "CONT";
+    case SIGCHLD: return "CHLD";
+    default: return nullptr;
+  }
+}
+}  // namespace
+
+void Shell::set_signal_trap(int signo, bool active) {
+  if (signo <= 0 || signo >= NSIG) return;
+  struct sigaction sa;
+  std::memset(&sa, 0, sizeof sa);
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = SA_RESTART;  // let blocking waits resume; traps run between commands
+  sa.sa_handler = active ? trap_signal_handler : SIG_DFL;
+  sigaction(signo, &sa, nullptr);
+}
+
+void Shell::run_pending_traps() {
+  if (in_trap) return;
+  for (int s = 1; s < NSIG; s++) {
+    if (!g_trap_pending[s]) continue;
+    g_trap_pending[s] = 0;
+    const char *nm = signum_to_trapname(s);
+    if (!nm) continue;
+    auto it = traps.find(nm);
+    if (it == traps.end() || it->second.empty()) continue;
+    in_trap = true;
+    int saved = last_status;  // the interrupted command's $?
+    std::string cmd = it->second;
+    run_string(cmd);
+    last_status = saved;
+    in_trap = false;
+  }
 }
 
 void Shell::reap_procsubs(size_t from) {
@@ -303,6 +353,8 @@ int Shell::run_string(const std::string &script) {
   retained.push_back(std::move(r.command));
   Executor ex(*this);
   int st = ex.run(c);
+  last_status = st;
+  run_pending_traps();  // deliver signals received during the final command
   last_status = st;
   return st;
 }

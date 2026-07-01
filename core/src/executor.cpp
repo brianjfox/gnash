@@ -270,6 +270,8 @@ void apply_assignment_word(Shell &sh, const std::string &word) {
 int Executor::run(const Command *c) {
   if (!c || unwinding()) return sh_.last_status;
 
+  sh_.run_pending_traps();  // deliver any signals received between commands
+
   if (auto *p = dynamic_cast<const SimpleCommand *>(c)) return run_simple(p);
   if (auto *p = dynamic_cast<const Connection *>(c)) return run_connection(p);
 

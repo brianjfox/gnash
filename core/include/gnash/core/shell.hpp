@@ -59,6 +59,9 @@ class Shell {
 
   // --- traps -------------------------------------------------------------
   std::map<std::string, std::string> traps;  // signal name (e.g. "EXIT") -> command
+  bool in_trap = false;                       // guard against trap recursion
+  void set_signal_trap(int signo, bool active);  // (de)install the shared handler
+  void run_pending_traps();                   // run traps for signals received
 
   // --- job control -------------------------------------------------------
   struct Job {

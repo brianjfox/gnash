@@ -58,7 +58,8 @@ int run_interactive(Shell &sh) {
   rl_event_hook = gnash_job_notify_hook;
 
   while (!sh.exiting) {
-    sh.reap_jobs(true);  // report any finished background jobs
+    sh.reap_jobs(true);      // report any finished background jobs
+    sh.run_pending_traps();  // deliver signals received while at the prompt
 
     std::string ps1 = sh.is_set("PS1") ? sh.get("PS1") : std::string("\\s-\\v\\$ ");
     char *line = readline(expand_prompt(sh, ps1).c_str());

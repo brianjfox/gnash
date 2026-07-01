@@ -125,6 +125,10 @@ scripts=(
   'a=(file.txt doc.pdf); echo "${a[@]%.*}"; echo "${a[@]#*.}"'
   'a=(one two); echo "${a[@]/o/O}"; echo "${a[*]^^}"'
   'a=(hi bye); echo "${a[@]@Q}"'
+  'trap "echo caught" USR1; kill -USR1 $$; echo done'
+  'x=5; trap "echo x=$x" USR1; kill -USR1 $$'
+  'trap "echo A" USR1; kill -USR1 $$; trap - USR1; kill -USR1 $$ 2>/dev/null; echo end'
+  'trap "echo bye" EXIT; echo body'
 )
 
 fails=0

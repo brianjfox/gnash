@@ -845,6 +845,21 @@ int bi_type(Shell &sh, const std::vector<std::string> &argv) {
   return st;
 }
 
+int signame_to_num(const std::string &s);
+
+// Canonical trap key for a signal number (must match shell.cpp's mapping).
+const char *trapname_from_num(int sig) {
+  switch (sig) {
+    case SIGHUP: return "HUP";   case SIGINT: return "INT";
+    case SIGQUIT: return "QUIT"; case SIGTERM: return "TERM";
+    case SIGUSR1: return "USR1"; case SIGUSR2: return "USR2";
+    case SIGALRM: return "ALRM"; case SIGPIPE: return "PIPE";
+    case SIGTSTP: return "TSTP"; case SIGCONT: return "CONT";
+    case SIGCHLD: return "CHLD";
+    default: return nullptr;
+  }
+}
+
 int bi_trap(Shell &sh, const std::vector<std::string> &argv) {
   if (argv.size() < 2) {
     for (const auto &kv : sh.traps)
@@ -852,14 +867,34 @@ int bi_trap(Shell &sh, const std::vector<std::string> &argv) {
     return 0;
   }
   std::string cmd = argv[1];
-  size_t start = 2;
-  bool remove = (cmd == "-");
-  for (size_t i = start; i < argv.size(); i++) {
-    std::string sig = argv[i];
-    if (sig.rfind("SIG", 0) == 0) sig = sig.substr(3);
-    for (char &c : sig) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    if (remove) sh.traps.erase(sig);
-    else sh.traps[sig] = cmd;
+  bool reset = (cmd == "-");
+  bool ignore = cmd.empty();
+  for (size_t i = 2; i < argv.size(); i++) {
+    std::string spec = argv[i];
+    std::string upper = spec;
+    if (upper.rfind("SIG", 0) == 0 || upper.rfind("sig", 0) == 0) upper = upper.substr(3);
+    for (char &c : upper) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+
+    // Pseudo-signals run at specific points, not on OS signal delivery.
+    if (upper == "EXIT" || upper == "DEBUG" || upper == "ERR" || upper == "RETURN") {
+      if (reset) sh.traps.erase(upper);
+      else sh.traps[upper] = cmd;
+      continue;
+    }
+
+    int signo = signame_to_num(spec);
+    const char *canon = trapname_from_num(signo);
+    std::string key = canon ? canon : upper;
+    if (reset) {
+      sh.traps.erase(key);
+      sh.set_signal_trap(signo, false);
+    } else if (ignore) {
+      sh.traps.erase(key);
+      signal(signo, SIG_IGN);
+    } else {
+      sh.traps[key] = cmd;
+      sh.set_signal_trap(signo, true);
+    }
   }
   return 0;
 }
