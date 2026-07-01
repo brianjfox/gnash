@@ -7,6 +7,7 @@
 #include <cstring>
 #include <ctime>
 #include <unistd.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/wait.h>
 
@@ -32,6 +33,19 @@ Shell::Shell() {
   set("PPID", std::to_string(static_cast<long>(getppid())));
   set("$", std::to_string(static_cast<long>(getpid())));
   seconds_base = static_cast<long long>(std::time(nullptr));  // $SECONDS origin
+
+  // Establish a valid logical $PWD.  Keep the inherited (possibly symlinked)
+  // value when it still names the current directory, as bash does; otherwise
+  // fall back to the resolved path.
+  char cwd[4096];
+  if (getcwd(cwd, sizeof cwd)) {
+    std::string pwd = get("PWD");
+    struct stat a, b;
+    bool valid = !pwd.empty() && pwd[0] == '/' && stat(pwd.c_str(), &a) == 0 &&
+                 stat(cwd, &b) == 0 && a.st_dev == b.st_dev && a.st_ino == b.st_ino;
+    if (valid) vars["PWD"].exported = true;
+    else set_exported("PWD", cwd);
+  }
 }
 
 // Advance bash's RANDOM generator (Park-Miller minimal-standard PRNG) and

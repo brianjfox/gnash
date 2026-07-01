@@ -388,22 +388,204 @@ int bi_test(Shell &, const std::vector<std::string> &argv, bool bracket) {
 
 // ---- other builtins ------------------------------------------------------
 
-int bi_cd(Shell &sh, const std::vector<std::string> &argv) {
-  std::string dir;
-  if (argv.size() < 2) dir = sh.get("HOME");
-  else if (argv[1] == "-") { dir = sh.get("OLDPWD"); std::printf("%s\n", dir.c_str()); }
-  else dir = argv[1];
+// ---- cd / pwd with bash's logical ($PWD) vs physical (getcwd) paths -------
+
+std::string phys_cwd() {
+  char b[4096];
+  return getcwd(b, sizeof b) ? std::string(b) : std::string();
+}
+
+// The logical working directory: $PWD when it is a usable absolute path,
+// otherwise the physical directory.  Unlike /bin/pwd this preserves the
+// symlinked path the user cd'd through.
+std::string logical_pwd(Shell &sh) {
+  std::string p = sh.get("PWD");
+  if (!p.empty() && p[0] == '/') return p;
+  return phys_cwd();
+}
+
+// Collapse `.' and `..' components of an absolute path textually (without
+// resolving symlinks), as logical `cd' does.
+std::string canon_logical(const std::string &path) {
+  std::vector<std::string> comps;
+  size_t i = 0;
+  while (i < path.size()) {
+    while (i < path.size() && path[i] == '/') i++;
+    size_t j = i;
+    while (j < path.size() && path[j] != '/') j++;
+    std::string c = path.substr(i, j - i);
+    i = j;
+    if (c.empty() || c == ".") continue;
+    if (c == "..") { if (!comps.empty()) comps.pop_back(); continue; }
+    comps.push_back(c);
+  }
+  std::string r;
+  for (const std::string &c : comps) { r += '/'; r += c; }
+  return r.empty() ? "/" : r;
+}
+
+// Change directory, updating $OLDPWD/$PWD.  In logical (default) mode $PWD
+// becomes the lexically-canonicalized path the user named; in physical mode
+// (`cd -P') it becomes the resolved getcwd().
+int change_dir(Shell &sh, const std::string &dir, bool physical) {
   if (dir.empty()) return 1;
-  char oldpwd[4096];
-  if (!getcwd(oldpwd, sizeof oldpwd)) oldpwd[0] = '\0';
-  if (chdir(dir.c_str()) != 0) {
+  std::string oldpwd = logical_pwd(sh);
+  std::string logical = (dir[0] == '/') ? dir : oldpwd + "/" + dir;
+  logical = canon_logical(logical);
+  const std::string &target = physical ? dir : logical;
+  if (chdir(target.c_str()) != 0) {
     std::fprintf(stderr, "gnash: cd: %s: %s\n", dir.c_str(), std::strerror(errno));
     return 1;
   }
-  sh.set_exported("OLDPWD", oldpwd);
-  char newpwd[4096];
-  if (getcwd(newpwd, sizeof newpwd)) sh.set_exported("PWD", newpwd);
+  if (!oldpwd.empty()) sh.set_exported("OLDPWD", oldpwd);
+  sh.set_exported("PWD", physical ? phys_cwd() : logical);
   return 0;
+}
+
+int bi_cd(Shell &sh, const std::vector<std::string> &argv) {
+  bool physical = false;
+  size_t i = 1;
+  for (; i < argv.size(); i++) {
+    if (argv[i] == "-L") physical = false;
+    else if (argv[i] == "-P") physical = true;
+    else if (argv[i] == "--") { i++; break; }
+    else break;
+  }
+  std::string dir;
+  if (i >= argv.size()) dir = sh.get("HOME");
+  else if (argv[i] == "-") {
+    dir = sh.get("OLDPWD");
+    if (dir.empty()) { std::fprintf(stderr, "gnash: cd: OLDPWD not set\n"); return 1; }
+    std::printf("%s\n", dir.c_str());
+  } else {
+    dir = argv[i];
+  }
+  if (dir.empty()) return 1;
+  return change_dir(sh, dir, physical);
+}
+
+int bi_pwd(Shell &sh, const std::vector<std::string> &argv) {
+  bool physical = false;
+  for (size_t i = 1; i < argv.size(); i++) {
+    if (argv[i] == "-P") physical = true;
+    else if (argv[i] == "-L") physical = false;
+  }
+  std::printf("%s\n", (physical ? phys_cwd() : logical_pwd(sh)).c_str());
+  return 0;
+}
+
+// ---- directory stack: dirs / pushd / popd --------------------------------
+
+// The full stack as bash presents it: current (logical) directory on top, then
+// the saved entries.
+std::vector<std::string> full_dirstack(Shell &sh) {
+  std::vector<std::string> v;
+  v.push_back(logical_pwd(sh));
+  for (const std::string &d : sh.dir_stack) v.push_back(d);
+  return v;
+}
+
+std::string tilde_abbrev(Shell &sh, const std::string &path, bool longform) {
+  std::string home = sh.get("HOME");
+  if (!longform && !home.empty() &&
+      (path == home || (path.size() > home.size() && path.compare(0, home.size(), home) == 0 &&
+                        path[home.size()] == '/')))
+    return "~" + path.substr(home.size());
+  return path;
+}
+
+int do_chdir(Shell &sh, const std::string &dir) { return change_dir(sh, dir, false); }
+
+int bi_dirs(Shell &sh, const std::vector<std::string> &argv) {
+  bool longform = false, oneline = false, verbose = false;
+  for (size_t i = 1; i < argv.size(); i++) {
+    const std::string &a = argv[i];
+    if (a.empty() || a[0] != '-') break;
+    for (size_t k = 1; k < a.size(); k++) {
+      if (a[k] == 'c') { sh.dir_stack.clear(); return 0; }
+      else if (a[k] == 'l') longform = true;
+      else if (a[k] == 'p') oneline = true;
+      else if (a[k] == 'v') { oneline = true; verbose = true; }
+      else { std::fprintf(stderr, "gnash: dirs: -%c: invalid option\n", a[k]); return 2; }
+    }
+  }
+  std::vector<std::string> v = full_dirstack(sh);
+  for (size_t i = 0; i < v.size(); i++) {
+    std::string s = tilde_abbrev(sh, v[i], longform);
+    if (verbose) std::printf("%2zu  %s\n", i, s.c_str());
+    else if (oneline) std::printf("%s\n", s.c_str());
+    else std::printf("%s%s", i ? " " : "", s.c_str());
+  }
+  if (!oneline && !verbose) std::putchar('\n');
+  return 0;
+}
+
+// Resolve a +N / -N rotation spec against the full stack; returns index or -1.
+int rot_index(const std::string &spec, size_t n) {
+  if (spec.size() < 2) return -1;
+  long k = std::atol(spec.c_str() + 1);
+  if (spec[0] == '+') return (k >= 0 && static_cast<size_t>(k) < n) ? static_cast<int>(k) : -1;
+  if (spec[0] == '-') {
+    long idx = static_cast<long>(n) - 1 - k;
+    return (idx >= 0 && static_cast<size_t>(idx) < n) ? static_cast<int>(idx) : -1;
+  }
+  return -1;
+}
+
+int bi_pushd(Shell &sh, const std::vector<std::string> &argv) {
+  if (argv.size() > 1 && (argv[1][0] == '+' || argv[1][0] == '-') && argv[1].size() > 1 &&
+      std::isdigit(static_cast<unsigned char>(argv[1][1]))) {
+    // Rotate so the Nth entry becomes the top.
+    std::vector<std::string> v = full_dirstack(sh);
+    int idx = rot_index(argv[1], v.size());
+    if (idx < 0) { std::fprintf(stderr, "gnash: pushd: %s: directory stack index out of range\n", argv[1].c_str()); return 1; }
+    std::rotate(v.begin(), v.begin() + idx, v.end());
+    if (do_chdir(sh, v[0]) != 0) return 1;
+    sh.dir_stack.assign(v.begin() + 1, v.end());
+    return bi_dirs(sh, {"dirs"});
+  }
+  if (argv.size() > 1) {
+    std::string old = logical_pwd(sh);
+    if (do_chdir(sh, argv[1]) != 0) return 1;
+    sh.dir_stack.insert(sh.dir_stack.begin(), old);
+    return bi_dirs(sh, {"dirs"});
+  }
+  // No argument: swap the top two directories.
+  if (sh.dir_stack.empty()) {
+    std::fprintf(stderr, "gnash: pushd: no other directory\n");
+    return 1;
+  }
+  std::string target = sh.dir_stack.front();
+  std::string old = logical_pwd(sh);
+  if (do_chdir(sh, target) != 0) return 1;
+  sh.dir_stack.front() = old;
+  return bi_dirs(sh, {"dirs"});
+}
+
+int bi_popd(Shell &sh, const std::vector<std::string> &argv) {
+  if (argv.size() > 1 && (argv[1][0] == '+' || argv[1][0] == '-') && argv[1].size() > 1 &&
+      std::isdigit(static_cast<unsigned char>(argv[1][1]))) {
+    std::vector<std::string> v = full_dirstack(sh);
+    int idx = rot_index(argv[1], v.size());
+    if (idx < 0) { std::fprintf(stderr, "gnash: popd: %s: directory stack index out of range\n", argv[1].c_str()); return 1; }
+    if (idx == 0) {  // removing the top: cd to the next entry
+      if (sh.dir_stack.empty()) { std::fprintf(stderr, "gnash: popd: directory stack empty\n"); return 1; }
+      std::string target = sh.dir_stack.front();
+      sh.dir_stack.erase(sh.dir_stack.begin());
+      if (do_chdir(sh, target) != 0) return 1;
+    } else {
+      sh.dir_stack.erase(sh.dir_stack.begin() + (idx - 1));
+    }
+    return bi_dirs(sh, {"dirs"});
+  }
+  if (sh.dir_stack.empty()) {
+    std::fprintf(stderr, "gnash: popd: directory stack empty\n");
+    return 1;
+  }
+  std::string target = sh.dir_stack.front();
+  sh.dir_stack.erase(sh.dir_stack.begin());
+  if (do_chdir(sh, target) != 0) return 1;
+  return bi_dirs(sh, {"dirs"});
 }
 
 int bi_export(Shell &sh, const std::vector<std::string> &argv) {
@@ -524,7 +706,7 @@ bool is_builtin_name(const std::string &n) {
       "read", "test", "[", "shift", "exit", "return", "break", "continue", "eval",
       "source", ".", "local", "declare", "typeset", "readonly", "let", "type", "trap",
       "umask", "getopts", "exec", "command", "times", "wait", "jobs", "fg", "bg",
-      "disown", "kill", "suspend", nullptr};
+      "disown", "kill", "suspend", "dirs", "pushd", "popd", nullptr};
   for (int i = 0; names[i]; i++)
     if (n == names[i]) return true;
   return false;
@@ -705,8 +887,11 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
   else if (cmd == "false") st = 1;
   else if (cmd == "echo") st = bi_echo(sh, argv);
   else if (cmd == "printf") st = bi_printf(sh, argv);
-  else if (cmd == "pwd") { char b[4096]; if (getcwd(b, sizeof b)) std::printf("%s\n", b); st = 0; }
+  else if (cmd == "pwd") st = bi_pwd(sh, argv);
   else if (cmd == "cd") st = bi_cd(sh, argv);
+  else if (cmd == "dirs") st = bi_dirs(sh, argv);
+  else if (cmd == "pushd") st = bi_pushd(sh, argv);
+  else if (cmd == "popd") st = bi_popd(sh, argv);
   else if (cmd == "export") st = bi_export(sh, argv);
   else if (cmd == "unset") st = bi_unset(sh, argv);
   else if (cmd == "set") st = bi_set(sh, argv);

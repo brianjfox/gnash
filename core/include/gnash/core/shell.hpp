@@ -96,6 +96,9 @@ class Shell {
   std::vector<std::string> positional;  // $1 == positional[0]
   std::string arg0 = "gnash";
 
+  // --- directory stack (pushd/popd/dirs); entries below the current dir ---
+  std::vector<std::string> dir_stack;
+
   // --- dynamic special variables ($RANDOM, $SECONDS, $LINENO) ------------
   unsigned long rand_seed = 0;   // RANDOM PRNG state
   bool rand_seeded = false;      // has RANDOM been seeded (explicitly or lazily)

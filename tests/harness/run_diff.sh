@@ -101,6 +101,10 @@ scripts=(
   're="^[0-9]+$"; [[ 12345 =~ $re ]] && echo num; [[ 12x =~ $re ]] || echo notnum'
   'v=Test123; [[ $v =~ ([A-Za-z]+)([0-9]+) ]]; echo "${BASH_REMATCH[1]}/${BASH_REMATCH[2]} n=${#BASH_REMATCH[@]}"'
   '[[ cat =~ ^(cat|dog)$ ]] && echo "${BASH_REMATCH[1]}"; [[ "a.b" =~ a\.b ]] && echo dot'
+  'cd /tmp; pwd; cd /usr/bin; cd ..; pwd'
+  'cd /usr/bin; echo "$PWD"; cd ../lib; echo "$PWD"'
+  'cd /tmp && pushd /usr >/dev/null && pushd /bin >/dev/null; echo "n=$(dirs | wc -w)"; popd >/dev/null; popd >/dev/null; pwd'
+  'cd /tmp; pushd /usr >/dev/null; pushd /bin >/dev/null; pushd +1 >/dev/null; pwd'
 )
 
 fails=0
