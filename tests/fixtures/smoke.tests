@@ -1,0 +1,3 @@
+echo hello
+echo one two three
+x=5; echo $((x * 2))

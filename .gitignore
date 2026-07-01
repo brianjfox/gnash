@@ -1,0 +1,11 @@
+build/
+build-*/
+*.o
+*.a
+*.dSYM/
+compile_commands.json
+.cache/
+
+# Vendored bash test corpus (copied from bash's tests/ for the conformance
+# harness) and its compiled helper programs -- not part of gnash's sources.
+tests/bash-tests/
