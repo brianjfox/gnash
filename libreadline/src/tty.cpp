@@ -22,8 +22,13 @@ void prep_terminal(int fd) {
   tio_saved = true;
 
   struct termios t = saved_tio;
-  t.c_lflag &= static_cast<tcflag_t>(~(ICANON | ECHO));
-  t.c_iflag &= static_cast<tcflag_t>(~(ICRNL | INLCR));
+  // Clear ICANON/ECHO for character-at-a-time input.  Also clear IEXTEN so the
+  // driver stops intercepting the extended special characters -- notably VDSUSP
+  // (C-y, delayed-suspend on BSD/macOS) and VLNEXT (C-v) -- and IXON so C-s/C-q
+  // (flow control) reach readline for incremental search.  ISIG stays on, so
+  // C-c and C-z still work for job control.
+  t.c_lflag &= static_cast<tcflag_t>(~(ICANON | ECHO | IEXTEN));
+  t.c_iflag &= static_cast<tcflag_t>(~(ICRNL | INLCR | IXON));
   t.c_cc[VMIN] = 1;
   t.c_cc[VTIME] = 0;
   tcsetattr(fd, TCSADRAIN, &t);
