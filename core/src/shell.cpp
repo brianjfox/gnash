@@ -236,6 +236,7 @@ std::string Shell::run_and_capture(const std::string &script, int *status) {
     close(fds[0]);
     dup2(fds[1], STDOUT_FILENO);
     close(fds[1]);
+    job_control = false;  // command substitution: no nested tty control
     int st = run_string(script);
     std::fflush(stdout);
     _exit(st & 0xff);

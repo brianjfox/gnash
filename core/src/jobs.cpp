@@ -21,6 +21,9 @@ namespace gnash::core {
 
 void Shell::init_job_control(bool interactive_shell) {
   interactive = interactive_shell;
+  // A shell must reap its own children: reset SIGCHLD to default in case we
+  // inherited SIG_IGN (which auto-reaps and makes waitpid() report ECHILD).
+  signal(SIGCHLD, SIG_DFL);
   if (interactive_shell && isatty(STDIN_FILENO)) {
     job_terminal = STDIN_FILENO;
     // Wait until we are in the foreground process group.
