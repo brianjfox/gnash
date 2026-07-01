@@ -307,6 +307,28 @@ int Shell::run_string(const std::string &script) {
   return st;
 }
 
+std::string Shell::run_and_capture_inproc(const std::string &script, int *status) {
+  std::fflush(stdout);
+  int saved = dup(STDOUT_FILENO);
+  FILE *tf = std::tmpfile();
+  if (!tf) { if (status) *status = 1; return std::string(); }
+  int tfd = fileno(tf);
+  dup2(tfd, STDOUT_FILENO);
+  int st = run_string(script);
+  std::fflush(stdout);
+  dup2(saved, STDOUT_FILENO);
+  close(saved);
+  if (status) *status = st;
+  std::rewind(tf);
+  std::string out;
+  char buf[4096];
+  size_t n;
+  while ((n = std::fread(buf, 1, sizeof buf, tf)) > 0) out.append(buf, n);
+  std::fclose(tf);
+  while (!out.empty() && out.back() == '\n') out.pop_back();
+  return out;
+}
+
 std::string Shell::run_and_capture(const std::string &script, int *status) {
   int fds[2];
   if (pipe(fds) != 0) {

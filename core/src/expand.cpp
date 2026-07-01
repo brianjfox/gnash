@@ -215,6 +215,22 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
       return;
     }
   }
+  // ${ cmd; } -- function substitution: run in the current shell, capture
+  // stdout.  Distinguished from ${var} by whitespace (or `|') after the brace.
+  if (n1 == '{' && i + 2 < t.size() &&
+      (std::isspace(static_cast<unsigned char>(t[i + 2])) || t[i + 2] == '|')) {
+    size_t end = scan_balanced(t, i + 1, '{', '}');
+    if (end != std::string::npos) {
+      std::string inner = t.substr(i + 2, end - (i + 2));
+      if (!inner.empty() && inner[0] == '|') inner[0] = ' ';  // ${| cmd; } valsub
+      int st = 0;
+      std::string res = sh_.run_and_capture_inproc(inner, &st);
+      sh_.last_status = st;
+      for (char c : res) { out += c; mask += qm; }
+      i = end + 1;
+      return;
+    }
+  }
   // ${...}
   if (n1 == '{') {
     size_t end = scan_balanced(t, i + 1, '{', '}');

@@ -118,6 +118,9 @@ scripts=(
   'declare -A m=([x]=1 [y]=2); echo "${m[x]}${m[y]} ${#m[@]}"'
   'y="hi there"; declare z=$y; echo "$z"; declare -i n=3+4; echo "$n"'
   'f(){ local -a la=(p q r); echo "${la[2]}"; }; f'
+  'x=${ echo hello world; }; echo "[$x]"'
+  'n=0; y=${ n=42; echo captured; }; echo "$y n=$n"'
+  'v=${ for i in 1 2 3; do echo -n "$i"; done; }; echo "$v"'
 )
 
 fails=0

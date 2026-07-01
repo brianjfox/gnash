@@ -143,6 +143,9 @@ class Shell {
   // Command substitution: run SCRIPT, return its stdout (trailing newlines
   // stripped); *status gets the exit status.
   std::string run_and_capture(const std::string &script, int *status);
+  // Function substitution ${ cmd; }: like run_and_capture but in the current
+  // shell (no subshell), so side effects such as variable changes persist.
+  std::string run_and_capture_inproc(const std::string &script, int *status);
 };
 
 // Arithmetic evaluation (arith.cpp): evaluate EXPR in the context of SH.
