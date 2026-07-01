@@ -99,6 +99,12 @@ class Shell {
   // --- directory stack (pushd/popd/dirs); entries below the current dir ---
   std::vector<std::string> dir_stack;
 
+  // --- process substitutions <(...) / >(...) live for one command ---------
+  struct ProcSub { long pid; int fd; };
+  std::vector<ProcSub> procsubs;
+  // Close fds and wait for substitution children added since index `from`.
+  void reap_procsubs(size_t from = 0);
+
   // --- dynamic special variables ($RANDOM, $SECONDS, $LINENO) ------------
   unsigned long rand_seed = 0;   // RANDOM PRNG state
   bool rand_seeded = false;      // has RANDOM been seeded (explicitly or lazily)

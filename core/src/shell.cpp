@@ -94,6 +94,15 @@ bool Shell::dynamic_var(const std::string &name, std::string &out) {
   return false;
 }
 
+void Shell::reap_procsubs(size_t from) {
+  for (size_t k = from; k < procsubs.size(); k++) {
+    if (procsubs[k].fd >= 0) close(procsubs[k].fd);
+    int st = 0;
+    waitpid(static_cast<pid_t>(procsubs[k].pid), &st, 0);
+  }
+  if (from < procsubs.size()) procsubs.resize(from);
+}
+
 bool Shell::is_set(const std::string &n) const { return vars.count(n) != 0; }
 
 std::string Shell::get(const std::string &n) const {

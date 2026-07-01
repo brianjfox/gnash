@@ -383,6 +383,13 @@ int Executor::run_pipeline(const Connection *c) {
 int Executor::run_simple(const SimpleCommand *c) {
   if (c->line > 0) sh_.cur_lineno = c->line;  // $LINENO
   Expander ex(sh_);
+  // Reap any <(...) / >(...) set up for this command once it (and any function
+  // body it invokes) has finished, on every return path.
+  struct ProcsubGuard {
+    Shell &s;
+    size_t base;
+    ~ProcsubGuard() { s.reap_procsubs(base); }
+  } psg{sh_, sh_.procsubs.size()};
   std::vector<std::pair<std::string, std::string>> assigns;
   std::vector<std::string> argv;
   bool prefix = true;

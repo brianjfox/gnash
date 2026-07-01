@@ -33,6 +33,10 @@ class Expander {
   // Value of a parameter (including specials); `set` reports whether it was set.
   std::string param_value(const std::string &name, bool &set);
 
+  // Replace any <(cmd) / >(cmd) in WORD with a /dev/fd/N path, forking the inner
+  // command and recording it on the shell for later cleanup.
+  void extract_procsubs(std::string &word);
+
  private:
   Shell &sh_;
 

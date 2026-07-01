@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <pwd.h>
 #include <unistd.h>
+#include <sys/wait.h>
 
 #include "gnash/glob.hpp"
 #include "strmatch.h"
@@ -740,11 +741,61 @@ static bool has_quote_char(const std::string &s) {
   return false;
 }
 
+namespace {
+// Fork CMD connected to a pipe and return the /dev/fd path the consumer opens.
+// input==true is <(cmd): the child's stdout feeds the pipe (parent reads);
+// input==false is >(cmd): the child's stdin comes from the pipe (parent writes).
+std::string spawn_procsub(Shell &sh, const std::string &cmd, bool input) {
+  int fds[2];
+  if (pipe(fds) != 0) return std::string();
+  pid_t pid = fork();
+  if (pid == 0) {
+    if (input) { close(fds[0]); dup2(fds[1], STDOUT_FILENO); close(fds[1]); }
+    else       { close(fds[1]); dup2(fds[0], STDIN_FILENO);  close(fds[0]); }
+    sh.job_control = false;
+    int st = sh.run_string(cmd);
+    std::fflush(nullptr);
+    _exit(st & 0xff);
+  }
+  int keep = input ? fds[0] : fds[1];
+  close(input ? fds[1] : fds[0]);
+  if (pid < 0) { close(keep); return std::string(); }
+  sh.procsubs.push_back({static_cast<long>(pid), keep});
+  return "/dev/fd/" + std::to_string(keep);
+}
+}  // namespace
+
+void Expander::extract_procsubs(std::string &word) {
+  for (size_t i = 0; i + 1 < word.size();) {
+    char c = word[i];
+    if (c == '\\') { i += 2; continue; }
+    if (c == '\'') { i++; while (i < word.size() && word[i] != '\'') i++; if (i < word.size()) i++; continue; }
+    if (c == '"') { i++; while (i < word.size() && word[i] != '"') { if (word[i] == '\\') i++; i++; } if (i < word.size()) i++; continue; }
+    if ((c == '<' || c == '>') && word[i + 1] == '(') {
+      int depth = 0;
+      size_t j = i + 1;
+      for (; j < word.size(); j++) {
+        if (word[j] == '(') depth++;
+        else if (word[j] == ')') { if (--depth == 0) break; }
+      }
+      if (j >= word.size()) { i++; continue; }  // unbalanced: leave alone
+      std::string cmd = word.substr(i + 2, j - (i + 2));
+      std::string path = spawn_procsub(sh_, cmd, c == '<');
+      if (path.empty()) { i = j + 1; continue; }
+      word = word.substr(0, i) + path + word.substr(j + 1);
+      i += path.size();
+    } else {
+      i++;
+    }
+  }
+}
+
 std::vector<std::string> Expander::expand_args(const std::vector<Word> &words) {
   std::vector<std::string> result;
   for (const Word &w : words) {
     for (const std::string &braced : brace_expand(w.text)) {
       std::string tilded = expand_leading_tilde(sh_, braced);
+      extract_procsubs(tilded);  // <(cmd) / >(cmd) -> /dev/fd/N
       std::string out, mask;
       process(tilded, out, mask, false);
       auto fields = split_ifs(out, mask);
@@ -760,8 +811,10 @@ std::vector<std::string> Expander::expand_args(const std::vector<Word> &words) {
 }
 
 std::string Expander::expand_no_split(const std::string &text, bool do_glob) {
+  std::string src = text;
+  extract_procsubs(src);  // e.g. a redirect target: < <(cmd)
   std::string out, mask;
-  process(text, out, mask, false);
+  process(src, out, mask, false);
   // drop field-separator markers
   std::string joined;
   for (char c : out)

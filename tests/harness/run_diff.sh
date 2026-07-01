@@ -108,6 +108,11 @@ scripts=(
   'printf "a\nb\nc\n" > /tmp/gm.$$; mapfile -t x < /tmp/gm.$$; printf "<%s>" "${x[@]}"; echo " n=${#x[@]}"; rm -f /tmp/gm.$$'
   'printf "1\n2\n3\n4\n" > /tmp/gm.$$; mapfile -t -s1 -n2 y < /tmp/gm.$$; echo "${y[*]}"; rm -f /tmp/gm.$$'
   'printf "p:q:r:" > /tmp/gm.$$; readarray -t -d: z < /tmp/gm.$$; printf "[%s]" "${z[@]}"; echo; rm -f /tmp/gm.$$'
+  'cat <(echo hello)'
+  'diff <(printf "a\nb\nc\n") <(printf "a\nX\nc\n"); echo "rc=$?"'
+  'wc -l < <(seq 1 5) | tr -d " "'
+  'while read l; do echo "got:$l"; done < <(printf "p\nq\n")'
+  'sort <(echo 3; echo 1; echo 2) | tr "\n" ","; echo'
 )
 
 fails=0
