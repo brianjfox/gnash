@@ -120,6 +120,7 @@ std::string Expander::param_value(const std::string &name, bool &set) {
     std::string f;
     if (sh_.opt_errexit) f += 'e';
     if (sh_.opt_noglob) f += 'f';
+    if (sh_.interactive) f += 'i';  // rc files test `case $- in *i*)'
     if (sh_.opt_nounset) f += 'u';
     if (sh_.opt_xtrace) f += 'x';
     if (sh_.opt_verbose) f += 'v';
