@@ -35,6 +35,7 @@ FILE *rl_outstream = nullptr;
 int rl_numeric_arg = 1;
 int rl_explicit_arg = 0;
 int rl_eof_found = 0;
+rl_hook_func_t *rl_event_hook = nullptr;
 }
 
 namespace {
@@ -212,6 +213,15 @@ extern "C" void rl_redisplay(void) {
   int curcol = plen + (rl_point - off);
   for (int i = endcol; i > curcol; i--) std::fputc('\b', o);
   std::fflush(o);
+}
+
+// Erase the current input line so a caller (e.g. an event hook printing a
+// background-job notice) can write where the prompt was, then rl_redisplay().
+extern "C" void rl_clear_current_line(void) {
+  if (rl_outstream == nullptr) rl_outstream = stdout;
+  std::fputc('\r', rl_outstream);
+  std::fputs(clear_eol(), rl_outstream);
+  std::fflush(rl_outstream);
 }
 
 // ---- top level ------------------------------------------------------------

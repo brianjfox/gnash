@@ -29,6 +29,20 @@ std::string history_path() {
   const char *home = std::getenv("HOME");
   return home ? std::string(home) + "/.gnash_history" : std::string();
 }
+
+// Registered as readline's idle hook so background-job completion is reported
+// the moment it happens, rather than waiting for the next line of input.  When
+// there is something to report we erase the current input line, print the
+// notice above it, and redraw the prompt with whatever the user had typed.
+Shell *g_notify_shell = nullptr;
+extern "C" int gnash_job_notify_hook(void) {
+  if (g_notify_shell && g_notify_shell->check_job_events()) {
+    rl_clear_current_line();
+    g_notify_shell->emit_job_notices();
+    rl_redisplay();
+  }
+  return 0;
+}
 }  // namespace
 
 int run_interactive(Shell &sh) {
@@ -38,6 +52,10 @@ int run_interactive(Shell &sh) {
   std::string histfile = history_path();
   if (!histfile.empty()) read_history(histfile.c_str());
   using_history();
+
+  // Report background-job completion asynchronously while idle at the prompt.
+  g_notify_shell = &sh;
+  rl_event_hook = gnash_job_notify_hook;
 
   while (!sh.exiting) {
     sh.reap_jobs(true);  // report any finished background jobs
@@ -90,6 +108,9 @@ int run_interactive(Shell &sh) {
     if (input.find_first_not_of(" \t\n") != std::string::npos) add_history(input.c_str());
     sh.run_string(input);
   }
+
+  rl_event_hook = nullptr;
+  g_notify_shell = nullptr;
 
   if (!histfile.empty()) write_history(histfile.c_str());
   int rc = sh.exiting ? sh.exit_status : sh.last_status;

@@ -86,6 +86,8 @@ class Shell {
   int wait_for_pid(long pid);                  // block, return exit status
   int wait_all();                              // wait for all jobs
   void reap_jobs(bool notify);                 // non-blocking reap (+ optional report)
+  bool check_job_events();                     // reap; true if unreported job events exist
+  void emit_job_notices();                     // print "[n]+ Done/Stopped"; mark; drop finished
   void print_jobs();
   int foreground_job(Job &j, bool cont);       // bring to foreground, wait
   void background_job(Job &j, bool cont);       // continue in background

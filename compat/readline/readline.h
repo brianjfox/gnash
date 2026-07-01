@@ -51,6 +51,14 @@ extern int rl_read_key (void);
 /* Repaint the current line. */
 extern void rl_redisplay (void);
 
+/* Erase the current input line (carriage-return + clear-to-end-of-line) so a
+   caller can print a message where the prompt was, then rl_redisplay(). */
+extern void rl_clear_current_line (void);
+
+/* Called while readline is idle waiting for input (used for asynchronous
+   notifications such as background-job completion).  NULL by default. */
+extern rl_hook_func_t *rl_event_hook;
+
 /* ---- Buffer primitives (text.c / util.c) -------------------------------- */
 extern void rl_extend_line_buffer (int len);
 extern int rl_insert_text (const char *text);

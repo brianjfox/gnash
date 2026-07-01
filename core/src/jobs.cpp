@@ -159,7 +159,9 @@ int Shell::wait_all() {
   return st;
 }
 
-void Shell::reap_jobs(bool notify) {
+// Reap any finished/stopped children (non-blocking) and update the job table.
+// Returns true if there is at least one job event not yet reported to the user.
+bool Shell::check_job_events() {
   int wst = 0;
   pid_t pid;
   while ((pid = waitpid(-1, &wst, WNOHANG | WUNTRACED)) > 0) {
@@ -175,21 +177,39 @@ void Shell::reap_jobs(bool notify) {
       }
     }
   }
-  if (notify && interactive) {
-    for (auto &j : jobs) {
-      if (j.done && !j.notified) {
-        std::fprintf(stderr, "[%d]+  Done                    %s\n", j.id, j.command.c_str());
-        j.notified = true;
-      } else if (j.stopped && !j.notified) {
-        std::fprintf(stderr, "[%d]+  Stopped                 %s\n", j.id, j.command.c_str());
-        j.notified = true;
-      }
+  for (const Job &j : jobs)
+    if ((j.done || j.stopped) && !j.notified) return true;
+  return false;
+}
+
+// Print pending "[n]+ Done/Stopped" notices, mark them reported, and drop the
+// jobs that have finished.  Callers that share the terminal with readline are
+// responsible for clearing/redisplaying the input line around this.
+void Shell::emit_job_notices() {
+  for (auto &j : jobs) {
+    if (j.done && !j.notified) {
+      std::fprintf(stderr, "[%d]+  Done                    %s\n", j.id, j.command.c_str());
+      j.notified = true;
+    } else if (j.stopped && !j.notified) {
+      std::fprintf(stderr, "[%d]+  Stopped                 %s\n", j.id, j.command.c_str());
+      j.notified = true;
     }
   }
-  // Drop fully-notified/done jobs.
   jobs.erase(std::remove_if(jobs.begin(), jobs.end(),
                             [](const Job &j) { return j.done && j.notified; }),
              jobs.end());
+}
+
+void Shell::reap_jobs(bool notify) {
+  bool pending = check_job_events();
+  if (notify && interactive && pending) {
+    emit_job_notices();
+  } else {
+    // Drop fully-notified/done jobs even when not reporting.
+    jobs.erase(std::remove_if(jobs.begin(), jobs.end(),
+                              [](const Job &j) { return j.done && j.notified; }),
+               jobs.end());
+  }
 }
 
 void Shell::print_jobs() {
