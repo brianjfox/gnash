@@ -11,6 +11,7 @@
 #include <fstream>
 #include <regex.h>
 #include <sstream>
+#include <vector>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -894,9 +895,22 @@ struct CondEval {
           std::string re = expand(rhs_raw);
           regex_t rx;
           if (regcomp(&rx, re.c_str(), REG_EXTENDED) != 0) return false;
-          bool m = regexec(&rx, lhs.c_str(), 0, nullptr, 0) == 0;
+          size_t ng = rx.re_nsub + 1;
+          std::vector<regmatch_t> m(ng);
+          bool matched = regexec(&rx, lhs.c_str(), ng, m.data(), 0) == 0;
           regfree(&rx);
-          return m;
+          // BASH_REMATCH[0] is the whole match; [1..] are the capture groups.
+          sh.unset("BASH_REMATCH");
+          if (matched) {
+            for (size_t g = 0; g < ng; g++) {
+              std::string sub;
+              if (m[g].rm_so >= 0)
+                sub = lhs.substr(static_cast<size_t>(m[g].rm_so),
+                                 static_cast<size_t>(m[g].rm_eo - m[g].rm_so));
+              sh.array_set("BASH_REMATCH", std::to_string(g), sub);
+            }
+          }
+          return matched;
         }
         if (op == "<") return lhs < expand(rhs_raw);
         if (op == ">") return lhs > expand(rhs_raw);

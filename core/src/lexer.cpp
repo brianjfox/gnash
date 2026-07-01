@@ -406,7 +406,9 @@ struct Lexer {
 
   void run() {
     while (true) {
+      std::size_t bpos = pos;
       skip_blanks();
+      bool blanked = (pos != bpos);
       if (pos >= n) break;
       int tline = line_for(pos);
       char c = in[pos];
@@ -415,6 +417,7 @@ struct Lexer {
         Token t;
         t.type = Tok::Newline;
         t.line = tline;
+        t.preceded_by_blank = blanked;
         out.push_back(t);
         pos++;
         if (!pending.empty()) collect_heredocs();
@@ -433,6 +436,7 @@ struct Lexer {
       if (is_op) {
         Token t = read_operator();
         t.line = tline;
+        t.preceded_by_blank = blanked;
         bool is_heredoc = (t.type == Tok::DLess || t.type == Tok::DLessDash);
         out.push_back(t);
         if (is_heredoc) awaiting = (t.type == Tok::DLessDash) ? 1 : 0;
@@ -441,6 +445,7 @@ struct Lexer {
 
       Token t = read_word();
       t.line = tline;
+      t.preceded_by_blank = blanked;
       out.push_back(t);
       if (awaiting >= 0 && t.type == Tok::Word) {
         bool q = false;

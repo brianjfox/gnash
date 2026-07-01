@@ -97,6 +97,10 @@ scripts=(
   'v="it'\''s a test"; echo "${v@Q}"; echo "[${nope@Q}]"'
   'declare -i n=5; declare -r r=x; a=(1 2); declare -A m=([k]=v); echo "${n@a}${r@a}${a@a}${m@a}"'
   'export ev="x y"; echo "${ev@A}"; p=hi; echo "${p@A}"'
+  '[[ "2024-01-15" =~ ([0-9]+)-([0-9]+)-([0-9]+) ]] && echo "${BASH_REMATCH[1]}/${BASH_REMATCH[2]}/${BASH_REMATCH[3]}"'
+  're="^[0-9]+$"; [[ 12345 =~ $re ]] && echo num; [[ 12x =~ $re ]] || echo notnum'
+  'v=Test123; [[ $v =~ ([A-Za-z]+)([0-9]+) ]]; echo "${BASH_REMATCH[1]}/${BASH_REMATCH[2]} n=${#BASH_REMATCH[@]}"'
+  '[[ cat =~ ^(cat|dog)$ ]] && echo "${BASH_REMATCH[1]}"; [[ "a.b" =~ a\.b ]] && echo dot'
 )
 
 fails=0

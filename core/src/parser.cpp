@@ -4,6 +4,7 @@
 
 #include <cctype>
 #include <cstdlib>
+#include <cstring>
 #include <initializer_list>
 #include <memory>
 
@@ -71,6 +72,36 @@ struct Parser {
     if (i + 1 < toks.size()) i++;
   }
   bool is(Tok t) const { return cur().type == t; }
+
+  // Literal source spelling of a token (for reconstructing a =~ regex whose
+  // metacharacters were tokenized as operators).
+  static std::string tok_source(const Token &t) {
+    switch (t.type) {
+      case Tok::Word: case Tok::IoNumber: return t.text;
+      case Tok::Amp: return "&";       case Tok::Semi: return ";";
+      case Tok::Pipe: return "|";      case Tok::AndAnd: return "&&";
+      case Tok::OrOr: return "||";     case Tok::Lparen: return "(";
+      case Tok::Rparen: return ")";    case Tok::Less: return "<";
+      case Tok::Great: return ">";     case Tok::SemiSemi: return ";;";
+      case Tok::PipeAnd: return "|&";
+      default: return t.text;
+    }
+  }
+
+  // Encode a reconstructed =~ regex so it survives re-tokenization and quote
+  // removal in the conditional evaluator: existing backslashes are doubled
+  // (quote removal halves them again) and characters the lexer treats as
+  // operators/separators are backslash-escaped.  `$' is left alone so
+  // variables in the pattern still expand.
+  static std::string encode_regex(const std::string &rx) {
+    std::string e;
+    for (char c : rx) {
+      if (c == '\\') { e += "\\\\"; continue; }
+      if (std::strchr("()|&;<> \t", c)) e += '\\';
+      e += c;
+    }
+    return e;
+  }
 
   bool reserved(const char *w) const {
     return cur().type == Tok::Word && !cur().quoted && cur().text == w;
@@ -600,6 +631,24 @@ struct Parser {
     if (binop) {
       std::string op = (is(Tok::Less) || is(Tok::Great)) ? tok_name(cur().type) : cur().text;
       advance();
+      if (op == "=~") {
+        // The right side is an extended regular expression: reassemble it from
+        // the original source, gluing tokens that were not separated by
+        // whitespace (so `([0-9]+)-([0-9]+)' stays one pattern).
+        if (at_cond_end() || is(Tok::Eof)) {
+          fail("expected operand after operator");
+          return;
+        }
+        std::string rx = tok_source(cur());
+        advance();
+        while (!err && !at_cond_end() && !is(Tok::Eof) && !cur().preceded_by_blank) {
+          rx += tok_source(cur());
+          advance();
+        }
+        e += " =~ ";
+        e += encode_regex(rx);
+        return;
+      }
       if (cur().type != Tok::Word || at_cond_end()) {
         fail("expected operand after operator");
         return;

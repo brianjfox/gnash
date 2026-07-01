@@ -47,6 +47,7 @@ struct Token {
   Tok type = Tok::Eof;
   std::string text;             // for Word / IoNumber
   int line = 1;                 // 1-based source line where the token starts
+  bool preceded_by_blank = true;  // whitespace separated this from the previous token
   bool quoted = false;          // word contained quoting
   bool glued = false;           // Lparen immediately followed by `(' (for `((')
   bool lex_error = false;       // set on the Eof token if a span was unterminated
