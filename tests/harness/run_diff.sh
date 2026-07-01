@@ -93,6 +93,10 @@ scripts=(
   'printf "<%s>" "" a ""; echo'
   'set -- "" x ""; echo $#; for a in "$@"; do echo "[$a]"; done'
   'v="a b"; printf "<%s>" "$v"; echo; printf "<%s>" $v; echo'
+  'v="Hello World"; echo "${v@Q}" "${v@U}" "${v@u}" "${v@L}"'
+  'v="it'\''s a test"; echo "${v@Q}"; echo "[${nope@Q}]"'
+  'declare -i n=5; declare -r r=x; a=(1 2); declare -A m=([k]=v); echo "${n@a}${r@a}${a@a}${m@a}"'
+  'export ev="x y"; echo "${ev@A}"; p=hi; echo "${p@A}"'
 )
 
 fails=0

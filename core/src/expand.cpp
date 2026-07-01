@@ -304,6 +304,59 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
 }
 
 // Parse and apply ${...} operators.
+// ${var@Q}: single-quote the value so it can be re-read as shell input, using
+// $'...' when it contains control characters.
+static std::string atq_quote(const std::string &s) {
+  bool ctrl = false;
+  for (unsigned char c : s)
+    if (c < 32 || c == 127) { ctrl = true; break; }
+  if (ctrl) {
+    std::string r = "$'";
+    for (unsigned char c : s) {
+      switch (c) {
+        case '\n': r += "\\n"; break;
+        case '\t': r += "\\t"; break;
+        case '\r': r += "\\r"; break;
+        case '\\': r += "\\\\"; break;
+        case '\'': r += "\\'"; break;
+        default:
+          if (c < 32 || c == 127) { char b[8]; std::snprintf(b, sizeof b, "\\%03o", c); r += b; }
+          else r += static_cast<char>(c);
+      }
+    }
+    return r + "'";
+  }
+  std::string r = "'";
+  for (char c : s) {
+    if (c == '\'') r += "'\\''";
+    else r += c;
+  }
+  return r + "'";
+}
+
+// ${var@E}: interpret ANSI-C backslash escapes in the value.
+static std::string ansic_expand(const std::string &s) {
+  std::string out;
+  for (size_t i = 0; i < s.size(); i++) {
+    if (s[i] != '\\' || i + 1 >= s.size()) { out += s[i]; continue; }
+    switch (s[++i]) {
+      case 'n': out += '\n'; break;
+      case 't': out += '\t'; break;
+      case 'r': out += '\r'; break;
+      case 'a': out += '\a'; break;
+      case 'b': out += '\b'; break;
+      case 'f': out += '\f'; break;
+      case 'v': out += '\v'; break;
+      case '\\': out += '\\'; break;
+      case '\'': out += '\''; break;
+      case '"': out += '"'; break;
+      case 'e': out += '\033'; break;
+      default: out += '\\'; out += s[i]; break;
+    }
+  }
+  return out;
+}
+
 static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string &body) {
   // Leading `#' means length-of.
   bool length = false;
@@ -475,6 +528,48 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
       out += nc;
     }
     return out;
+  }
+
+  // ${name@op} -- parameter transformations.
+  if (rest[0] == '@' && rest.size() >= 2) {
+    if (!set) return std::string();  // unset -> empty (even for @Q)
+    char t = rest[1];
+    if (t == 'Q') return atq_quote(val);
+    if (t == 'E') return ansic_expand(val);
+    if (t == 'P') return expand_prompt(sh, val);
+    if (t == 'U' || t == 'L' || t == 'u') {
+      std::string out;
+      bool first = true;
+      for (char c : val) {
+        unsigned char uc = static_cast<unsigned char>(c);
+        if (t == 'U') out += static_cast<char>(std::toupper(uc));
+        else if (t == 'L') out += static_cast<char>(std::tolower(uc));
+        else { out += first ? static_cast<char>(std::toupper(uc)) : c; }
+        first = false;
+      }
+      return out;
+    }
+    if (t == 'a' || t == 'A') {
+      auto it = sh.vars.find(name);
+      std::string flags;
+      bool is_arr = false, is_assoc = false;
+      if (it != sh.vars.end()) {
+        const Variable &var = it->second;
+        is_arr = var.kind == VarKind::Indexed;
+        is_assoc = var.kind == VarKind::Assoc;
+        if (is_arr) flags += 'a';
+        if (is_assoc) flags += 'A';
+        if (var.integer) flags += 'i';
+        if (var.readonly) flags += 'r';
+        if (var.exported) flags += 'x';
+      }
+      if (t == 'a') return flags;
+      // @A: reproduce a declare/assignment statement.
+      std::string q = atq_quote(val);
+      if (flags.empty()) return name + "=" + q;
+      return "declare -" + flags + " " + name + "=" + q;
+    }
+    return val;
   }
 
   // ${name:offset:length}
