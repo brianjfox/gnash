@@ -99,6 +99,13 @@ class Shell {
   std::vector<std::string> positional;  // $1 == positional[0]
   std::string arg0 = "gnash";
 
+  // --- diagnostics -------------------------------------------------------
+  std::string shell_name = "gnash";  // program name shown in error messages
+  // "NAME: line N: " prefix that bash prints before runtime errors.
+  std::string err_prefix() const {
+    return shell_name + ": line " + std::to_string(cur_lineno > 0 ? cur_lineno : 1) + ": ";
+  }
+
   // --- directory stack (pushd/popd/dirs); entries below the current dir ---
   std::vector<std::string> dir_stack;
 

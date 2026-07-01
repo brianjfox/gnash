@@ -64,6 +64,12 @@ if(BASH_EXECUTABLE)
     COMMAND ${BASH_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/harness/run_diff.sh
             $<TARGET_FILE:gnash> ${BASH_EXECUTABLE})
 
+  # Error-message format check vs bash (program name normalized).
+  add_test(
+    NAME errfmt
+    COMMAND ${BASH_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/harness/errfmt.sh
+            $<TARGET_FILE:gnash> ${BASH_EXECUTABLE})
+
   # Regression gate over the bash tests/ files gnash passes byte-for-byte.
   add_test(
     NAME conformance_gate

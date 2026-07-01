@@ -64,7 +64,7 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved) {
     case RedirOp::InputRedir: {
       std::string fn = ex.expand_no_split(r.target.text, true);
       int f = open(fn.c_str(), O_RDONLY);
-      if (f < 0) { std::fprintf(stderr, "gnash: %s: %s\n", fn.c_str(), std::strerror(errno)); return false; }
+      if (f < 0) { std::fprintf(stderr, "%s%s: %s\n", sh.err_prefix().c_str(), fn.c_str(), std::strerror(errno)); return false; }
       redir_to(f, target_fd < 0 ? 0 : target_fd);
       close(f);
       return true;
@@ -73,7 +73,7 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved) {
     case RedirOp::Clobber: {
       std::string fn = ex.expand_no_split(r.target.text, true);
       int f = open(fn.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
-      if (f < 0) { std::fprintf(stderr, "gnash: %s: %s\n", fn.c_str(), std::strerror(errno)); return false; }
+      if (f < 0) { std::fprintf(stderr, "%s%s: %s\n", sh.err_prefix().c_str(), fn.c_str(), std::strerror(errno)); return false; }
       redir_to(f, target_fd < 0 ? 1 : target_fd);
       close(f);
       return true;
@@ -81,7 +81,7 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved) {
     case RedirOp::AppendOutput: {
       std::string fn = ex.expand_no_split(r.target.text, true);
       int f = open(fn.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0666);
-      if (f < 0) { std::fprintf(stderr, "gnash: %s: %s\n", fn.c_str(), std::strerror(errno)); return false; }
+      if (f < 0) { std::fprintf(stderr, "%s%s: %s\n", sh.err_prefix().c_str(), fn.c_str(), std::strerror(errno)); return false; }
       redir_to(f, target_fd < 0 ? 1 : target_fd);
       close(f);
       return true;
@@ -548,8 +548,13 @@ int Executor::run_simple(const SimpleCommand *c) {
       for (auto &a : argv) cargv.push_back(const_cast<char *>(a.c_str()));
       cargv.push_back(nullptr);
       execvp(cargv[0], cargv.data());
-      std::fprintf(stderr, "gnash: %s: %s\n", argv[0].c_str(), std::strerror(errno));
-      _exit(127);
+      if (errno == ENOENT && argv[0].find('/') == std::string::npos)
+        std::fprintf(stderr, "%s%s: command not found\n", sh_.err_prefix().c_str(),
+                     argv[0].c_str());
+      else
+        std::fprintf(stderr, "%s%s: %s\n", sh_.err_prefix().c_str(), argv[0].c_str(),
+                     std::strerror(errno));
+      _exit(errno == EACCES ? 126 : 127);
     }
     setpgid(pid, pid);
     if (sh_.job_control) tcsetpgrp(sh_.job_terminal, pid);

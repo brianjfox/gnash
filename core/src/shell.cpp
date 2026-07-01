@@ -311,7 +311,10 @@ void Shell::set(const std::string &n, const std::string &v) {
     return;
   }
   Variable &var = vars[n];
-  if (var.readonly) return;
+  if (var.readonly) {
+    std::fprintf(stderr, "%s%s: readonly variable\n", err_prefix().c_str(), n.c_str());
+    return;
+  }
   var.value = v;
 }
 

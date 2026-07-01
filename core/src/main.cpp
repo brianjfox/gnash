@@ -16,6 +16,12 @@
 int main(int argc, char **argv) {
   gnash::core::Shell sh;
 
+  // Error messages are prefixed with the invocation name (basename of argv[0]),
+  // matching bash; for a script it becomes the script path.
+  std::string prog = argc > 0 ? argv[0] : "gnash";
+  auto slash = prog.rfind('/');
+  sh.shell_name = (slash == std::string::npos) ? prog : prog.substr(slash + 1);
+
   std::vector<std::string> args(argv + 1, argv + argc);
 
   if (!args.empty() && args[0] == "-c") {
@@ -36,6 +42,7 @@ int main(int argc, char **argv) {
     std::ostringstream ss;
     ss << f.rdbuf();
     sh.arg0 = args[0];
+    sh.shell_name = args[0];  // scripts report errors as "SCRIPT: line N: ..."
     sh.positional.assign(args.begin() + 1, args.end());
     sh.run_string(ss.str());
   } else if (isatty(STDIN_FILENO)) {

@@ -434,7 +434,8 @@ int change_dir(Shell &sh, const std::string &dir, bool physical) {
   logical = canon_logical(logical);
   const std::string &target = physical ? dir : logical;
   if (chdir(target.c_str()) != 0) {
-    std::fprintf(stderr, "gnash: cd: %s: %s\n", dir.c_str(), std::strerror(errno));
+    std::fprintf(stderr, "%scd: %s: %s\n", sh.err_prefix().c_str(), dir.c_str(),
+                 std::strerror(errno));
     return 1;
   }
   if (!oldpwd.empty()) sh.set_exported("OLDPWD", oldpwd);

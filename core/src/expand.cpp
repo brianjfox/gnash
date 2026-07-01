@@ -136,7 +136,7 @@ std::string Expander::param_value(const std::string &name, bool &set) {
   if (sh_.dynamic_var(name, v)) return v;  // RANDOM/SECONDS/LINENO/BASHPID/EPOCH*
   set = false;
   if (sh_.opt_nounset) {
-    std::fprintf(stderr, "gnash: %s: unbound variable\n", name.c_str());
+    std::fprintf(stderr, "%s%s: unbound variable\n", sh_.err_prefix().c_str(), name.c_str());
     sh_.exiting = true;
     sh_.exit_status = 1;
   }
