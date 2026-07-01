@@ -44,6 +44,7 @@ struct Eval {
 
   long long var_value(const std::string &name) {
     std::string v = sh.get(name);
+    if (v.empty()) { std::string dv; if (sh.dynamic_var(name, dv)) v = dv; }
     if (v.empty()) return 0;
     if (depth > 100) return 0;
     bool sub_ok = true;

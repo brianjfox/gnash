@@ -64,6 +64,7 @@ enum CommandFlag {
 
 struct Command {
   int flags = 0;
+  int line = 0;  // 1-based source line ($LINENO); 0 if unknown
   std::vector<Redirect> redirects;
   virtual ~Command() = default;
   // Append a canonical rendering of this command to `out`.

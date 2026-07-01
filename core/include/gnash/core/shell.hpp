@@ -96,6 +96,14 @@ class Shell {
   std::vector<std::string> positional;  // $1 == positional[0]
   std::string arg0 = "gnash";
 
+  // --- dynamic special variables ($RANDOM, $SECONDS, $LINENO) ------------
+  unsigned long rand_seed = 0;   // RANDOM PRNG state
+  bool rand_seeded = false;      // has RANDOM been seeded (explicitly or lazily)
+  long long seconds_base = 0;    // epoch second that $SECONDS counts from
+  int cur_lineno = 0;            // $LINENO of the command being executed
+  int next_random();             // advance the PRNG, return 0..32767
+  bool dynamic_var(const std::string &name, std::string &out);  // RANDOM/SECONDS/...
+
   // --- status & options --------------------------------------------------
   int last_status = 0;
   int last_bg_pid = 0;  // $!

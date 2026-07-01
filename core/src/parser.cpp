@@ -334,6 +334,7 @@ struct Parser {
 
   CommandPtr parse_simple() {
     auto sc = std::make_unique<SimpleCommand>();
+    sc->line = cur().line;  // $LINENO of this command
     bool got = false;
     bool still_prefix = true;  // leading assignment words
     while (!err) {

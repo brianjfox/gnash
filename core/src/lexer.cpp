@@ -56,6 +56,17 @@ struct Lexer {
   std::vector<Pending> pending;
   int awaiting = -1;  // -1 none, 0 <<, 1 <<-
   bool unterminated = false;
+  std::size_t line_scanned = 0;  // bytes already counted for line numbering
+  int cur_line = 1;              // 1-based line at line_scanned
+
+  // Line number of the byte at `start` (pos advances monotonically).
+  int line_for(std::size_t start) {
+    while (line_scanned < start && line_scanned < n) {
+      if (in[line_scanned] == '\n') cur_line++;
+      line_scanned++;
+    }
+    return cur_line;
+  }
 
   static bool is_assignment_prefix(const std::string &w) {
     // name= / name+= / name[..]= (the `(' that follows starts an array value)
@@ -397,11 +408,13 @@ struct Lexer {
     while (true) {
       skip_blanks();
       if (pos >= n) break;
+      int tline = line_for(pos);
       char c = in[pos];
 
       if (c == '\n') {
         Token t;
         t.type = Tok::Newline;
+        t.line = tline;
         out.push_back(t);
         pos++;
         if (!pending.empty()) collect_heredocs();
@@ -419,6 +432,7 @@ struct Lexer {
 
       if (is_op) {
         Token t = read_operator();
+        t.line = tline;
         bool is_heredoc = (t.type == Tok::DLess || t.type == Tok::DLessDash);
         out.push_back(t);
         if (is_heredoc) awaiting = (t.type == Tok::DLessDash) ? 1 : 0;
@@ -426,6 +440,7 @@ struct Lexer {
       }
 
       Token t = read_word();
+      t.line = tline;
       out.push_back(t);
       if (awaiting >= 0 && t.type == Tok::Word) {
         bool q = false;

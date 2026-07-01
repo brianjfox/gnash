@@ -132,6 +132,7 @@ std::string Expander::param_value(const std::string &name, bool &set) {
   }
   std::string v;
   if (sh_.get_if_set(name, v)) return v;
+  if (sh_.dynamic_var(name, v)) return v;  // RANDOM/SECONDS/LINENO/BASHPID/EPOCH*
   set = false;
   if (sh_.opt_nounset) {
     std::fprintf(stderr, "gnash: %s: unbound variable\n", name.c_str());

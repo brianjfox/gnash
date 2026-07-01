@@ -46,6 +46,7 @@ enum class Tok {
 struct Token {
   Tok type = Tok::Eof;
   std::string text;             // for Word / IoNumber
+  int line = 1;                 // 1-based source line where the token starts
   bool quoted = false;          // word contained quoting
   bool glued = false;           // Lparen immediately followed by `(' (for `((')
   bool lex_error = false;       // set on the Eof token if a span was unterminated

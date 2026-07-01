@@ -5,7 +5,9 @@
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <unistd.h>
+#include <sys/time.h>
 #include <sys/wait.h>
 
 #include "gnash/core/executor.hpp"
@@ -29,6 +31,53 @@ Shell::Shell() {
   if (!is_set("IFS")) set("IFS", " \t\n");
   set("PPID", std::to_string(static_cast<long>(getppid())));
   set("$", std::to_string(static_cast<long>(getpid())));
+  seconds_base = static_cast<long long>(std::time(nullptr));  // $SECONDS origin
+}
+
+// Advance bash's RANDOM generator (Park-Miller minimal-standard PRNG) and
+// return a value in 0..32767, matching bash 5.3 exactly for a given seed.
+int Shell::next_random() {
+  if (!rand_seeded) {
+    struct timeval tv;
+    gettimeofday(&tv, nullptr);
+    rand_seed = static_cast<unsigned long>(tv.tv_sec) ^
+                (static_cast<unsigned long>(tv.tv_usec) << 16) ^
+                static_cast<unsigned long>(getpid());
+    rand_seeded = true;
+  }
+  unsigned long r = rand_seed ? rand_seed : 123459876UL;
+  long h = static_cast<long>(r / 127773UL);
+  long l = static_cast<long>(r % 127773UL);
+  long t = 16807L * l - 2836L * h;
+  if (t < 0) t += 0x7fffffffL;
+  rand_seed = static_cast<unsigned long>(t);
+  return static_cast<int>(((rand_seed >> 16) ^ (rand_seed & 0xffff)) & 0x7fff);
+}
+
+// Dynamic variables computed on each reference.  Returns false for names that
+// are not dynamic (the caller then looks them up as ordinary variables).
+bool Shell::dynamic_var(const std::string &name, std::string &out) {
+  if (name == "RANDOM") { out = std::to_string(next_random()); return true; }
+  if (name == "SECONDS") {
+    out = std::to_string(static_cast<long long>(std::time(nullptr)) - seconds_base);
+    return true;
+  }
+  if (name == "LINENO") { out = std::to_string(cur_lineno); return true; }
+  if (name == "BASHPID") { out = std::to_string(static_cast<long>(getpid())); return true; }
+  if (name == "EPOCHSECONDS") {
+    out = std::to_string(static_cast<long long>(std::time(nullptr)));
+    return true;
+  }
+  if (name == "EPOCHREALTIME") {
+    struct timeval tv;
+    gettimeofday(&tv, nullptr);
+    char b[32];
+    std::snprintf(b, sizeof b, "%lld.%06d", static_cast<long long>(tv.tv_sec),
+                  static_cast<int>(tv.tv_usec));
+    out = b;
+    return true;
+  }
+  return false;
 }
 
 bool Shell::is_set(const std::string &n) const { return vars.count(n) != 0; }
@@ -177,6 +226,17 @@ bool Shell::get_if_set(const std::string &n, std::string &out) const {
 }
 
 void Shell::set(const std::string &n, const std::string &v) {
+  // Assigning to a dynamic variable seeds/rebases it rather than storing.
+  if (n == "RANDOM") {
+    rand_seed = static_cast<unsigned long>(std::strtoul(v.c_str(), nullptr, 10));
+    rand_seeded = true;
+    return;
+  }
+  if (n == "SECONDS") {
+    seconds_base = static_cast<long long>(std::time(nullptr)) -
+                   std::strtoll(v.c_str(), nullptr, 10);
+    return;
+  }
   Variable &var = vars[n];
   if (var.readonly) return;
   var.value = v;

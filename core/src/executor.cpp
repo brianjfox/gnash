@@ -381,6 +381,7 @@ int Executor::run_pipeline(const Connection *c) {
 }
 
 int Executor::run_simple(const SimpleCommand *c) {
+  if (c->line > 0) sh_.cur_lineno = c->line;  // $LINENO
   Expander ex(sh_);
   std::vector<std::pair<std::string, std::string>> assigns;
   std::vector<std::string> argv;

@@ -79,6 +79,12 @@ scripts=(
   'sleep 5 & p=$!; kill "$p"; wait "$p" 2>/dev/null; echo reaped'
   'n=$(seq 1 10 | wc -l); echo "lines=$n"'
   'echo one two three | tr " " "\n" | sort | head -1'
+  'RANDOM=42; echo $RANDOM $RANDOM $RANDOM $RANDOM'
+  'RANDOM=1; echo $((RANDOM%100)) $((RANDOM%1000)) $RANDOM'
+  'RANDOM=12345; for i in 1 2 3; do printf "%s " $RANDOM; done; echo'
+  'echo $LINENO; echo $LINENO; x=1; echo $LINENO'
+  's=$SECONDS; echo "$s"; echo $((SECONDS>=0))'
+  'echo $(($$ == $$)) $((BASHPID>0)) $((EPOCHSECONDS>1000000000))'
 )
 
 fails=0
