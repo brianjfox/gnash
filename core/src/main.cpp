@@ -43,6 +43,51 @@ std::string upper(std::string s) {
   return s;
 }
 
+// Make PATH absolute against the current directory and resolve `.'/`..'
+// lexically (no symlink resolution), as bash does for $BASH.
+std::string canon_abs(std::string path) {
+  if (path.empty() || path[0] != '/') {
+    char cwd[4096];
+    if (getcwd(cwd, sizeof cwd)) path = std::string(cwd) + "/" + path;
+  }
+  std::vector<std::string> comps;
+  size_t i = 0;
+  while (i < path.size()) {
+    while (i < path.size() && path[i] == '/') i++;
+    size_t j = i;
+    while (j < path.size() && path[j] != '/') j++;
+    std::string c = path.substr(i, j - i);
+    i = j;
+    if (c.empty() || c == ".") continue;
+    if (c == "..") { if (!comps.empty()) comps.pop_back(); continue; }
+    comps.push_back(c);
+  }
+  std::string r;
+  for (const std::string &c : comps) { r += '/'; r += c; }
+  return r.empty() ? "/" : r;
+}
+
+// The full pathname used to execute this shell, for $BASH: argv[0] made
+// absolute, or found on $PATH when it is a bare name.
+std::string resolve_exec_path(std::string a0) {
+  if (!a0.empty() && a0[0] == '-') a0 = a0.substr(1);  // login-shell marker
+  if (a0.empty()) return a0;
+  if (a0.find('/') != std::string::npos) return canon_abs(a0);
+  const char *path = std::getenv("PATH");
+  std::string p = path ? path : "";
+  size_t start = 0;
+  for (;;) {
+    size_t end = p.find(':', start);
+    std::string dir = p.substr(start, end == std::string::npos ? std::string::npos : end - start);
+    if (dir.empty()) dir = ".";
+    std::string full = dir + "/" + a0;
+    if (access(full.c_str(), X_OK) == 0) return canon_abs(full);
+    if (end == std::string::npos) break;
+    start = end + 1;
+  }
+  return a0;  // not found on PATH; fall back to the bare name
+}
+
 // Options that carry startup-file policy.
 struct StartupOpts {
   bool norc = false;
@@ -108,8 +153,9 @@ int main(int argc, char **argv) {
   sh.shell_name = base;
   const std::string prefix = base;
 
-  // Compatibility variables many rc files inspect.
-  sh.set("BASH", prog);
+  // Compatibility variables many rc files inspect.  $BASH is the full pathname
+  // used to invoke this shell (whatever its name), as in bash.
+  sh.set("BASH", resolve_exec_path(prog));
   sh.set("BASH_VERSION", "5.3.0(1)-release");
 
   std::vector<std::string> args(argv + 1, argv + argc);
