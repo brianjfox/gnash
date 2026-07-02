@@ -19,6 +19,7 @@ cases=(
   'set -u; echo $UNSET_XYZ'
   'echo hi > /no/such/dir/file'
   './this/does/not/exist'
+  'type no_such_command_xyz'
 )
 
 # Replace the leading "<program name>:" token (which legitimately differs --

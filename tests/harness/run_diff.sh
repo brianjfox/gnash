@@ -135,6 +135,11 @@ scripts=(
   'set -o | wc -l | tr -d " "'
   'qzv=hi; wzv="x y"; set | grep -E "^(qzv|wzv)="'
   'set -- x y z; echo "$# $*"; shift; echo "$@"; set a b; echo "$1$2"'
+  'type -t if cd ls; type -t no_such_cmd_zz 2>/dev/null; echo "rc=$?"'
+  'type -p ls; echo "cdp=[$(type -p cd)]"; type -P ls'
+  'type -a echo; echo "---"; type -at echo'
+  'cd(){ :; }; type -t cd; type -f cd; echo "ff=[$(type -f cd 2>/dev/null | head -1)]"'
+  'type if; type cd; type ls'
 )
 
 fails=0

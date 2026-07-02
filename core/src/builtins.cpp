@@ -910,16 +910,116 @@ int bi_let(Shell &sh, const std::vector<std::string> &argv) {
   return (ok && last != 0) ? 0 : 1;
 }
 
+// A bash reserved word (shell keyword).
+bool is_reserved_word(const std::string &w) {
+  static const char *kw[] = {"!",  "{",     "}",    "[[",   "]]",   "time",  "case",
+                             "coproc", "do",  "done", "elif", "else", "esac", "fi",
+                             "for", "function", "if", "in",   "select", "then",
+                             "until", "while", nullptr};
+  for (int i = 0; kw[i]; i++)
+    if (w == kw[i]) return true;
+  return false;
+}
+
+// Every executable named `name' along $PATH, in search order.
+std::vector<std::string> find_all_in_path(Shell &sh, const std::string &name) {
+  std::vector<std::string> out;
+  if (name.find('/') != std::string::npos) {
+    if (access(name.c_str(), X_OK) == 0) out.push_back(name);
+    return out;
+  }
+  std::string path = sh.get("PATH");
+  size_t i = 0;
+  while (i <= path.size()) {
+    size_t j = path.find(':', i);
+    std::string dir = path.substr(i, j == std::string::npos ? std::string::npos : j - i);
+    if (dir.empty()) dir = ".";
+    std::string full = dir + "/" + name;
+    if (access(full.c_str(), X_OK) == 0) out.push_back(full);
+    if (j == std::string::npos) break;
+    i = j + 1;
+  }
+  return out;
+}
+
+// type [-tpPaf] name...
+//   -t  print one word: alias/keyword/function/builtin/file
+//   -p  print the disk file that would run (empty if shadowed by a non-file)
+//   -P  force a $PATH search, ignoring functions/builtins/keywords
+//   -a  report every location, not just the first
+//   -f  suppress shell-function lookup
 int bi_type(Shell &sh, const std::vector<std::string> &argv) {
+  bool ft = false, fp = false, fP = false, fa = false, ff = false;
+  size_t i = 1;
+  for (; i < argv.size(); i++) {
+    const std::string &a = argv[i];
+    if (a == "--") { i++; break; }
+    if (a.size() < 2 || a[0] != '-') break;
+    bool ok = true;
+    for (size_t k = 1; k < a.size() && ok; k++) {
+      switch (a[k]) {
+        case 't': ft = true; break;
+        case 'p': fp = true; break;
+        case 'P': fP = true; break;
+        case 'a': fa = true; break;
+        case 'f': ff = true; break;
+        default: ok = false; break;
+      }
+    }
+    if (!ok) break;
+  }
+
   int st = 0;
-  for (size_t i = 1; i < argv.size(); i++) {
+  for (; i < argv.size(); i++) {
     const std::string &n = argv[i];
-    if (sh.functions.count(n)) std::printf("%s is a function\n", n.c_str());
-    else if (is_builtin_name(n)) std::printf("%s is a shell builtin\n", n.c_str());
-    else {
-      std::string p = find_in_path(sh, n);
-      if (!p.empty()) std::printf("%s is %s\n", n.c_str(), p.c_str());
-      else { std::fprintf(stderr, "gnash: type: %s: not found\n", n.c_str()); st = 1; }
+
+    // -P forces a PATH search and ignores everything else.
+    if (fP) {
+      auto files = find_all_in_path(sh, n);
+      if (files.empty()) { st = 1; continue; }
+      for (size_t k = 0; k < (fa ? files.size() : 1u); k++)
+        std::printf("%s\n", ft ? "file" : files[k].c_str());
+      continue;
+    }
+
+    // Ordered candidate locations: keyword, function, builtin, then files.
+    struct Loc { char kind; std::string text; };  // k/f/b/F
+    std::vector<Loc> locs;
+    if (is_reserved_word(n)) locs.push_back({'k', {}});
+    if (!ff && sh.functions.count(n)) locs.push_back({'f', {}});
+    if (is_builtin_name(n)) locs.push_back({'b', {}});
+    for (const std::string &f : find_all_in_path(sh, n)) locs.push_back({'F', f});
+
+    if (locs.empty()) {
+      if (!ft && !fp) {
+        std::fflush(stdout);  // keep interleaving with prior stdout lines
+        std::fprintf(stderr, "%stype: %s: not found\n", sh.err_prefix().c_str(), n.c_str());
+      }
+      st = 1;
+      continue;
+    }
+
+    size_t count = fa ? locs.size() : 1;
+    for (size_t li = 0; li < count; li++) {
+      const Loc &L = locs[li];
+      if (ft) {
+        std::printf("%s\n", L.kind == 'k' ? "keyword"
+                          : L.kind == 'f' ? "function"
+                          : L.kind == 'b' ? "builtin"
+                                          : "file");
+      } else if (fp) {
+        if (L.kind == 'F') std::printf("%s\n", L.text.c_str());
+      } else {
+        switch (L.kind) {
+          case 'k': std::printf("%s is a shell keyword\n", n.c_str()); break;
+          case 'f':
+            std::printf("%s is a function\n%s () %s\n", n.c_str(), n.c_str(),
+                        to_string(sh.functions[n]).c_str());
+            break;
+          case 'b': std::printf("%s is a shell builtin\n", n.c_str()); break;
+          case 'F': std::printf("%s is %s\n", n.c_str(), L.text.c_str()); break;
+        }
+      }
     }
   }
   return st;
