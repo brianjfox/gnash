@@ -669,12 +669,86 @@ int bi_unset(Shell &sh, const std::vector<std::string> &argv) {
   return 0;
 }
 
+// Quote a scalar value for `set' output: bare if it is "simple", else single
+// quoted with embedded quotes escaped (matching bash).
+std::string set_quote(const std::string &v) {
+  bool simple = true;  // an empty value prints bare (name=)
+  for (unsigned char c : v)
+    if (!(std::isalnum(c) || std::strchr("_-./:=+,%@", c))) { simple = false; break; }
+  if (simple) return v;
+  std::string r = "'";
+  for (char c : v) { if (c == '\'') r += "'\\''"; else r += c; }
+  return r + "'";
+}
+
+std::string set_elem(const std::string &v) {  // array element form: "value"
+  std::string r = "\"";
+  for (char c : v) { if (c == '"' || c == '\\' || c == '$' || c == '`') r += '\\'; r += c; }
+  return r + "\"";
+}
+
+void set_print_var(const std::string &name, const Variable &v) {
+  if (v.kind == VarKind::Indexed) {
+    std::string s = name + "=(";
+    bool first = true;
+    for (const auto &kv : v.idx) {
+      if (!first) s += ' ';
+      first = false;
+      s += "[" + std::to_string(kv.first) + "]=" + set_elem(kv.second);
+    }
+    std::printf("%s)\n", s.c_str());
+  } else if (v.kind == VarKind::Assoc) {
+    std::string s = name + "=(";
+    bool first = true;
+    for (const auto &kv : v.assoc) {
+      if (!first) s += ' ';
+      first = false;
+      s += "[" + kv.first + "]=" + set_elem(kv.second);
+    }
+    std::printf("%s)\n", s.c_str());
+  } else {
+    std::printf("%s=%s\n", name.c_str(), set_quote(v.value).c_str());
+  }
+}
+
+// The `set -o'/`set +o' option table with each option's current state.
+std::vector<std::pair<std::string, bool>> set_option_states(Shell &sh) {
+  bool i = sh.interactive;
+  return {
+      {"allexport", false},   {"braceexpand", true},
+      {"emacs", i},           {"errexit", sh.opt_errexit},
+      {"errtrace", false},    {"functrace", false},
+      {"hashall", true},      {"histexpand", i},
+      {"history", i},         {"ignoreeof", false},
+      {"interactive-comments", true}, {"keyword", false},
+      {"monitor", i},         {"noclobber", false},
+      {"noexec", false},      {"noglob", sh.opt_noglob},
+      {"nolog", false},       {"notify", false},
+      {"nounset", sh.opt_nounset}, {"onecmd", false},
+      {"physical", false},    {"pipefail", false},
+      {"posix", false},       {"privileged", false},
+      {"verbose", sh.opt_verbose}, {"vi", false},
+      {"xtrace", sh.opt_xtrace}};
+}
+
 int bi_set(Shell &sh, const std::vector<std::string> &argv) {
+  // No arguments: list all shell variables (name=value), names sorted.
+  if (argv.size() == 1) {
+    for (const auto &kv : sh.vars) {  // std::map is ordered by name
+      const std::string &n = kv.first;
+      if (n.empty() || !(std::isalpha(static_cast<unsigned char>(n[0])) || n[0] == '_'))
+        continue;  // skip special parameters like $, ?, #
+      set_print_var(n, kv.second);
+    }
+    return 0;
+  }
+
   size_t i = 1;
   bool positional_given = false;
   for (; i < argv.size(); i++) {
     const std::string &a = argv[i];
     if (a == "--") { i++; positional_given = true; break; }
+    if (a == "-") { sh.opt_xtrace = sh.opt_verbose = false; continue; }
     if (a.size() >= 2 && (a[0] == '-' || a[0] == '+')) {
       bool on = a[0] == '-';
       for (size_t k = 1; k < a.size(); k++) {
@@ -685,7 +759,13 @@ int bi_set(Shell &sh, const std::vector<std::string> &argv) {
           case 'f': sh.opt_noglob = on; break;
           case 'v': sh.opt_verbose = on; break;
           case 'o': {
-            if (i + 1 < argv.size()) {
+            if (i + 1 >= argv.size()) {
+              // `set -o' lists states; `set +o' reproduces as commands.
+              for (const auto &o : set_option_states(sh)) {
+                if (on) std::printf("%-15s\t%s\n", o.first.c_str(), o.second ? "on" : "off");
+                else std::printf("set %co %s\n", o.second ? '-' : '+', o.first.c_str());
+              }
+            } else {
               std::string o = argv[++i];
               if (o == "errexit") sh.opt_errexit = on;
               else if (o == "xtrace") sh.opt_xtrace = on;
@@ -693,9 +773,10 @@ int bi_set(Shell &sh, const std::vector<std::string> &argv) {
               else if (o == "noglob") sh.opt_noglob = on;
               else if (o == "verbose") sh.opt_verbose = on;
             }
+            k = a.size();  // -o consumes the rest of the word
             break;
           }
-          default: break;
+          default: break;  // other flags accepted as no-ops
         }
       }
     } else {
@@ -703,9 +784,7 @@ int bi_set(Shell &sh, const std::vector<std::string> &argv) {
       break;
     }
   }
-  if (positional_given) {
-    sh.positional.assign(argv.begin() + static_cast<long>(i), argv.end());
-  }
+  if (positional_given) sh.positional.assign(argv.begin() + static_cast<long>(i), argv.end());
   return 0;
 }
 

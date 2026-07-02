@@ -79,6 +79,7 @@ bool Shell::dynamic_var(const std::string &name, std::string &out) {
   }
   if (name == "LINENO") { out = std::to_string(cur_lineno); return true; }
   if (name == "BASHPID") { out = std::to_string(static_cast<long>(getpid())); return true; }
+  if (name == "BASH_SUBSHELL") { out = std::to_string(subshell_level); return true; }
   if (name == "EPOCHSECONDS") {
     out = std::to_string(static_cast<long long>(std::time(nullptr)));
     return true;
@@ -397,6 +398,7 @@ std::string Shell::run_and_capture(const std::string &script, int *status) {
     dup2(fds[1], STDOUT_FILENO);
     close(fds[1]);
     job_control = false;  // command substitution: no nested tty control
+    subshell_level++;  // $BASH_SUBSHELL
     int st = run_string(script);
     std::fflush(stdout);
     _exit(st & 0xff);

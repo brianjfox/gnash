@@ -16,8 +16,10 @@
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <sstream>
 #include <string>
+#include <sys/utsname.h>
 #include <unistd.h>
 #include <vector>
 
@@ -157,6 +159,23 @@ int main(int argc, char **argv) {
   // used to invoke this shell (whatever its name), as in bash.
   sh.set("BASH", resolve_exec_path(prog));
   sh.set("BASH_VERSION", "5.3.0(1)-release");
+  {
+    // BASH_VERSINFO: major minor patch build status machtype (readonly array).
+    std::string mach = "unknown";
+    struct utsname u;
+    if (uname(&u) == 0) {
+      std::string sys = u.sysname;
+      for (char &c : sys) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      std::string vendor = (sys == "darwin") ? "apple" : "unknown";
+      mach = std::string(u.machine) + "-" + vendor + "-" + sys + u.release;
+    }
+    std::vector<std::pair<std::optional<std::string>, std::string>> vi = {
+        {std::nullopt, "5"}, {std::nullopt, "3"},       {std::nullopt, "0"},
+        {std::nullopt, "1"}, {std::nullopt, "release"}, {std::nullopt, mach}};
+    sh.array_assign("BASH_VERSINFO", vi, false, false);
+    sh.vars["BASH_VERSINFO"].readonly = true;
+    sh.set("MACHTYPE", mach);
+  }
 
   std::vector<std::string> args(argv + 1, argv + argc);
 

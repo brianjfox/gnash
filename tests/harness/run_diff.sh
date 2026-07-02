@@ -129,6 +129,12 @@ scripts=(
   'x=5; trap "echo x=$x" USR1; kill -USR1 $$'
   'trap "echo A" USR1; kill -USR1 $$; trap - USR1; kill -USR1 $$ 2>/dev/null; echo end'
   'trap "echo bye" EXIT; echo body'
+  'echo $BASH_SUBSHELL; ( echo $BASH_SUBSHELL ); echo $BASH_SUBSHELL | cat; { echo $BASH_SUBSHELL; } | cat'
+  'echo "$(echo $BASH_SUBSHELL) $( ( echo $BASH_SUBSHELL ) )"'
+  'echo "n=${#BASH_VERSINFO[@]} status=${BASH_VERSINFO[4]}"; [ ${BASH_VERSINFO[0]} -ge 4 ] && echo modern'
+  'set -o | wc -l | tr -d " "'
+  'qzv=hi; wzv="x y"; set | grep -E "^(qzv|wzv)="'
+  'set -- x y z; echo "$# $*"; shift; echo "$@"; set a b; echo "$1$2"'
 )
 
 fails=0

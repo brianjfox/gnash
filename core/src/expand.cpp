@@ -822,6 +822,7 @@ std::string spawn_procsub(Shell &sh, const std::string &cmd, bool input) {
     if (input) { close(fds[0]); dup2(fds[1], STDOUT_FILENO); close(fds[1]); }
     else       { close(fds[1]); dup2(fds[0], STDIN_FILENO);  close(fds[0]); }
     sh.job_control = false;
+    sh.subshell_level++;
     int st = sh.run_string(cmd);
     std::fflush(nullptr);
     _exit(st & 0xff);

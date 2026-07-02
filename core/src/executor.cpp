@@ -325,6 +325,7 @@ int Executor::run_connection(const Connection *c) {
         signal(SIGQUIT, SIG_DFL);
         signal(SIGTSTP, SIG_DFL);
         sh_.job_control = false;  // background: descendants must not touch the tty
+        sh_.subshell_level++;
         Executor ex(sh_);
         int s = ex.run(c->first.get());
         std::fflush(nullptr);
@@ -373,6 +374,12 @@ int Executor::run_pipeline(const Connection *c) {
       if (prev_read != -1) { dup2(prev_read, 0); close(prev_read); }
       if (i + 1 < n) { close(pipefd[0]); dup2(pipefd[1], 1); close(pipefd[1]); }
       sh_.job_control = false;  // pipeline stage: no nested tty control
+      // A simple command as a pipeline stage does not raise $BASH_SUBSHELL; a
+      // compound one does.  An explicit ( ) subshell counts itself in
+      // run_subshell, so don't double-count it here.
+      if (!dynamic_cast<const SimpleCommand *>(stages[i]) &&
+          !dynamic_cast<const Subshell *>(stages[i]))
+        sh_.subshell_level++;
       Executor ex(sh_);
       int s = ex.run(stages[i]);
       std::fflush(nullptr);
@@ -594,6 +601,7 @@ int Executor::run_subshell(const Subshell *c) {
   pid_t pid = fork();
   if (pid == 0) {
     sh_.job_control = false;  // the subshell runs as one unit; no nested tty control
+    sh_.subshell_level++;
     Executor ex(sh_);
     int s = ex.run(c->body.get());
     std::fflush(nullptr);

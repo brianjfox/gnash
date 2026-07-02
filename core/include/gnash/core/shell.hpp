@@ -120,6 +120,7 @@ class Shell {
   bool rand_seeded = false;      // has RANDOM been seeded (explicitly or lazily)
   long long seconds_base = 0;    // epoch second that $SECONDS counts from
   int cur_lineno = 0;            // $LINENO of the command being executed
+  int subshell_level = 0;        // $BASH_SUBSHELL: subshell nesting depth
   int next_random();             // advance the PRNG, return 0..32767
   bool dynamic_var(const std::string &name, std::string &out);  // RANDOM/SECONDS/...
 
