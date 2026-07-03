@@ -157,8 +157,11 @@ int main(int argc, char **argv) {
 
   // Compatibility variables many rc files inspect.  $BASH is the full pathname
   // used to invoke this shell (whatever its name), as in bash.
-  sh.set("BASH", resolve_exec_path(prog));
+  std::string exec_path = resolve_exec_path(prog);
+  sh.set("BASH", exec_path);
   sh.set("BASH_VERSION", "5.3.0(1)-release");
+  // $SHELL is the execution path of the current shell.
+  sh.set_exported("SHELL", exec_path);
   {
     // BASH_VERSINFO: major minor patch build status machtype (readonly array).
     std::string mach = "unknown";
