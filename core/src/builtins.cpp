@@ -19,6 +19,7 @@
 #include <unistd.h>
 
 #include "gnash/core/expand.hpp"
+#include "readline/history.h"
 #include "strmatch.h"
 
 namespace gnash::core {
@@ -846,7 +847,7 @@ static const char *const kBuiltinNames[] = {
     "source", ".", "local", "declare", "typeset", "readonly", "let", "type", "trap",
     "umask", "getopts", "exec", "command", "times", "wait", "jobs", "fg", "bg",
     "disown", "kill", "suspend", "dirs", "pushd", "popd", "mapfile", "readarray",
-    "help", "builtin", "logout", "hash", "shopt", "ulimit", "enable", "caller", "alias", "unalias", nullptr};
+    "help", "builtin", "logout", "hash", "shopt", "ulimit", "enable", "caller", "alias", "unalias", "history", "fc", nullptr};
 
 bool is_builtin_name(const std::string &n) {
   for (int i = 0; kBuiltinNames[i]; i++)
@@ -1222,6 +1223,8 @@ static const BuiltinHelp kBuiltinHelp[] = {
     {"caller", "caller [expr]", "Return the context of the current subroutine call."},
     {"alias", "alias [-p] [name[=value] ... ]", "Define or display aliases."},
     {"unalias", "unalias [-a] name [name ...]", "Remove each NAME from the list of defined aliases."},
+    {"history", "history [-c] [-d offset] [n] or history -anrw [filename] or history -ps arg [arg...]", "Display or manipulate the history list."},
+    {"fc", "fc [-e ename] [-lnr] [first] [last] or fc -s [pat=rep] [command]", "Display or execute commands from the history list."},
 };
 
 int bi_help(Shell &sh, const std::vector<std::string> &argv) {
@@ -1636,6 +1639,112 @@ int bi_unalias(Shell &sh, const std::vector<std::string> &argv) {
   return st;
 }
 
+// ---- history / fc --------------------------------------------------------
+static std::string hist_file(Shell &sh) {
+  std::string h = sh.get("HISTFILE");
+  if (!h.empty()) return h;
+  const char *home = std::getenv("HOME");
+  return home ? std::string(home) + "/.gnash_history" : std::string();
+}
+
+int bi_history(Shell &sh, const std::vector<std::string> &argv) {
+  int limit = -1;
+  size_t i = 1;
+  for (; i < argv.size(); i++) {
+    const std::string &a = argv[i];
+    if (a == "-c") { clear_history(); return 0; }
+    if (a == "-d") {
+      if (i + 1 < argv.size()) remove_history(std::atoi(argv[i + 1].c_str()) - history_base);
+      return 0;
+    }
+    if (a == "-s") {
+      std::string s = join(argv, i + 1);
+      if (!s.empty()) add_history(s.c_str());
+      return 0;
+    }
+    if (a == "-p") {
+      for (size_t k = i + 1; k < argv.size(); k++) {
+        char *e = nullptr;
+        history_expand(const_cast<char *>(argv[k].c_str()), &e);
+        if (e) { std::printf("%s\n", e); std::free(e); }
+      }
+      return 0;
+    }
+    if (a == "-w") { write_history((i + 1 < argv.size() ? argv[i + 1] : hist_file(sh)).c_str()); return 0; }
+    if (a == "-a") { append_history(0, (i + 1 < argv.size() ? argv[i + 1] : hist_file(sh)).c_str()); return 0; }
+    if (a == "-r" || a == "-n") { read_history((i + 1 < argv.size() ? argv[i + 1] : hist_file(sh)).c_str()); return 0; }
+    if (!a.empty() && (std::isdigit(static_cast<unsigned char>(a[0])))) { limit = std::atoi(a.c_str()); continue; }
+    break;
+  }
+  HIST_ENTRY **list = history_list();
+  if (!list) return 0;
+  int n = 0;
+  while (list[n]) n++;
+  int start = (limit > 0 && limit < n) ? n - limit : 0;
+  for (int k = start; k < n; k++)
+    std::printf("%5d  %s\n", history_base + k, list[k]->line);
+  return 0;
+}
+
+int bi_fc(Shell &sh, const std::vector<std::string> &argv) {
+  bool list = false, nonum = false, reverse = false, subst = false;
+  size_t i = 1;
+  for (; i < argv.size(); i++) {
+    const std::string &a = argv[i];
+    if (a.size() < 2 || a[0] != '-') break;
+    if (a == "--") { i++; break; }
+    for (size_t k = 1; k < a.size(); k++) {
+      if (a[k] == 'l') list = true;
+      else if (a[k] == 'n') nonum = true;
+      else if (a[k] == 'r') reverse = true;
+      else if (a[k] == 's') subst = true;
+      else if (a[k] == 'e') { if (i + 1 < argv.size()) i++; }  // editor: ignored
+    }
+  }
+  HIST_ENTRY **hl = history_list();
+  int n = 0;
+  if (hl) while (hl[n]) n++;
+  if (n == 0) return 0;
+
+  if (subst) {  // fc -s [old=new] [command]: re-run a previous command
+    std::string oldpat, newpat, match;
+    for (; i < argv.size(); i++) {
+      auto eq = argv[i].find('=');
+      if (eq != std::string::npos && oldpat.empty()) { oldpat = argv[i].substr(0, eq); newpat = argv[i].substr(eq + 1); }
+      else match = argv[i];
+    }
+    int idx = n - 1;  // most recent
+    if (!match.empty())
+      for (int k = n - 1; k >= 0; k--)
+        if (std::strncmp(hl[k]->line, match.c_str(), match.size()) == 0) { idx = k; break; }
+    std::string cmd = hl[idx]->line;
+    if (!oldpat.empty()) {
+      auto p = cmd.find(oldpat);
+      if (p != std::string::npos) cmd.replace(p, oldpat.size(), newpat);
+    }
+    std::printf("%s\n", cmd.c_str());
+    add_history(cmd.c_str());
+    return sh.run_string(cmd);
+  }
+
+  // fc -l [first] [last]: list a range (default last 16).
+  int first = n - 16, last = n - 1;
+  std::vector<std::string> nums;
+  for (; i < argv.size(); i++) nums.push_back(argv[i]);
+  if (nums.size() >= 1) first = std::atoi(nums[0].c_str()) - history_base;
+  if (nums.size() >= 2) last = std::atoi(nums[1].c_str()) - history_base;
+  if (first < 0) first = 0;
+  if (last >= n) last = n - 1;
+  if (!list) list = true;  // default action without an editor is to list here
+  auto emit = [&](int k) {
+    if (nonum) std::printf("%s\n", hl[k]->line);
+    else std::printf("%d\t %s\n", history_base + k, hl[k]->line);
+  };
+  if (reverse) for (int k = last; k >= first; k--) emit(k);
+  else for (int k = first; k <= last; k++) emit(k);
+  return 0;
+}
+
 }  // namespace
 
 // [[ ]] evaluation over the reconstructed expression (re-tokenized).
@@ -1722,6 +1831,10 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
     st = bi_alias(sh, argv);
   } else if (cmd == "unalias") {
     st = bi_unalias(sh, argv);
+  } else if (cmd == "history") {
+    st = bi_history(sh, argv);
+  } else if (cmd == "fc") {
+    st = bi_fc(sh, argv);
   } else if (cmd == "trap") {
     st = bi_trap(sh, argv);
   } else if (cmd == "umask") {

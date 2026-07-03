@@ -153,6 +153,10 @@ scripts=(
   'alias ll="ls -l"; alias x=y; alias'
   'alias a=1 b="two words"; alias a; alias b'
   'alias q=1; unalias q; unalias -a; alias; echo "done=$?"'
+  'HISTFILE=/dev/null; history -c; history -s "echo one"; history -s "echo two"; history'
+  'HISTFILE=/dev/null; history -c; history -s cmd1; history -s cmd2; fc -l'
+  'HISTFILE=/dev/null; history -c; history -s "ls -la"; history -p "!!"'
+  'HISTFILE=/dev/null; history -c; history -s a; history -s b; history -s c; history -d 2; history'
 )
 
 fails=0
