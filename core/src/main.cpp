@@ -286,6 +286,11 @@ int main(int argc, char **argv) {
     if (interactive) {
       sh.interactive = true;
       sh.init_job_control(true);
+      // Default prompts (set before startup files so an rc file can override):
+      // user@host:cwd followed by `$' (or `#' for root), and `> ' for
+      // continuation lines.
+      if (!sh.is_set("PS1")) sh.set("PS1", "\\u@\\h:\\w\\$ ");
+      if (!sh.is_set("PS2")) sh.set("PS2", "> ");
       read_startup_files(sh, prefix, login, true, sopts);
       return gnash::core::run_interactive(sh);
     }

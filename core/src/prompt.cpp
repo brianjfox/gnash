@@ -41,8 +41,11 @@ std::string expand_prompt(Shell &sh, const std::string &ps) {
         break;
       }
       case 'w': case 'W': {
-        char cwd[4096];
-        std::string dir = getcwd(cwd, sizeof cwd) ? cwd : "";
+        std::string dir = sh.get("PWD");  // logical path, as bash uses
+        if (dir.empty() || dir[0] != '/') {
+          char cwd[4096];
+          dir = getcwd(cwd, sizeof cwd) ? cwd : "";
+        }
         std::string home = sh.get("HOME");
         dir = home_relative(dir, home);
         if (c == 'W') { size_t s = dir.find_last_of('/'); if (s != std::string::npos && dir != "/") dir = dir.substr(s + 1); }

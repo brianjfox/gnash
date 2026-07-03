@@ -104,7 +104,7 @@ int run_interactive(Shell &sh) {
     sh.reap_jobs(true);      // report any finished background jobs
     sh.run_pending_traps();  // deliver signals received while at the prompt
 
-    std::string ps1 = sh.is_set("PS1") ? sh.get("PS1") : std::string("\\s-\\v\\$ ");
+    std::string ps1 = sh.is_set("PS1") ? sh.get("PS1") : std::string("\\u@\\h:\\w\\$ ");
     char *line = readline(expand_prompt(sh, ps1).c_str());
     if (!line) {  // Ctrl-D on an empty line
       std::printf("exit\n");
