@@ -110,14 +110,14 @@ class Shell {
   std::vector<std::string> positional;  // $1 == positional[0]
   std::string arg0 = "gnash";
 
-  // --- shell personality (imitation of another shell) -------------------
-  // gnash can imitate another shell based on its invocation name or the
-  // --imitate=<name> option.  Persona selects the surface behaviors that
-  // differ (startup files, prompt syntax, identity variables, highlighting);
-  // behaviors that are a subset of bash's are left unchanged.
+  // --- shell personality (which other shell gnash behaves as) -----------
+  // gnash can take on the personality of another shell based on its invocation
+  // name or the --personality=<name> option.  Persona selects the surface
+  // behaviors that differ (startup files, prompt syntax, identity variables,
+  // highlighting); behaviors that are a subset of bash's are left unchanged.
   enum class Persona { Bash, Zsh };
   Persona persona = Persona::Bash;
-  std::string imitate_name = "gnash";  // exposed as $GNASH_IMITATE
+  std::string personality_name = "gnash";  // exposed as $GNASH_PERSONALITY
   bool is_zsh() const { return persona == Persona::Zsh; }
 
   // --- diagnostics -------------------------------------------------------

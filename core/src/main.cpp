@@ -159,12 +159,12 @@ void apply_set_o(Shell &sh, const std::string &name, bool set) {
   // Other -o names (pipefail, posix, vi, emacs, ...) are accepted and ignored.
 }
 
-// Configure the shell's persona (which other shell it imitates) and the
+// Configure the shell's personality (which other shell it behaves as) and the
 // identity variables that differ between shells.
-void configure_persona(Shell &sh, const std::string &imitate, const std::string &exec_path) {
-  sh.imitate_name = imitate;
-  sh.persona = (imitate == "zsh") ? Shell::Persona::Zsh : Shell::Persona::Bash;
-  sh.set("GNASH_IMITATE", imitate);
+void configure_persona(Shell &sh, const std::string &personality, const std::string &exec_path) {
+  sh.personality_name = personality;
+  sh.persona = (personality == "zsh") ? Shell::Persona::Zsh : Shell::Persona::Bash;
+  sh.set("GNASH_PERSONALITY", personality);
 
   std::string mach = "unknown";
   struct utsname u;
@@ -217,7 +217,7 @@ int main(int argc, char **argv) {
   bool force_interactive = false;
   bool force_stdin = false;
   bool have_c = false;
-  std::string imitate_flag;  // --imitate=<name>, overrides the invocation name
+  std::string personality_flag;  // --personality=<name>, overrides invocation name
   size_t idx = 0;
   for (; idx < args.size(); idx++) {
     const std::string &a = args[idx];
@@ -236,8 +236,8 @@ int main(int argc, char **argv) {
       else if (lo == "posix" || lo == "noediting") { /* accepted, ignored */ }
       else if (lo == "rcfile" || lo == "init-file") {
         sopts.rcfile = !val.empty() ? val : (idx + 1 < args.size() ? args[++idx] : "");
-      } else if (lo == "imitate") {
-        imitate_flag = !val.empty() ? val : (idx + 1 < args.size() ? args[++idx] : "");
+      } else if (lo == "personality") {
+        personality_flag = !val.empty() ? val : (idx + 1 < args.size() ? args[++idx] : "");
       } else if (lo == "version") {
         std::printf("gnash, version 0.1 (bash-compatible reimplementation)\n");
         return 0;
@@ -286,8 +286,8 @@ int main(int argc, char **argv) {
   }
   sh.login_shell = login;
 
-  // The persona: the --imitate flag wins, else the invocation name.
-  configure_persona(sh, imitate_flag.empty() ? prefix : imitate_flag, exec_path);
+  // The personality: the --personality flag wins, else the invocation name.
+  configure_persona(sh, personality_flag.empty() ? prefix : personality_flag, exec_path);
 
   // ---- dispatch ----------------------------------------------------------
   if (have_c) {
