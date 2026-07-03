@@ -157,6 +157,11 @@ scripts=(
   'HISTFILE=/dev/null; history -c; history -s cmd1; history -s cmd2; fc -l'
   'HISTFILE=/dev/null; history -c; history -s "ls -la"; history -p "!!"'
   'HISTFILE=/dev/null; history -c; history -s a; history -s b; history -s c; history -d 2; history'
+  'compgen -W "apple apricot banana" a'
+  'compgen -W "one two three"; echo "rc=$?"'
+  'compgen -P pre- -S -suf -W "a b" a; compgen -W "x y z" q; echo "nomatch=$?"'
+  'complete -W "alpha beta" mycmd; complete -p mycmd'
+  'bind -l 2>/dev/null | grep -c beginning-of-line'
 )
 
 fails=0

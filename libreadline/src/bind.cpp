@@ -5,6 +5,7 @@
 // name->function map (rl_named_function), rl_parse_and_bind for one inputrc
 // line ("keyseq": function  or  set var value), and rl_read_init_file.
 
+#include <algorithm>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
@@ -61,6 +62,18 @@ const NamedFunc kFunmap[] = {
     {"emacs-editing-mode", rl_emacs_editing_mode},
     {nullptr, nullptr},
 };
+
+// NULL-terminated, sorted list of bindable function names (for `bind -l').
+extern "C" const char **rl_funmap_names(void) {
+  static std::vector<const char *> names;
+  if (names.empty()) {
+    for (int i = 0; kFunmap[i].name; i++) names.push_back(kFunmap[i].name);
+    std::sort(names.begin(), names.end(),
+              [](const char *a, const char *b) { return std::strcmp(a, b) < 0; });
+    names.push_back(nullptr);
+  }
+  return names.data();
+}
 
 int ctrl(int c) {
   if (c == '?') return 0x7f;

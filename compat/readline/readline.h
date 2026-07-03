@@ -148,6 +148,7 @@ extern int rl_forward_search_history (int count, int key);
 extern int rl_bind_key (int key, rl_command_func_t *function);
 extern int rl_bind_keyseq (const char *keyseq, rl_command_func_t *function);
 extern rl_command_func_t *rl_named_function (const char *name);
+extern const char **rl_funmap_names (void);
 
 /* Parse one inputrc line (a binding or `set var value`). */
 extern int rl_parse_and_bind (char *line);

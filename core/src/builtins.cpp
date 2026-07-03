@@ -13,6 +13,7 @@
 #include <sstream>
 #include <vector>
 #include <cerrno>
+#include <dirent.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -20,6 +21,7 @@
 
 #include "gnash/core/expand.hpp"
 #include "readline/history.h"
+#include "readline/readline.h"
 #include "strmatch.h"
 
 namespace gnash::core {
@@ -847,7 +849,7 @@ static const char *const kBuiltinNames[] = {
     "source", ".", "local", "declare", "typeset", "readonly", "let", "type", "trap",
     "umask", "getopts", "exec", "command", "times", "wait", "jobs", "fg", "bg",
     "disown", "kill", "suspend", "dirs", "pushd", "popd", "mapfile", "readarray",
-    "help", "builtin", "logout", "hash", "shopt", "ulimit", "enable", "caller", "alias", "unalias", "history", "fc", nullptr};
+    "help", "builtin", "logout", "hash", "shopt", "ulimit", "enable", "caller", "alias", "unalias", "history", "fc", "compgen", "complete", "compopt", "bind", nullptr};
 
 bool is_builtin_name(const std::string &n) {
   for (int i = 0; kBuiltinNames[i]; i++)
@@ -1225,6 +1227,10 @@ static const BuiltinHelp kBuiltinHelp[] = {
     {"unalias", "unalias [-a] name [name ...]", "Remove each NAME from the list of defined aliases."},
     {"history", "history [-c] [-d offset] [n] or history -anrw [filename] or history -ps arg [arg...]", "Display or manipulate the history list."},
     {"fc", "fc [-e ename] [-lnr] [first] [last] or fc -s [pat=rep] [command]", "Display or execute commands from the history list."},
+    {"compgen", "compgen [-abcdefgjksuv] [-o option] [-A action] [-G globpat] [-W wordlist] [-F function] [-C command] [-X filterpat] [-P prefix] [-S suffix] [word]", "Display possible completions depending on the options."},
+    {"complete", "complete [-abcdefgjksuv] [-pr] [-DEI] [-o option] [-A action] [-G globpat] [-W wordlist] [-F function] [-C command] [-X filterpat] [-P prefix] [-S suffix] [name ...]", "Specify how arguments are to be completed by Readline."},
+    {"compopt", "compopt [-o|+o option] [-DEI] [name ...]", "Modify or display completion options."},
+    {"bind", "bind [-lpsvPSVX] [-m keymap] [-f filename] [-q name] [-u name] [-r keyseq] [-x keyseq:shell-command] [keyseq:readline-function or readline-command]", "Set Readline key bindings and variables."},
 };
 
 int bi_help(Shell &sh, const std::vector<std::string> &argv) {
@@ -1745,6 +1751,214 @@ int bi_fc(Shell &sh, const std::vector<std::string> &argv) {
   return 0;
 }
 
+// ---- compgen / complete / compopt ----------------------------------------
+static const char *const kReservedWords[] = {
+    "if", "then", "else", "elif", "fi", "case", "esac", "for", "select", "while",
+    "until", "do", "done", "in", "function", "time", "{", "}", "!", "[[", "]]",
+    "coproc", nullptr};
+
+// Files (or directories) whose path begins with WORD, for compgen -f/-d.
+static void compgen_files(const std::string &word, bool dirs_only, std::vector<std::string> &out) {
+  std::string dir = ".", base = word;
+  auto slash = word.rfind('/');
+  if (slash != std::string::npos) { dir = word.substr(0, slash + 1); base = word.substr(slash + 1); }
+  DIR *d = opendir(dir == "." && word.find('/') == std::string::npos ? "." : (slash == std::string::npos ? "." : word.substr(0, slash + 1)).c_str());
+  std::string realdir = (slash == std::string::npos) ? "." : word.substr(0, slash);
+  if (realdir.empty()) realdir = "/";
+  if (d) closedir(d);
+  d = opendir(realdir.c_str());
+  if (!d) return;
+  std::string pathprefix = (slash == std::string::npos) ? "" : word.substr(0, slash + 1);
+  struct dirent *e;
+  while ((e = readdir(d)) != nullptr) {
+    std::string name = e->d_name;
+    if (name == "." || name == "..") continue;
+    if (name.compare(0, base.size(), base) != 0) continue;
+    std::string full = pathprefix + name;
+    if (dirs_only) {
+      struct stat st;
+      if (stat(full.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) continue;
+    }
+    out.push_back(full);
+  }
+  closedir(d);
+}
+
+// Collect the raw candidate list for compgen's actions (before prefix filter).
+static void compgen_collect(Shell &sh, const std::vector<char> &actions, const std::string &word,
+                            std::vector<std::string> &c) {
+  for (char a : actions) {
+    switch (a) {
+      case 'b': for (const auto &n : builtin_names_sorted()) c.push_back(n); break;
+      case 'k': for (int i = 0; kReservedWords[i]; i++) c.push_back(kReservedWords[i]); break;
+      case 'v': for (const auto &kv : sh.vars) c.push_back(kv.first); break;
+      case 'e': for (const auto &kv : sh.vars) if (kv.second.exported) c.push_back(kv.first); break;
+      case 'a': for (const auto &kv : sh.aliases) c.push_back(kv.first); break;
+      case 'F': for (const auto &kv : sh.functions) c.push_back(kv.first); break;
+      case 'f': compgen_files(word, false, c); break;
+      case 'd': compgen_files(word, true, c); break;
+      case 'c': {  // command names: keywords, builtins, functions, aliases, PATH
+        for (int i = 0; kReservedWords[i]; i++) c.push_back(kReservedWords[i]);
+        for (const auto &n : builtin_names_sorted()) c.push_back(n);
+        for (const auto &kv : sh.functions) c.push_back(kv.first);
+        for (const auto &kv : sh.aliases) c.push_back(kv.first);
+        std::string path = sh.get("PATH");
+        size_t p = 0;
+        while (p <= path.size()) {
+          size_t q = path.find(':', p);
+          std::string dir = path.substr(p, q == std::string::npos ? std::string::npos : q - p);
+          if (dir.empty()) dir = ".";
+          if (DIR *dp = opendir(dir.c_str())) {
+            struct dirent *e;
+            while ((e = readdir(dp)) != nullptr) {
+              std::string nm = e->d_name;
+              if (!word.empty() && nm.compare(0, word.size(), word) != 0) continue;
+              if (access((dir + "/" + nm).c_str(), X_OK) == 0) c.push_back(nm);
+            }
+            closedir(dp);
+          }
+          if (q == std::string::npos) break;
+          p = q + 1;
+        }
+        break;
+      }
+      default: break;
+    }
+  }
+}
+
+int bi_compgen(Shell &sh, const std::vector<std::string> &argv) {
+  std::vector<std::string> words;
+  std::vector<char> actions;
+  std::string prefix, suffix, word;
+  size_t i = 1;
+  auto optarg = [&](const std::string &a, size_t &k) -> std::string {
+    if (a.size() > 2) return a.substr(2);
+    return (i + 1 < argv.size()) ? argv[++i] : std::string();
+    (void)k;
+  };
+  for (; i < argv.size(); i++) {
+    const std::string &a = argv[i];
+    if (a == "--") { i++; break; }
+    if (a.size() < 2 || a[0] != '-') break;
+    char o = a[1];
+    size_t k = 0;
+    if (o == 'W') { std::istringstream iss(optarg(a, k)); std::string w; while (iss >> w) words.push_back(w); }
+    else if (o == 'P') prefix = optarg(a, k);
+    else if (o == 'S') suffix = optarg(a, k);
+    else if (o == 'A') {
+      std::string act = optarg(a, k);
+      if (act == "function") actions.push_back('F');
+      else if (act == "builtin") actions.push_back('b');
+      else if (act == "keyword") actions.push_back('k');
+      else if (act == "variable") actions.push_back('v');
+      else if (act == "export") actions.push_back('e');
+      else if (act == "alias") actions.push_back('a');
+      else if (act == "command") actions.push_back('c');
+      else if (act == "file") actions.push_back('f');
+      else if (act == "directory") actions.push_back('d');
+    } else if (std::strchr("bkvecafd", o)) {
+      for (size_t j = 1; j < a.size(); j++) actions.push_back(a[j]);
+    } else if (std::strchr("GXoFC", o)) {
+      optarg(a, k);  // consume the argument of unsupported generators
+    }
+  }
+  if (i < argv.size()) word = argv[i];
+
+  std::vector<std::string> cands = words;
+  compgen_collect(sh, actions, word, cands);
+
+  int printed = 0;
+  for (const std::string &c : cands) {
+    if (!word.empty() && c.compare(0, word.size(), word) != 0) continue;
+    std::printf("%s%s%s\n", prefix.c_str(), c.c_str(), suffix.c_str());
+    printed++;
+  }
+  return printed ? 0 : 1;
+}
+
+// Reconstruct a `complete' spec string (best effort) for -p output.
+int bi_complete(Shell &sh, const std::vector<std::string> &argv) {
+  bool print = false, remove = false;
+  std::string spec;  // the option part, reused as the stored spec
+  size_t i = 1;
+  std::vector<std::string> names;
+  for (; i < argv.size(); i++) {
+    const std::string &a = argv[i];
+    if (a == "-p") { print = true; continue; }
+    if (a == "-r") { remove = true; continue; }
+    if (a.size() >= 2 && a[0] == '-') {
+      spec += (spec.empty() ? "" : " ") + a;
+      // options that take an argument
+      if (std::strchr("WFCGXPSAo", a[1]) && a.size() == 2 && i + 1 < argv.size()) {
+        std::string arg = argv[++i];
+        spec += " " + (a[1] == 'W' || a[1] == 'F' || a[1] == 'C' ? "'" + arg + "'" : arg);
+      }
+      continue;
+    }
+    names.push_back(a);
+  }
+  if (remove) {
+    if (names.empty()) sh.completions.clear();
+    else for (const auto &n : names) sh.completions.erase(n);
+    return 0;
+  }
+  if (print || names.empty()) {
+    if (names.empty()) {
+      for (const auto &kv : sh.completions)
+        std::printf("complete %s %s\n", kv.second.c_str(), kv.first.c_str());
+      return 0;
+    }
+    int st = 0;
+    for (const auto &n : names) {
+      auto it = sh.completions.find(n);
+      if (it != sh.completions.end())
+        std::printf("complete %s %s\n", it->second.c_str(), n.c_str());
+      else {
+        std::fflush(stdout);
+        std::fprintf(stderr, "%scomplete: %s: no completion specification\n",
+                     sh.err_prefix().c_str(), n.c_str());
+        st = 1;
+      }
+    }
+    return st;
+  }
+  for (const auto &n : names) sh.completions[n] = spec;
+  return 0;
+}
+
+int bi_compopt(Shell &sh, const std::vector<std::string> &) {
+  std::fprintf(stderr, "%scompopt: not currently executing completion function\n",
+               sh.err_prefix().c_str());
+  return 1;  // gnash never runs a completion function, so this always applies
+}
+
+// ---- bind ----------------------------------------------------------------
+int bi_bind(Shell &sh, const std::vector<std::string> &argv) {
+  if (!sh.interactive)
+    std::fprintf(stderr, "%sbind: warning: line editing not enabled\n", sh.err_prefix().c_str());
+  for (size_t i = 1; i < argv.size(); i++) {
+    const std::string &a = argv[i];
+    if (a == "-l") {
+      for (const char **n = rl_funmap_names(); *n; n++) std::printf("%s\n", *n);
+    } else if (a == "-f" || a == "-x") {
+      if (i + 1 < argv.size()) {
+        if (a == "-f") rl_read_init_file(argv[++i].c_str());
+        else i++;  // -x 'keyseq:command' -- accepted, not wired to execution
+      }
+    } else if (a == "-m" || a == "-q" || a == "-u" || a == "-r" || a == "-p" ||
+               a == "-P" || a == "-v" || a == "-V" || a == "-s" || a == "-S") {
+      if ((a == "-m" || a == "-q" || a == "-u" || a == "-r") && i + 1 < argv.size()) i++;
+      // listing forms (-p/-v/...) produce no output in this subset
+    } else if (!a.empty() && a[0] != '-') {
+      std::string line = a;  // "keyseq: function"
+      rl_parse_and_bind(const_cast<char *>(line.c_str()));
+    }
+  }
+  (void)sh;
+  return 0;
+}
+
 }  // namespace
 
 // [[ ]] evaluation over the reconstructed expression (re-tokenized).
@@ -1835,6 +2049,14 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
     st = bi_history(sh, argv);
   } else if (cmd == "fc") {
     st = bi_fc(sh, argv);
+  } else if (cmd == "compgen") {
+    st = bi_compgen(sh, argv);
+  } else if (cmd == "complete") {
+    st = bi_complete(sh, argv);
+  } else if (cmd == "compopt") {
+    st = bi_compopt(sh, argv);
+  } else if (cmd == "bind") {
+    st = bi_bind(sh, argv);
   } else if (cmd == "trap") {
     st = bi_trap(sh, argv);
   } else if (cmd == "umask") {
