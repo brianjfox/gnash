@@ -115,11 +115,12 @@ class Shell {
   // name or the --personality=<name> option.  Persona selects the surface
   // behaviors that differ (startup files, prompt syntax, identity variables,
   // highlighting); behaviors that are a subset of bash's are left unchanged.
-  enum class Persona { Bash, Zsh, Ash };
+  enum class Persona { Bash, Zsh, Ash, Ksh };
   Persona persona = Persona::Bash;
   std::string personality_name = "gnash";  // exposed as $GNASH_PERSONALITY
   bool is_zsh() const { return persona == Persona::Zsh; }
   bool is_ash() const { return persona == Persona::Ash; }
+  bool is_ksh() const { return persona == Persona::Ksh; }
 
   // --- diagnostics -------------------------------------------------------
   std::string shell_name = "gnash";  // program name shown in error messages

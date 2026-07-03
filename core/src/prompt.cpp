@@ -1,6 +1,7 @@
 // prompt.cpp -- PS1/PS2 prompt-string expansion (bash backslash escapes).
 
 #include "gnash/core/expand.hpp"
+#include "readline/history.h"
 #include "gnash/core/shell.hpp"
 
 #include <cstdlib>
@@ -116,6 +117,17 @@ std::string expand_prompt(Shell &sh, const std::string &ps) {
   // ash/POSIX: the prompt is subject to parameter/command/arithmetic expansion,
   // not backslash escapes.
   if (sh.is_ash()) return Expander(sh).expand_no_split(ps);
+  if (sh.is_ksh()) {
+    // ksh: like POSIX, but an unescaped `!' expands to the command's history
+    // number (`!!' is a literal `!'); parameter expansion follows.
+    std::string tmp;
+    for (size_t i = 0; i < ps.size(); i++) {
+      if (ps[i] != '!') { tmp += ps[i]; continue; }
+      if (i + 1 < ps.size() && ps[i + 1] == '!') { tmp += '!'; i++; }
+      else tmp += std::to_string(history_base + history_length);
+    }
+    return Expander(sh).expand_no_split(tmp);
+  }
   std::string out;
   for (size_t i = 0; i < ps.size(); i++) {
     if (ps[i] != '\\') {

@@ -119,9 +119,9 @@ void read_zsh_startup_files(Shell &sh, bool login, bool interactive, const Start
   if (login && !o.noprofile) both("/etc/zlogin", ".zlogin");
 }
 
-// ash/dash: a login shell reads /etc/profile and ~/.profile; an interactive
-// shell reads the file named by $ENV (after parameter expansion).
-void read_ash_startup_files(Shell &sh, bool login, bool interactive, const StartupOpts &o) {
+// POSIX shells (ash/dash/ksh): a login shell reads /etc/profile and ~/.profile;
+// an interactive shell reads the file named by $ENV (after parameter expansion).
+void read_posix_startup_files(Shell &sh, bool login, bool interactive, const StartupOpts &o) {
   const char *home = std::getenv("HOME");
   std::string h = home ? home : "";
   if (login && !o.noprofile) {
@@ -138,7 +138,7 @@ void read_ash_startup_files(Shell &sh, bool login, bool interactive, const Start
 void read_startup_files(Shell &sh, const std::string &prefix, bool login, bool interactive,
                         const StartupOpts &o) {
   if (sh.is_zsh()) { read_zsh_startup_files(sh, login, interactive, o); return; }
-  if (sh.is_ash()) { read_ash_startup_files(sh, login, interactive, o); return; }
+  if (sh.is_ash() || sh.is_ksh()) { read_posix_startup_files(sh, login, interactive, o); return; }
 
   const char *home = std::getenv("HOME");
   std::string h = home ? home : "";
@@ -185,6 +185,9 @@ void configure_persona(Shell &sh, const std::string &personality, const std::str
   if (personality == "zsh") sh.persona = Shell::Persona::Zsh;
   else if (personality == "ash" || personality == "dash" || personality == "sh")
     sh.persona = Shell::Persona::Ash;
+  else if (personality == "ksh" || personality == "ksh93" || personality == "mksh" ||
+           personality == "pdksh" || personality == "rksh")
+    sh.persona = Shell::Persona::Ksh;
   else sh.persona = Shell::Persona::Bash;
   sh.set("GNASH_PERSONALITY", personality);
 
@@ -201,6 +204,8 @@ void configure_persona(Shell &sh, const std::string &personality, const std::str
   if (sh.persona == Shell::Persona::Zsh) {
     sh.set("ZSH_VERSION", "5.9");
     sh.set("ZSH_NAME", "zsh");
+  } else if (sh.persona == Shell::Persona::Ksh) {
+    sh.set("KSH_VERSION", "Version AJM 93u+ 2012-08-01");
   } else if (sh.persona == Shell::Persona::Ash) {
     // ash is minimal: it advertises no BASH_/ZSH_ identity variables.
   } else {
@@ -353,8 +358,8 @@ int main(int argc, char **argv) {
         // zsh prompt escapes use `%': user@host:cwd then %/# (root).
         if (!sh.is_set("PS1")) sh.set("PS1", "%n@%m:%~%# ");
         if (!sh.is_set("PS2")) sh.set("PS2", "%_> ");
-      } else if (sh.is_ash()) {
-        // ash/POSIX: a plain "$ " prompt ("# " for root), no escapes.
+      } else if (sh.is_ash() || sh.is_ksh()) {
+        // ash/ksh/POSIX: a plain "$ " prompt ("# " for root).
         if (!sh.is_set("PS1")) sh.set("PS1", getuid() == 0 ? "# " : "$ ");
         if (!sh.is_set("PS2")) sh.set("PS2", "> ");
       } else {
