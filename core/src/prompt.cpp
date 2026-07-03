@@ -1,5 +1,6 @@
 // prompt.cpp -- PS1/PS2 prompt-string expansion (bash backslash escapes).
 
+#include "gnash/core/expand.hpp"
 #include "gnash/core/shell.hpp"
 
 #include <cstdlib>
@@ -112,6 +113,9 @@ static std::string expand_prompt_zsh(Shell &sh, const std::string &ps) {
 
 std::string expand_prompt(Shell &sh, const std::string &ps) {
   if (sh.is_zsh()) return expand_prompt_zsh(sh, ps);
+  // ash/POSIX: the prompt is subject to parameter/command/arithmetic expansion,
+  // not backslash escapes.
+  if (sh.is_ash()) return Expander(sh).expand_no_split(ps);
   std::string out;
   for (size_t i = 0; i < ps.size(); i++) {
     if (ps[i] != '\\') {
