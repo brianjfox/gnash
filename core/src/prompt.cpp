@@ -4,6 +4,7 @@
 
 #include <cstdlib>
 #include <ctime>
+#include <vector>
 #include <pwd.h>
 #include <unistd.h>
 
@@ -17,7 +18,100 @@ std::string home_relative(const std::string &cwd, const std::string &home) {
 }
 }  // namespace
 
+// Keep only the last N path components of DIR (0 = keep all).  A leading "~"
+// or "/" is preserved.
+static std::string last_components(const std::string &dir, int n) {
+  if (n <= 0) return dir;
+  std::vector<std::string> parts;
+  std::string lead;
+  size_t i = 0;
+  if (!dir.empty() && (dir[0] == '/' || dir[0] == '~')) { lead = dir.substr(0, 1); i = 1; }
+  while (i < dir.size()) {
+    while (i < dir.size() && dir[i] == '/') i++;
+    size_t j = i;
+    while (j < dir.size() && dir[j] != '/') j++;
+    if (j > i) parts.push_back(dir.substr(i, j - i));
+    i = j;
+  }
+  if (static_cast<int>(parts.size()) <= n) return dir;
+  std::string r;
+  for (size_t k = parts.size() - static_cast<size_t>(n); k < parts.size(); k++) {
+    if (!r.empty()) r += '/';
+    r += parts[k];
+  }
+  return r;
+}
+
+// zsh prompt expansion: escapes are introduced by `%' rather than `\', and may
+// carry a numeric argument (e.g. %1~ = last cwd component).
+static std::string expand_prompt_zsh(Shell &sh, const std::string &ps) {
+  std::string out;
+  for (size_t i = 0; i < ps.size(); i++) {
+    if (ps[i] != '%') { out += ps[i]; continue; }
+    if (i + 1 >= ps.size()) { out += '%'; break; }
+    int num = -1;
+    while (i + 1 < ps.size() && std::isdigit(static_cast<unsigned char>(ps[i + 1]))) {
+      num = (num < 0 ? 0 : num) * 10 + (ps[++i] - '0');
+    }
+    if (i + 1 >= ps.size()) { out += '%'; break; }
+    char c = ps[++i];
+    switch (c) {
+      case 'n': {
+        struct passwd *pw = getpwuid(getuid());
+        out += pw ? pw->pw_name : (std::getenv("USER") ? std::getenv("USER") : "");
+        break;
+      }
+      case 'm': case 'M': {
+        char host[256] = {0};
+        gethostname(host, sizeof host - 1);
+        std::string h = host;
+        if (c == 'm') { size_t d = h.find('.'); if (d != std::string::npos) h = h.substr(0, d); }
+        out += h;
+        break;
+      }
+      case '~': case 'd': case '/': case 'c': case 'C': case '.': {
+        std::string dir = sh.get("PWD");
+        if (dir.empty() || dir[0] != '/') { char cwd[4096]; dir = getcwd(cwd, sizeof cwd) ? cwd : ""; }
+        if (c == '~' || c == 'c' || c == 'C' || c == '.') dir = home_relative(dir, sh.get("HOME"));
+        // %c/%C/%. show the trailing component by default.
+        int keep = num;
+        if (keep < 0 && (c == 'c' || c == 'C' || c == '.')) keep = 1;
+        out += last_components(dir, keep);
+        break;
+      }
+      case '#': out += (getuid() == 0 ? '#' : '%'); break;
+      case '%': out += '%'; break;
+      case 'T': case '*': case 't': {
+        std::time_t now = std::time(nullptr);
+        std::tm tmv; localtime_r(&now, &tmv);
+        char buf[32];
+        std::strftime(buf, sizeof buf, (c == '*') ? "%H:%M:%S" : "%H:%M", &tmv);
+        out += buf;
+        break;
+      }
+      case 'D': {
+        std::time_t now = std::time(nullptr);
+        std::tm tmv; localtime_r(&now, &tmv);
+        char buf[32];
+        std::strftime(buf, sizeof buf, "%y-%m-%d", &tmv);
+        out += buf;
+        break;
+      }
+      // Visual/format directives and parser state -- accepted, no output here.
+      case 'B': case 'b': case 'U': case 'u': case 'S': case 's':
+      case 'f': case 'k': case '_': case 'E': break;
+      case 'F': case 'K': {  // %F{color}/%K{color}: skip the optional {...}
+        if (i + 1 < ps.size() && ps[i + 1] == '{') { while (i < ps.size() && ps[i] != '}') i++; }
+        break;
+      }
+      default: out += '%'; out += c; break;
+    }
+  }
+  return out;
+}
+
 std::string expand_prompt(Shell &sh, const std::string &ps) {
+  if (sh.is_zsh()) return expand_prompt_zsh(sh, ps);
   std::string out;
   for (size_t i = 0; i < ps.size(); i++) {
     if (ps[i] != '\\') {

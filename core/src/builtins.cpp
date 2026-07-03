@@ -10,6 +10,7 @@
 #include <cstring>
 #include <fstream>
 #include <regex.h>
+#include <set>
 #include <sstream>
 #include <vector>
 #include <cerrno>
@@ -1972,6 +1973,16 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
   // A builtin disabled with `enable -n' is treated as not a builtin, so an
   // external command of the same name runs instead.
   if (sh.disabled_builtins.count(cmd) && cmd != "enable") return false;
+
+  // In zsh persona, accept common zsh-only builtins as no-ops so zsh startup
+  // files (including the system /etc/zshrc) run without "command not found".
+  if (sh.persona == Shell::Persona::Zsh) {
+    static const std::set<std::string> kZshNoops = {
+        "setopt", "unsetopt", "bindkey", "zstyle", "autoload", "zle", "zmodload",
+        "compdef", "compinit", "bashcompinit", "disable", "limit", "unlimit",
+        "ttyctl", "sched", "zcompile", "emulate", "add-zsh-hook", "zrecompile"};
+    if (kZshNoops.count(cmd)) { if (status) *status = 0; return true; }
+  }
 
   if (cmd == ":" || cmd == "true") st = 0;
   else if (cmd == "false") st = 1;

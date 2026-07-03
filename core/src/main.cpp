@@ -99,8 +99,28 @@ struct StartupOpts {
 
 // Read the startup files appropriate to this shell's mode, mirroring bash but
 // with per-invocation names (prefix == "gnash", "bash", ...).
+// zsh reads .zshenv always, .zprofile/.zlogin for login shells, and .zshrc
+// for interactive shells (system copies under /etc first).
+void read_zsh_startup_files(Shell &sh, bool login, bool interactive, const StartupOpts &o) {
+  const char *home = std::getenv("HOME");
+  std::string h = home ? home : "";
+  auto both = [&](const std::string &sys, const std::string &personal) {
+    source_if_exists(sh, sys);
+    if (!h.empty()) source_if_exists(sh, h + "/" + personal);
+  };
+  if (!o.norc) both("/etc/zshenv", ".zshenv");
+  if (login && !o.noprofile) both("/etc/zprofile", ".zprofile");
+  if (interactive && !o.norc) {
+    if (!o.rcfile.empty()) source_if_exists(sh, o.rcfile);
+    else both("/etc/zshrc", ".zshrc");
+  }
+  if (login && !o.noprofile) both("/etc/zlogin", ".zlogin");
+}
+
 void read_startup_files(Shell &sh, const std::string &prefix, bool login, bool interactive,
                         const StartupOpts &o) {
+  if (sh.is_zsh()) { read_zsh_startup_files(sh, login, interactive, o); return; }
+
   const char *home = std::getenv("HOME");
   std::string h = home ? home : "";
 
@@ -139,6 +159,37 @@ void apply_set_o(Shell &sh, const std::string &name, bool set) {
   // Other -o names (pipefail, posix, vi, emacs, ...) are accepted and ignored.
 }
 
+// Configure the shell's persona (which other shell it imitates) and the
+// identity variables that differ between shells.
+void configure_persona(Shell &sh, const std::string &imitate, const std::string &exec_path) {
+  sh.imitate_name = imitate;
+  sh.persona = (imitate == "zsh") ? Shell::Persona::Zsh : Shell::Persona::Bash;
+  sh.set("GNASH_IMITATE", imitate);
+
+  std::string mach = "unknown";
+  struct utsname u;
+  if (uname(&u) == 0) {
+    std::string sys = u.sysname;
+    for (char &c : sys) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    std::string vendor = (sys == "darwin") ? "apple" : "unknown";
+    mach = std::string(u.machine) + "-" + vendor + "-" + sys + u.release;
+  }
+  sh.set("MACHTYPE", mach);
+
+  if (sh.persona == Shell::Persona::Zsh) {
+    sh.set("ZSH_VERSION", "5.9");
+    sh.set("ZSH_NAME", "zsh");
+  } else {
+    sh.set("BASH", exec_path);
+    sh.set("BASH_VERSION", "5.3.0(1)-release");
+    std::vector<std::pair<std::optional<std::string>, std::string>> vi = {
+        {std::nullopt, "5"}, {std::nullopt, "3"},       {std::nullopt, "0"},
+        {std::nullopt, "1"}, {std::nullopt, "release"}, {std::nullopt, mach}};
+    sh.array_assign("BASH_VERSINFO", vi, false, false);
+    sh.vars["BASH_VERSINFO"].readonly = true;
+  }
+}
+
 }  // namespace
 
 int main(int argc, char **argv) {
@@ -155,30 +206,9 @@ int main(int argc, char **argv) {
   sh.shell_name = base;
   const std::string prefix = base;
 
-  // Compatibility variables many rc files inspect.  $BASH is the full pathname
-  // used to invoke this shell (whatever its name), as in bash.
+  // $SHELL is the execution path of the current shell (persona-independent).
   std::string exec_path = resolve_exec_path(prog);
-  sh.set("BASH", exec_path);
-  sh.set("BASH_VERSION", "5.3.0(1)-release");
-  // $SHELL is the execution path of the current shell.
   sh.set_exported("SHELL", exec_path);
-  {
-    // BASH_VERSINFO: major minor patch build status machtype (readonly array).
-    std::string mach = "unknown";
-    struct utsname u;
-    if (uname(&u) == 0) {
-      std::string sys = u.sysname;
-      for (char &c : sys) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-      std::string vendor = (sys == "darwin") ? "apple" : "unknown";
-      mach = std::string(u.machine) + "-" + vendor + "-" + sys + u.release;
-    }
-    std::vector<std::pair<std::optional<std::string>, std::string>> vi = {
-        {std::nullopt, "5"}, {std::nullopt, "3"},       {std::nullopt, "0"},
-        {std::nullopt, "1"}, {std::nullopt, "release"}, {std::nullopt, mach}};
-    sh.array_assign("BASH_VERSINFO", vi, false, false);
-    sh.vars["BASH_VERSINFO"].readonly = true;
-    sh.set("MACHTYPE", mach);
-  }
 
   std::vector<std::string> args(argv + 1, argv + argc);
 
@@ -187,6 +217,7 @@ int main(int argc, char **argv) {
   bool force_interactive = false;
   bool force_stdin = false;
   bool have_c = false;
+  std::string imitate_flag;  // --imitate=<name>, overrides the invocation name
   size_t idx = 0;
   for (; idx < args.size(); idx++) {
     const std::string &a = args[idx];
@@ -205,6 +236,8 @@ int main(int argc, char **argv) {
       else if (lo == "posix" || lo == "noediting") { /* accepted, ignored */ }
       else if (lo == "rcfile" || lo == "init-file") {
         sopts.rcfile = !val.empty() ? val : (idx + 1 < args.size() ? args[++idx] : "");
+      } else if (lo == "imitate") {
+        imitate_flag = !val.empty() ? val : (idx + 1 < args.size() ? args[++idx] : "");
       } else if (lo == "version") {
         std::printf("gnash, version 0.1 (bash-compatible reimplementation)\n");
         return 0;
@@ -253,6 +286,9 @@ int main(int argc, char **argv) {
   }
   sh.login_shell = login;
 
+  // The persona: the --imitate flag wins, else the invocation name.
+  configure_persona(sh, imitate_flag.empty() ? prefix : imitate_flag, exec_path);
+
   // ---- dispatch ----------------------------------------------------------
   if (have_c) {
     std::string cmd = idx < args.size() ? args[idx++] : "";
@@ -289,8 +325,14 @@ int main(int argc, char **argv) {
       // Default prompts (set before startup files so an rc file can override):
       // user@host:cwd followed by `$' (or `#' for root), and `> ' for
       // continuation lines.
-      if (!sh.is_set("PS1")) sh.set("PS1", "\\u@\\h:\\w\\$ ");
-      if (!sh.is_set("PS2")) sh.set("PS2", "> ");
+      if (sh.is_zsh()) {
+        // zsh prompt escapes use `%': user@host:cwd then %/# (root).
+        if (!sh.is_set("PS1")) sh.set("PS1", "%n@%m:%~%# ");
+        if (!sh.is_set("PS2")) sh.set("PS2", "%_> ");
+      } else {
+        if (!sh.is_set("PS1")) sh.set("PS1", "\\u@\\h:\\w\\$ ");
+        if (!sh.is_set("PS2")) sh.set("PS2", "> ");
+      }
       read_startup_files(sh, prefix, login, true, sopts);
       return gnash::core::run_interactive(sh);
     }
