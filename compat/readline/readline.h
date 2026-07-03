@@ -59,6 +59,10 @@ extern void rl_clear_current_line (void);
    notifications such as background-job completion).  NULL by default. */
 extern rl_hook_func_t *rl_event_hook;
 
+/* Optional syntax-highlighting hook: fills colors[len] with a per-character
+   color id (0=none,1=green,2=red,3=yellow,4=cyan). */
+extern void (*rl_highlight_function) (const char *line, int len, int *colors);
+
 /* ---- Buffer primitives (text.c / util.c) -------------------------------- */
 extern void rl_extend_line_buffer (int len);
 extern int rl_insert_text (const char *text);

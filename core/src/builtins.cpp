@@ -1965,6 +1965,15 @@ int bi_bind(Shell &sh, const std::vector<std::string> &argv) {
 // [[ ]] evaluation over the reconstructed expression (re-tokenized).
 bool eval_cond_expression(Shell &sh, const std::string &expr, int *status);
 
+// Would NAME run as a command?  Used by syntax highlighting.
+bool command_is_valid(Shell &sh, const std::string &name) {
+  if (name.empty()) return false;
+  if (name.find('/') != std::string::npos) return access(name.c_str(), X_OK) == 0;
+  if (is_builtin_name(name) || is_reserved_word(name)) return true;
+  if (sh.functions.count(name) || sh.aliases.count(name)) return true;
+  return !find_in_path(sh, name).empty();
+}
+
 bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
   if (argv.empty()) return false;
   const std::string &cmd = argv[0];

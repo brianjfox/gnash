@@ -13,6 +13,10 @@ namespace gnash::core {
 // return true.  Otherwise return false.
 bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status);
 
+// Would NAME run as a command (builtin/keyword/function/alias/PATH)?  Used by
+// interactive syntax highlighting.
+bool command_is_valid(Shell &sh, const std::string &name);
+
 }  // namespace gnash::core
 
 #endif  // GNASH_CORE_BUILTINS_HPP

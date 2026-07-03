@@ -8,11 +8,13 @@
 #include <cstdio>
 #include <cstdlib>
 #include <algorithm>
+#include <cctype>
 #include <cstring>
 #include <set>
 #include <string>
 #include <vector>
 
+#include "gnash/core/builtins.hpp"
 #include "gnash/core/parser.hpp"
 #include "gnash/core/shell.hpp"
 #include "readline/history.h"
@@ -71,6 +73,48 @@ extern "C" char *gnash_var_completion(const char *text, int state) {
   return strdup(names[idx++].c_str());  // freed with free() by readline's xfree
 }
 
+// zsh-style syntax highlighting: color the command word green if it would run,
+// red if not; quoted strings yellow.  Fills a color id per character
+// (0=none, 1=green, 2=red, 3=yellow).
+static bool is_assignment_word(const std::string &w) {
+  size_t i = 0;
+  if (i >= w.size() || !(std::isalpha((unsigned char)w[i]) || w[i] == '_')) return false;
+  while (i < w.size() && (std::isalnum((unsigned char)w[i]) || w[i] == '_')) i++;
+  return i < w.size() && w[i] == '=';
+}
+
+extern "C" void gnash_zsh_highlight(const char *line, int len, int *colors) {
+  for (int i = 0; i < len; i++) colors[i] = 0;
+  if (!g_notify_shell) return;
+  bool cmd_pos = true;
+  int i = 0;
+  while (i < len) {
+    char c = line[i];
+    if (c == ' ' || c == '\t') { i++; continue; }
+    if (c == ';' || c == '|' || c == '&' || c == '(' || c == '{' || c == '\n') {
+      cmd_pos = true; i++; continue;
+    }
+    if (c == '#') { i = len; break; }  // comment to end of line
+    if (c == '\'' || c == '"') {       // quoted string -> yellow
+      char q = c; int start = i++;
+      while (i < len && line[i] != q) { if (q == '"' && line[i] == '\\' && i + 1 < len) i++; i++; }
+      if (i < len) i++;
+      for (int k = start; k < i; k++) colors[k] = 3;
+      cmd_pos = false;
+      continue;
+    }
+    int start = i;
+    while (i < len && std::strchr(" \t;|&(){}<>'\"\n#", line[i]) == nullptr) i++;
+    std::string word(line + start, static_cast<size_t>(i - start));
+    if (cmd_pos) {
+      if (is_assignment_word(word)) continue;  // VAR=val prefix: stays in cmd pos
+      int color = command_is_valid(*g_notify_shell, word) ? 1 : 2;
+      for (int k = start; k < i; k++) colors[k] = color;
+      cmd_pos = false;
+    }
+  }
+}
+
 // readline's attempted-completion hook: when the word being completed is
 // introduced by `$' (or `${'), complete over defined shell variables instead
 // of filenames.
@@ -99,6 +143,8 @@ int run_interactive(Shell &sh) {
   rl_event_hook = gnash_job_notify_hook;
   // Complete variable names after `$'.
   rl_attempted_completion_function = gnash_attempted_completion;
+  // zsh persona: highlight the command line as it is typed.
+  if (sh.is_zsh()) rl_highlight_function = gnash_zsh_highlight;
 
   while (!sh.exiting) {
     sh.reap_jobs(true);      // report any finished background jobs

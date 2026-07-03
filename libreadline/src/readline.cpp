@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <vector>
 #include <sys/ioctl.h>
 #include <termios.h>
 #include <unistd.h>
@@ -36,6 +37,9 @@ int rl_numeric_arg = 1;
 int rl_explicit_arg = 0;
 int rl_eof_found = 0;
 rl_hook_func_t *rl_event_hook = nullptr;
+// Optional syntax-highlighting hook: fills colors[len] with a color id per
+// character (0=none, 1=green, 2=red, 3=yellow, 4=cyan).  NULL disables it.
+void (*rl_highlight_function)(const char *line, int len, int *colors) = nullptr;
 }
 
 namespace {
@@ -206,7 +210,25 @@ extern "C" void rl_redisplay(void) {
 
   std::fputc('\r', o);
   if (rl_prompt) std::fputs(rl_prompt, o);
-  if (shown > 0) std::fwrite(rl_line_buffer + off, 1, static_cast<size_t>(shown), o);
+  if (shown > 0) {
+    if (rl_highlight_function && rl_end > 0) {
+      // Emit per-character color (zero-width ANSI codes, so the column math is
+      // unchanged) for the visible window.
+      static const char *const kAnsi[] = {"\033[0m", "\033[32m", "\033[31m",
+                                          "\033[33m", "\033[36m"};
+      std::vector<int> col(static_cast<size_t>(rl_end), 0);
+      rl_highlight_function(rl_line_buffer, rl_end, col.data());
+      int cur = 0;
+      for (int k = off; k < off + shown; k++) {
+        int c = (k < rl_end && col[k] >= 0 && col[k] < 5) ? col[k] : 0;
+        if (c != cur) { std::fputs(kAnsi[c], o); cur = c; }
+        std::fputc(rl_line_buffer[k], o);
+      }
+      if (cur != 0) std::fputs("\033[0m", o);
+    } else {
+      std::fwrite(rl_line_buffer + off, 1, static_cast<size_t>(shown), o);
+    }
+  }
   std::fputs(clear_eol(), o);
 
   int endcol = plen + shown;
