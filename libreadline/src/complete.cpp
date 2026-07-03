@@ -156,7 +156,22 @@ int complete_internal(int what_to_do) {
   rl_insert_text(matches[0]);
 
   if (unique) {
-    if (rl_completion_append_character && rl_completion_suppress_append == 0) {
+    // For a filename completion that is a directory, append `/' rather than the
+    // usual space so the next path component can be typed straight away.
+    bool is_dir = false;
+    if (rl_filename_completion_desired) {
+      std::string path = matches[0];
+      if (!path.empty() && path[0] == '~') {
+        char *ex = tilde_expand(path.c_str());
+        path = ex;
+        xfree(ex);
+      }
+      struct stat st;
+      if (stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) is_dir = true;
+    }
+    if (is_dir) {
+      if (rl_point == 0 || rl_line_buffer[rl_point - 1] != '/') rl_insert_text("/");
+    } else if (rl_completion_append_character && rl_completion_suppress_append == 0) {
       char a[2] = {static_cast<char>(rl_completion_append_character), '\0'};
       rl_insert_text(a);
     }
