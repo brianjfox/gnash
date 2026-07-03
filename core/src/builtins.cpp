@@ -844,7 +844,8 @@ bool is_builtin_name(const std::string &n) {
       "read", "test", "[", "shift", "exit", "return", "break", "continue", "eval",
       "source", ".", "local", "declare", "typeset", "readonly", "let", "type", "trap",
       "umask", "getopts", "exec", "command", "times", "wait", "jobs", "fg", "bg",
-      "disown", "kill", "suspend", "dirs", "pushd", "popd", "mapfile", "readarray", nullptr};
+      "disown", "kill", "suspend", "dirs", "pushd", "popd", "mapfile", "readarray",
+      "help", "builtin", "logout", "hash", "shopt", nullptr};
   for (int i = 0; names[i]; i++)
     if (n == names[i]) return true;
   return false;
@@ -1155,6 +1156,278 @@ int bi_kill(Shell &sh, const std::vector<std::string> &argv) {
   return st;
 }
 
+// ---- help (synopsis + short description derived from bash builtins/*.def) --
+struct BuiltinHelp { const char *name, *synopsis, *shortdoc; };
+static const BuiltinHelp kBuiltinHelp[] = {
+    {":", ":", "Null command."},
+    {"true", "true", "Return a successful result."},
+    {"false", "false", "Return an unsuccessful result."},
+    {"echo", "echo [-neE] [arg ...]", "Write arguments to the standard output."},
+    {"printf", "printf [-v var] format [arguments]", "Formats and prints ARGUMENTS under control of the FORMAT."},
+    {"pwd", "pwd [-LP]", "Print the name of the current working directory."},
+    {"cd", "cd [-L|[-P [-e]]] [-@] [dir]", "Change the shell working directory."},
+    {"export", "export [-fn] [name[=value] ...] or export -p [-f]", "Set export attribute for shell variables."},
+    {"unset", "unset [-f] [-v] [-n] [name ...]", "Unset values and attributes of shell variables and functions."},
+    {"set", "set [-abefhkmnptuvxBCEHPT] [-o option-name] [--] [-] [arg ...]", "Set or unset values of shell options and positional parameters."},
+    {"read", "read [-Eers] [-a array] [-d delim] [-i text] [-n nchars] [-N nchars] [-p prompt] [-t timeout] [-u fd] [name ...]", "Read a line from the standard input and split it into fields."},
+    {"test", "test [expr]", "Evaluate conditional expression."},
+    {"shift", "shift [n]", "Shift positional parameters."},
+    {"exit", "exit [n]", "Exit the shell."},
+    {"return", "return [n]", "Return from a shell function."},
+    {"break", "break [n]", "Exit for, while, or until loops."},
+    {"continue", "continue [n]", "Resume for, while, or until loops."},
+    {"eval", "eval [arg ...]", "Execute arguments as a shell command."},
+    {"source", "source [-p path] filename [arguments]", "Execute commands from a file in the current shell."},
+    {"local", "local [option] name[=value] ...", "Define local variables."},
+    {"declare", "declare [-aAfFgiIlnrtux] [name[=value] ...] or declare -p [-aAfFilnrtux] [name ...]", "Set variable values and attributes."},
+    {"typeset", "typeset [-aAfFgiIlnrtux] name[=value] ... or typeset -p [-aAfFilnrtux] [name ...]", "Set variable values and attributes."},
+    {"readonly", "readonly [-aAf] [name[=value] ...] or readonly -p", "Mark shell variables as unchangeable."},
+    {"let", "let arg [arg ...]", "Evaluate arithmetic expressions."},
+    {"type", "type [-afptP] name [name ...]", "Display information about command type."},
+    {"trap", "trap [-Plp] [[action] signal_spec ...]", "Trap signals and other events."},
+    {"umask", "umask [-p] [-S] [mode]", "Display or set file mode mask."},
+    {"getopts", "getopts optstring name [arg ...]", "Parse option arguments."},
+    {"exec", "exec [-cl] [-a name] [command [argument ...]] [redirection ...]", "Replace the shell with the given command."},
+    {"command", "command [-pVv] command [arg ...]", "Execute a simple command or display information about commands."},
+    {"times", "times", "Display process times."},
+    {"wait", "wait [-fn] [-p var] [id ...]", "Wait for job completion and return exit status."},
+    {"jobs", "jobs [-lnprs] [jobspec ...] or jobs -x command [args]", "Display status of jobs."},
+    {"fg", "fg [job_spec]", "Move job to the foreground."},
+    {"bg", "bg [job_spec ...]", "Move jobs to the background."},
+    {"disown", "disown [-h] [-ar] [jobspec ... | pid ...]", "Remove jobs from current shell."},
+    {"kill", "kill [-s sigspec | -n signum | -sigspec] pid | jobspec ... or kill -l [sigspec]", "Send a signal to a job."},
+    {"suspend", "suspend [-f]", "Suspend shell execution."},
+    {"dirs", "dirs [-clpv] [+N] [-N]", "Display directory stack."},
+    {"pushd", "pushd [-n] [+N | -N | dir]", "Add directories to stack."},
+    {"popd", "popd [-n] [+N | -N]", "Remove directories from stack."},
+    {"mapfile", "mapfile [-d delim] [-n count] [-O origin] [-s count] [-t] [-u fd] [-C callback] [-c quantum] [array]", "Read lines from the standard input into an indexed array variable."},
+    {"readarray", "readarray [-d delim] [-n count] [-O origin] [-s count] [-t] [-u fd] [-C callback] [-c quantum] [array]", "Read lines from a file into an array variable."},
+    {"help", "help [-dms] [pattern ...]", "Display information about builtin commands."},
+    {"builtin", "builtin [shell-builtin [arg ...]]", "Execute shell builtins."},
+    {"logout", "logout [n]", "Exit a login shell."},
+    {"hash", "hash [-lr] [-p pathname] [-dt] [name ...]", "Remember or display program locations."},
+    {"shopt", "shopt [-pqsu] [-o] [optname ...]", "Set and unset shell options."},
+};
+
+int bi_help(Shell &sh, const std::vector<std::string> &argv) {
+  bool dflag = false, sflag = false;
+  size_t i = 1;
+  for (; i < argv.size(); i++) {
+    const std::string &a = argv[i];
+    if (a == "--") { i++; break; }
+    if (a.size() < 2 || a[0] != '-') break;
+    for (size_t k = 1; k < a.size(); k++) {
+      if (a[k] == 'd') dflag = true;
+      else if (a[k] == 's') sflag = true;
+      else if (a[k] == 'm') { /* man format: accepted */ }
+    }
+  }
+  if (i >= argv.size()) {
+    std::printf("gnash, version %s\n", sh.get("BASH_VERSION").c_str());
+    std::printf("These shell commands are defined internally.  Type `help' to see this list.\n");
+    std::printf("Type `help name' to find out more about the function `name'.\n");
+    std::printf("Use `man -k' or `info' to find out more about commands not in this list.\n\n");
+    std::vector<const BuiltinHelp *> items;
+    for (const auto &h : kBuiltinHelp) items.push_back(&h);
+    std::sort(items.begin(), items.end(),
+              [](const BuiltinHelp *a, const BuiltinHelp *b) { return std::strcmp(a->name, b->name) < 0; });
+    size_t half = (items.size() + 1) / 2;
+    for (size_t r = 0; r < half; r++) {
+      std::string left = items[r]->synopsis;
+      std::string right = (r + half < items.size()) ? items[r + half]->synopsis : "";
+      std::printf(" %-36.36s%s\n", left.c_str(), right.c_str());
+    }
+    return 0;
+  }
+
+  int st = 0;
+  for (; i < argv.size(); i++) {
+    const std::string &pat = argv[i];
+    std::vector<const BuiltinHelp *> hits;
+    for (const auto &h : kBuiltinHelp)
+      if (strmatch(const_cast<char *>(pat.c_str()), const_cast<char *>(h.name), 0) == 0)
+        hits.push_back(&h);
+    if (hits.empty())  // fall back to a prefix match
+      for (const auto &h : kBuiltinHelp)
+        if (std::strncmp(h.name, pat.c_str(), pat.size()) == 0) hits.push_back(&h);
+    if (hits.empty()) {
+      std::fflush(stdout);
+      std::fprintf(stderr,
+                   "%shelp: no help topics match `%s'.  Try `help help' or `man -k %s' or `info %s'.\n",
+                   sh.err_prefix().c_str(), pat.c_str(), pat.c_str(), pat.c_str());
+      st = 1;
+      continue;
+    }
+    for (const BuiltinHelp *h : hits) {
+      if (sflag) std::printf("%s: %s\n", h->name, h->synopsis);
+      else if (dflag) std::printf("%s - %s\n", h->name, h->shortdoc);
+      else std::printf("%s: %s\n    %s\n", h->name, h->synopsis, h->shortdoc);
+    }
+  }
+  return st;
+}
+
+int bi_builtin(Shell &sh, const std::vector<std::string> &argv) {
+  if (argv.size() < 2) return 0;
+  std::vector<std::string> sub(argv.begin() + 1, argv.end());
+  if (!is_builtin_name(sub[0])) {
+    std::fflush(stdout);
+    std::fprintf(stderr, "%sbuiltin: %s: not a shell builtin\n", sh.err_prefix().c_str(),
+                 sub[0].c_str());
+    return 1;
+  }
+  int st = 0;
+  run_builtin(sh, sub, &st);
+  return st;
+}
+
+int bi_logout(Shell &sh, const std::vector<std::string> &argv) {
+  if (!sh.login_shell) {
+    std::fflush(stdout);
+    std::fprintf(stderr, "%slogout: not login shell: use `exit'\n", sh.err_prefix().c_str());
+    return 1;
+  }
+  sh.exiting = true;
+  sh.exit_status = argv.size() > 1 ? (std::atoi(argv[1].c_str()) & 0xff) : sh.last_status;
+  return sh.exit_status;
+}
+
+int bi_hash(Shell &sh, const std::vector<std::string> &argv) {
+  bool list_l = false, del_d = false, print_t = false;
+  std::string ppath;
+  size_t i = 1;
+  for (; i < argv.size(); i++) {
+    const std::string &a = argv[i];
+    if (a == "--") { i++; break; }
+    if (a.size() < 2 || a[0] != '-') break;
+    bool consumed = false;
+    for (size_t k = 1; k < a.size(); k++) {
+      char o = a[k];
+      if (o == 'r') { sh.hashed.clear(); }
+      else if (o == 'l') list_l = true;
+      else if (o == 'd') del_d = true;
+      else if (o == 't') print_t = true;
+      else if (o == 'p') {
+        ppath = (k + 1 < a.size()) ? a.substr(k + 1) : (i + 1 < argv.size() ? argv[++i] : "");
+        consumed = true;
+        break;
+      }
+    }
+    if (consumed) continue;
+  }
+  if (!ppath.empty() && i < argv.size()) { sh.hashed[argv[i]] = ppath; return 0; }
+  if (i >= argv.size()) {
+    if (sh.hashed.empty()) {
+      if (!list_l) std::printf("hash: hash table empty\n");
+      return 0;
+    }
+    if (list_l)
+      for (const auto &kv : sh.hashed)
+        std::printf("builtin hash -p %s %s\n", kv.second.c_str(), kv.first.c_str());
+    else {
+      std::printf("hits\tcommand\n");
+      for (const auto &kv : sh.hashed) std::printf("%4d\t%s\n", 0, kv.second.c_str());
+    }
+    return 0;
+  }
+  int st = 0;
+  for (; i < argv.size(); i++) {
+    const std::string &n = argv[i];
+    if (del_d) { sh.hashed.erase(n); continue; }
+    if (print_t) {
+      auto it = sh.hashed.find(n);
+      if (it != sh.hashed.end()) std::printf("%s\n", it->second.c_str());
+      else { std::fflush(stdout); std::fprintf(stderr, "%shash: %s: not found\n", sh.err_prefix().c_str(), n.c_str()); st = 1; }
+      continue;
+    }
+    std::string p = find_in_path(sh, n);
+    if (p.empty()) { std::fflush(stdout); std::fprintf(stderr, "%shash: %s: not found\n", sh.err_prefix().c_str(), n.c_str()); st = 1; }
+    else sh.hashed[n] = p;
+  }
+  return st;
+}
+
+static const struct { const char *name; bool on; } kShoptDefaults[] = {
+    {"array_expand_once", false}, {"assoc_expand_once", false}, {"autocd", false},
+    {"bash_source_fullpath", false}, {"cdable_vars", false}, {"cdspell", false},
+    {"checkhash", false}, {"checkjobs", false}, {"checkwinsize", true}, {"cmdhist", true},
+    {"compat31", false}, {"compat32", false}, {"compat40", false}, {"compat41", false},
+    {"compat42", false}, {"compat43", false}, {"compat44", false}, {"complete_fullquote", true},
+    {"direxpand", false}, {"dirspell", false}, {"dotglob", false}, {"execfail", false},
+    {"expand_aliases", false}, {"extdebug", false}, {"extglob", false}, {"extquote", true},
+    {"failglob", false}, {"force_fignore", true}, {"globasciiranges", true}, {"globskipdots", true},
+    {"globstar", false}, {"gnu_errfmt", false}, {"histappend", false}, {"histreedit", false},
+    {"histverify", false}, {"hostcomplete", true}, {"huponexit", false}, {"inherit_errexit", false},
+    {"interactive_comments", true}, {"lastpipe", false}, {"lithist", false}, {"localvar_inherit", false},
+    {"localvar_unset", false}, {"login_shell", false}, {"mailwarn", false},
+    {"no_empty_cmd_completion", false}, {"nocaseglob", false}, {"nocasematch", false},
+    {"noexpand_translation", false}, {"nullglob", false}, {"patsub_replacement", true},
+    {"progcomp", true}, {"progcomp_alias", false}, {"promptvars", true}, {"restricted_shell", false},
+    {"shift_verbose", false}, {"sourcepath", true}, {"varredir_close", false}, {"xpg_echo", false},
+};
+
+void shopt_seed(Shell &sh) {
+  if (!sh.shopt_opts.empty()) return;
+  for (const auto &o : kShoptDefaults) sh.shopt_opts[o.name] = o.on;
+  sh.shopt_opts["login_shell"] = sh.login_shell;
+}
+
+int bi_shopt(Shell &sh, const std::vector<std::string> &argv) {
+  shopt_seed(sh);
+  bool set_s = false, unset_u = false, quiet_q = false, print_p = false;
+  size_t i = 1;
+  for (; i < argv.size(); i++) {
+    const std::string &a = argv[i];
+    if (a == "--") { i++; break; }
+    if (a.size() < 2 || a[0] != '-') break;
+    for (size_t k = 1; k < a.size(); k++) {
+      switch (a[k]) {
+        case 's': set_s = true; break;
+        case 'u': unset_u = true; break;
+        case 'q': quiet_q = true; break;
+        case 'p': print_p = true; break;
+        case 'o': break;  // -o maps to set -o options; accepted
+        default: break;
+      }
+    }
+  }
+  auto show = [&](const std::string &n, bool on) {
+    if (quiet_q) return;
+    if (print_p) std::printf("shopt -%c %s\n", on ? 's' : 'u', n.c_str());
+    else std::printf("%-20s\t%s\n", n.c_str(), on ? "on" : "off");
+  };
+
+  if (i >= argv.size()) {  // list (optionally only -s or -u subset)
+    for (const auto &kv : sh.shopt_opts) {
+      if (set_s && !kv.second) continue;
+      if (unset_u && kv.second) continue;
+      show(kv.first, kv.second);
+    }
+    return 0;
+  }
+
+  int st = 0;
+  for (; i < argv.size(); i++) {
+    const std::string &n = argv[i];
+    auto it = sh.shopt_opts.find(n);
+    if (it == sh.shopt_opts.end()) {
+      if (!quiet_q) {
+        std::fflush(stdout);
+        std::fprintf(stderr, "%sshopt: %s: invalid shell option name\n", sh.err_prefix().c_str(), n.c_str());
+      }
+      st = 1;
+      continue;
+    }
+    if (set_s) it->second = true;
+    else if (unset_u) it->second = false;
+    else {  // query
+      show(it->first, it->second);
+      if (!it->second) st = 1;
+    }
+  }
+  return st;
+}
+
 }  // namespace
 
 // [[ ]] evaluation over the reconstructed expression (re-tokenized).
@@ -1217,6 +1490,16 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
     st = bi_let(sh, argv);
   } else if (cmd == "type") {
     st = bi_type(sh, argv);
+  } else if (cmd == "help") {
+    st = bi_help(sh, argv);
+  } else if (cmd == "builtin") {
+    st = bi_builtin(sh, argv);
+  } else if (cmd == "logout") {
+    st = bi_logout(sh, argv);
+  } else if (cmd == "hash") {
+    st = bi_hash(sh, argv);
+  } else if (cmd == "shopt") {
+    st = bi_shopt(sh, argv);
   } else if (cmd == "trap") {
     st = bi_trap(sh, argv);
   } else if (cmd == "umask") {

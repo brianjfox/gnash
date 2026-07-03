@@ -248,6 +248,7 @@ int main(int argc, char **argv) {
     if (have_c) { idx++; break; }
     if (stop_after) continue;
   }
+  sh.login_shell = login;
 
   // ---- dispatch ----------------------------------------------------------
   if (have_c) {

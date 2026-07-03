@@ -794,7 +794,11 @@ std::vector<std::string> Expander::glob_field(const std::string &field, const st
   }
   if (sh_.opt_noglob || !magic) return {field};
   auto matches = gnash::glob::glob(pattern, 0);
-  if (matches.empty()) return {field};  // nullglob off: keep literal
+  if (matches.empty()) {
+    auto it = sh_.shopt_opts.find("nullglob");
+    if (it != sh_.shopt_opts.end() && it->second) return {};  // nullglob: remove word
+    return {field};  // default: keep the pattern literally
+  }
   return matches;
 }
 

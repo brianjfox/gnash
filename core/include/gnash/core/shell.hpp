@@ -57,6 +57,11 @@ class Shell {
   bool in_function() const { return !local_stack.empty(); }
   std::vector<std::vector<std::pair<std::string, std::optional<Variable>>>> local_stack;
 
+  // --- shell state for builtins -----------------------------------------
+  bool login_shell = false;                  // logout only works in a login shell
+  std::map<std::string, std::string> hashed;  // `hash': command name -> full path
+  std::map<std::string, bool> shopt_opts;     // `shopt' option states
+
   // --- traps -------------------------------------------------------------
   std::map<std::string, std::string> traps;  // signal name (e.g. "EXIT") -> command
   bool in_trap = false;                       // guard against trap recursion

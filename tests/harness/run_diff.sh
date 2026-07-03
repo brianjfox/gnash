@@ -140,6 +140,12 @@ scripts=(
   'type -a echo; echo "---"; type -at echo'
   'cd(){ :; }; type -t cd; type -f cd; echo "ff=[$(type -f cd 2>/dev/null | head -1)]"'
   'type if; type cd; type ls'
+  'help -s cd; help -d pushd popd; help -s shopt'
+  'cd(){ echo fn; }; builtin cd /tmp && pwd; builtin echo direct'
+  'shopt | wc -l | tr -d " "; shopt -q nullglob; echo $?; shopt -s nullglob; shopt -q nullglob; echo $?'
+  'shopt -p nullglob extglob dotglob'
+  'cd /tmp; set -- nomatch_glob_*.zz; echo "off=$#"; shopt -s nullglob; set -- nomatch_glob_*.zz; echo "on=$#"'
+  'hash ls; hash -t ls'
 )
 
 fails=0
