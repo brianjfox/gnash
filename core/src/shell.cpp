@@ -69,6 +69,15 @@ int Shell::next_random() {
   return static_cast<int>(((rand_seed >> 16) ^ (rand_seed & 0xffff)) & 0x7fff);
 }
 
+// The dynamic special variables (kept in sync with dynamic_var), exposed so
+// completion can offer them even though they are not stored in `vars'.
+const std::vector<std::string> &Shell::special_var_names() {
+  static const std::vector<std::string> names = {
+      "RANDOM", "SECONDS", "LINENO", "BASHPID", "BASH_SUBSHELL",
+      "EPOCHSECONDS", "EPOCHREALTIME"};
+  return names;
+}
+
 // Dynamic variables computed on each reference.  Returns false for names that
 // are not dynamic (the caller then looks them up as ordinary variables).
 bool Shell::dynamic_var(const std::string &name, std::string &out) {

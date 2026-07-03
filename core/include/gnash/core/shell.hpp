@@ -134,6 +134,7 @@ class Shell {
   int subshell_level = 0;        // $BASH_SUBSHELL: subshell nesting depth
   int next_random();             // advance the PRNG, return 0..32767
   bool dynamic_var(const std::string &name, std::string &out);  // RANDOM/SECONDS/...
+  static const std::vector<std::string> &special_var_names();   // for completion
 
   // --- status & options --------------------------------------------------
   int last_status = 0;

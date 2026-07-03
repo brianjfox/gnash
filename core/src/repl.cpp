@@ -7,7 +7,9 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <algorithm>
 #include <cstring>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -54,9 +56,16 @@ extern "C" char *gnash_var_completion(const char *text, int state) {
     names.clear();
     idx = 0;
     std::string pref = text ? text : "";
-    if (g_notify_shell)
-      for (const auto &kv : g_notify_shell->vars)  // std::map -> already sorted
-        if (kv.first.compare(0, pref.size(), pref) == 0) names.push_back(kv.first);
+    std::set<std::string> seen;
+    if (g_notify_shell) {
+      for (const auto &kv : g_notify_shell->vars)
+        if (kv.first.compare(0, pref.size(), pref) == 0 && seen.insert(kv.first).second)
+          names.push_back(kv.first);
+      // Dynamic specials ($RANDOM, $SECONDS, ...) aren't in the variable table.
+      for (const std::string &s : Shell::special_var_names())
+        if (s.compare(0, pref.size(), pref) == 0 && seen.insert(s).second) names.push_back(s);
+    }
+    std::sort(names.begin(), names.end());
   }
   if (idx >= names.size()) return nullptr;
   return strdup(names[idx++].c_str());  // freed with free() by readline's xfree
