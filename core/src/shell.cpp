@@ -346,7 +346,12 @@ std::vector<std::string> Shell::environ_block() const {
 }
 
 int Shell::run_string(const std::string &script) {
-  ParseResult r = parse(script);
+  // Aliases are expanded only when interactive or `shopt -s expand_aliases'.
+  bool expand_al = interactive;
+  auto eit = shopt_opts.find("expand_aliases");
+  if (eit != shopt_opts.end() && eit->second) expand_al = true;
+  ParseResult r = (expand_al && !aliases.empty()) ? parse_with_aliases(script, aliases)
+                                                  : parse(script);
   if (!r.ok) {
     std::fprintf(stderr, "gnash: syntax error: %s\n", r.error.c_str());
     last_status = 2;

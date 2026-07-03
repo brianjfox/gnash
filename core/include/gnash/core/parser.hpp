@@ -7,6 +7,7 @@
 #ifndef GNASH_CORE_PARSER_HPP
 #define GNASH_CORE_PARSER_HPP
 
+#include <map>
 #include <string>
 
 #include "gnash/core/ast.hpp"
@@ -22,6 +23,10 @@ struct ParseResult {
 
 // Parse a complete program.
 ParseResult parse(const std::string &input);
+
+// Parse with alias expansion applied to command-position words first.
+ParseResult parse_with_aliases(const std::string &input,
+                               const std::map<std::string, std::string> &aliases);
 
 }  // namespace gnash::core
 

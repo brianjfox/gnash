@@ -150,6 +150,9 @@ scripts=(
   'ulimit -n; ulimit -Sf; ulimit -c'
   'enable -n echo; echo hi; enable echo; echo back'
   'f(){ set -- $(caller 0); echo "$1 $2"; }; g(){ f; }; g'
+  'alias ll="ls -l"; alias x=y; alias'
+  'alias a=1 b="two words"; alias a; alias b'
+  'alias q=1; unalias q; unalias -a; alias; echo "done=$?"'
 )
 
 fails=0

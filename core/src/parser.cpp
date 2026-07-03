@@ -6,6 +6,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <initializer_list>
+#include <map>
+#include <set>
 #include <memory>
 
 #include "gnash/core/lexer.hpp"
@@ -829,8 +831,70 @@ struct Parser {
 
 }  // namespace
 
+// Expand aliases in command position on a token stream (in place).  An
+// unquoted word in command position that names an alias is replaced by the
+// alias body's tokens; a body ending in blank makes the following word eligible
+// too, and a word is not re-expanded within its own expansion.
+static void expand_alias_tokens(std::vector<Token> &toks,
+                                const std::map<std::string, std::string> &aliases) {
+  if (aliases.empty()) return;
+  static const std::set<std::string> kw = {
+      "if", "then", "else", "elif", "do", "done", "{", "}", "while", "until",
+      "for", "case", "select", "fi", "esac", "!", "time", "function"};
+  bool cmd_pos = true, next_also = false;
+  std::set<std::string> active;
+  int guard = 0;
+  for (size_t i = 0; i < toks.size() && guard < 10000;) {
+    Tok ty = toks[i].type;
+    if (ty == Tok::Newline || ty == Tok::Semi || ty == Tok::Amp || ty == Tok::Pipe ||
+        ty == Tok::AndAnd || ty == Tok::OrOr || ty == Tok::Lparen || ty == Tok::SemiSemi) {
+      cmd_pos = true; next_also = false; active.clear(); i++; continue;
+    }
+    if (ty != Tok::Word) { i++; continue; }
+    const std::string text = toks[i].text;
+    bool quoted = toks[i].quoted;
+    if (!quoted && kw.count(text)) { cmd_pos = true; next_also = false; i++; continue; }
+    if ((cmd_pos || next_also) && !quoted && aliases.count(text) && !active.count(text)) {
+      const std::string &val = aliases.at(text);
+      active.insert(text);
+      bool trailing = !val.empty() && (val.back() == ' ' || val.back() == '\t');
+      std::vector<Token> rep = tokenize(val);
+      if (!rep.empty() && rep.back().type == Tok::Eof) rep.pop_back();
+      toks.erase(toks.begin() + static_cast<long>(i));
+      toks.insert(toks.begin() + static_cast<long>(i), rep.begin(), rep.end());
+      guard++;
+      // If the body ends in a blank, the word that followed the alias is also
+      // eligible for expansion (bash chains this while each body ends blank).
+      size_t np = i + rep.size();
+      while (trailing && np < toks.size() && toks[np].type == Tok::Word && !toks[np].quoted &&
+             aliases.count(toks[np].text) && !active.count(toks[np].text) && guard < 10000) {
+        const std::string &v2 = aliases.at(toks[np].text);
+        active.insert(toks[np].text);
+        trailing = !v2.empty() && (v2.back() == ' ' || v2.back() == '\t');
+        std::vector<Token> r2 = tokenize(v2);
+        if (!r2.empty() && r2.back().type == Tok::Eof) r2.pop_back();
+        toks.erase(toks.begin() + static_cast<long>(np));
+        toks.insert(toks.begin() + static_cast<long>(np), r2.begin(), r2.end());
+        guard++;
+        np += r2.size();
+      }
+      next_also = false;
+      continue;  // reprocess from i (its command word may itself be an alias)
+    }
+    cmd_pos = false; next_also = false; i++;
+  }
+}
+
 ParseResult parse(const std::string &input) {
   Parser p(tokenize(input));
+  return p.run();
+}
+
+ParseResult parse_with_aliases(const std::string &input,
+                               const std::map<std::string, std::string> &aliases) {
+  std::vector<Token> toks = tokenize(input);
+  expand_alias_tokens(toks, aliases);
+  Parser p(std::move(toks));
   return p.run();
 }
 

@@ -846,7 +846,7 @@ static const char *const kBuiltinNames[] = {
     "source", ".", "local", "declare", "typeset", "readonly", "let", "type", "trap",
     "umask", "getopts", "exec", "command", "times", "wait", "jobs", "fg", "bg",
     "disown", "kill", "suspend", "dirs", "pushd", "popd", "mapfile", "readarray",
-    "help", "builtin", "logout", "hash", "shopt", "ulimit", "enable", "caller", nullptr};
+    "help", "builtin", "logout", "hash", "shopt", "ulimit", "enable", "caller", "alias", "unalias", nullptr};
 
 bool is_builtin_name(const std::string &n) {
   for (int i = 0; kBuiltinNames[i]; i++)
@@ -1220,6 +1220,8 @@ static const BuiltinHelp kBuiltinHelp[] = {
     {"ulimit", "ulimit [-SHabcdefiklmnpqrstuvxPRT] [limit]", "Modify shell resource limits."},
     {"enable", "enable [-a] [-dnps] [-f filename] [name ...]", "Enable and disable shell builtins."},
     {"caller", "caller [expr]", "Return the context of the current subroutine call."},
+    {"alias", "alias [-p] [name[=value] ... ]", "Define or display aliases."},
+    {"unalias", "unalias [-a] name [name ...]", "Remove each NAME from the list of defined aliases."},
 };
 
 int bi_help(Shell &sh, const std::vector<std::string> &argv) {
@@ -1587,6 +1589,53 @@ int bi_caller(Shell &sh, const std::vector<std::string> &argv) {
   return 0;
 }
 
+// ---- alias / unalias -----------------------------------------------------
+static std::string alias_quote(const std::string &v) {
+  std::string r = "'";
+  for (char c : v) { if (c == '\'') r += "'\\''"; else r += c; }
+  return r + "'";
+}
+
+int bi_alias(Shell &sh, const std::vector<std::string> &argv) {
+  size_t i = 1;
+  if (i < argv.size() && (argv[i] == "-p")) i++;
+  if (i >= argv.size()) {
+    for (const auto &kv : sh.aliases)
+      std::printf("alias %s=%s\n", kv.first.c_str(), alias_quote(kv.second).c_str());
+    return 0;
+  }
+  int st = 0;
+  for (; i < argv.size(); i++) {
+    const std::string &a = argv[i];
+    auto eq = a.find('=');
+    if (eq == std::string::npos) {
+      auto it = sh.aliases.find(a);
+      if (it != sh.aliases.end())
+        std::printf("alias %s=%s\n", it->first.c_str(), alias_quote(it->second).c_str());
+      else {
+        std::fflush(stdout);
+        std::fprintf(stderr, "%salias: %s: not found\n", sh.err_prefix().c_str(), a.c_str());
+        st = 1;
+      }
+    } else {
+      sh.aliases[a.substr(0, eq)] = a.substr(eq + 1);
+    }
+  }
+  return st;
+}
+
+int bi_unalias(Shell &sh, const std::vector<std::string> &argv) {
+  if (argv.size() > 1 && argv[1] == "-a") { sh.aliases.clear(); return 0; }
+  int st = 0;
+  for (size_t i = 1; i < argv.size(); i++) {
+    if (sh.aliases.erase(argv[i]) == 0) {
+      std::fprintf(stderr, "%sunalias: %s: not found\n", sh.err_prefix().c_str(), argv[i].c_str());
+      st = 1;
+    }
+  }
+  return st;
+}
+
 }  // namespace
 
 // [[ ]] evaluation over the reconstructed expression (re-tokenized).
@@ -1669,6 +1718,10 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
     st = bi_enable(sh, argv);
   } else if (cmd == "caller") {
     st = bi_caller(sh, argv);
+  } else if (cmd == "alias") {
+    st = bi_alias(sh, argv);
+  } else if (cmd == "unalias") {
+    st = bi_unalias(sh, argv);
   } else if (cmd == "trap") {
     st = bi_trap(sh, argv);
   } else if (cmd == "umask") {
