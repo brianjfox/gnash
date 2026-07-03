@@ -7,7 +7,9 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string>
+#include <vector>
 
 #include "gnash/core/parser.hpp"
 #include "gnash/core/shell.hpp"
@@ -43,6 +45,36 @@ extern "C" int gnash_job_notify_hook(void) {
   }
   return 0;
 }
+
+// Generate defined-variable names matching the partial name TEXT, one per call.
+extern "C" char *gnash_var_completion(const char *text, int state) {
+  static std::vector<std::string> names;
+  static size_t idx;
+  if (state == 0) {
+    names.clear();
+    idx = 0;
+    std::string pref = text ? text : "";
+    if (g_notify_shell)
+      for (const auto &kv : g_notify_shell->vars)  // std::map -> already sorted
+        if (kv.first.compare(0, pref.size(), pref) == 0) names.push_back(kv.first);
+  }
+  if (idx >= names.size()) return nullptr;
+  return strdup(names[idx++].c_str());  // freed with free() by readline's xfree
+}
+
+// readline's attempted-completion hook: when the word being completed is
+// introduced by `$' (or `${'), complete over defined shell variables instead
+// of filenames.
+extern "C" char **gnash_attempted_completion(const char *text, int start, int end) {
+  (void)end;
+  bool dollar = start > 0 && rl_line_buffer[start - 1] == '$';
+  bool braced = start > 1 && rl_line_buffer[start - 1] == '{' && rl_line_buffer[start - 2] == '$';
+  if (dollar || braced) {
+    rl_attempted_completion_over = 1;  // don't fall back to filename completion
+    return rl_completion_matches(text, gnash_var_completion);
+  }
+  return nullptr;  // let readline fall back to its default (filename) completion
+}
 }  // namespace
 
 int run_interactive(Shell &sh) {
@@ -56,6 +88,8 @@ int run_interactive(Shell &sh) {
   // Report background-job completion asynchronously while idle at the prompt.
   g_notify_shell = &sh;
   rl_event_hook = gnash_job_notify_hook;
+  // Complete variable names after `$'.
+  rl_attempted_completion_function = gnash_attempted_completion;
 
   while (!sh.exiting) {
     sh.reap_jobs(true);      // report any finished background jobs
