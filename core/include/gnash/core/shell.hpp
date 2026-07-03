@@ -5,6 +5,7 @@
 
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -61,6 +62,10 @@ class Shell {
   bool login_shell = false;                  // logout only works in a login shell
   std::map<std::string, std::string> hashed;  // `hash': command name -> full path
   std::map<std::string, bool> shopt_opts;     // `shopt' option states
+  std::set<std::string> disabled_builtins;    // `enable -n': builtins turned off
+  std::map<std::string, std::string> aliases;  // `alias': name -> expansion
+  struct CallFrame { int line; std::string func; std::string source; };
+  std::vector<CallFrame> call_stack;          // `caller': active function calls
 
   // --- traps -------------------------------------------------------------
   std::map<std::string, std::string> traps;  // signal name (e.g. "EXIT") -> command

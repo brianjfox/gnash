@@ -523,9 +523,14 @@ int Executor::run_simple(const SimpleCommand *c) {
     std::vector<std::string> saved_pos = sh_.positional;
     std::string saved_arg0 = sh_.arg0;
     sh_.positional.assign(argv.begin() + 1, argv.end());
+    // Record the call for `caller': line of the call site, the function name,
+    // and the source.
+    sh_.call_stack.push_back({sh_.cur_lineno, argv[0],
+                              sh_.shell_name.empty() ? "main" : sh_.shell_name});
     sh_.push_scope();
     status = run(fit->second);
     sh_.pop_scope();
+    sh_.call_stack.pop_back();
     sh_.positional = saved_pos;
     sh_.arg0 = saved_arg0;
     if (sh_.returning) { sh_.returning = false; status = sh_.exit_status; }

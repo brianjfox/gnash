@@ -146,6 +146,10 @@ scripts=(
   'shopt -p nullglob extglob dotglob'
   'cd /tmp; set -- nomatch_glob_*.zz; echo "off=$#"; shopt -s nullglob; set -- nomatch_glob_*.zz; echo "on=$#"'
   'hash ls; hash -t ls'
+  'ulimit -a'
+  'ulimit -n; ulimit -Sf; ulimit -c'
+  'enable -n echo; echo hi; enable echo; echo back'
+  'f(){ set -- $(caller 0); echo "$1 $2"; }; g(){ f; }; g'
 )
 
 fails=0

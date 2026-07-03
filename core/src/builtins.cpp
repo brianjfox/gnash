@@ -12,6 +12,8 @@
 #include <regex.h>
 #include <sstream>
 #include <vector>
+#include <cerrno>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -838,17 +840,25 @@ std::string find_in_path(Shell &sh, const std::string &name) {
   return std::string();
 }
 
+static const char *const kBuiltinNames[] = {
+    ":", "true", "false", "echo", "printf", "pwd", "cd", "export", "unset", "set",
+    "read", "test", "[", "shift", "exit", "return", "break", "continue", "eval",
+    "source", ".", "local", "declare", "typeset", "readonly", "let", "type", "trap",
+    "umask", "getopts", "exec", "command", "times", "wait", "jobs", "fg", "bg",
+    "disown", "kill", "suspend", "dirs", "pushd", "popd", "mapfile", "readarray",
+    "help", "builtin", "logout", "hash", "shopt", "ulimit", "enable", "caller", nullptr};
+
 bool is_builtin_name(const std::string &n) {
-  static const char *names[] = {
-      ":", "true", "false", "echo", "printf", "pwd", "cd", "export", "unset", "set",
-      "read", "test", "[", "shift", "exit", "return", "break", "continue", "eval",
-      "source", ".", "local", "declare", "typeset", "readonly", "let", "type", "trap",
-      "umask", "getopts", "exec", "command", "times", "wait", "jobs", "fg", "bg",
-      "disown", "kill", "suspend", "dirs", "pushd", "popd", "mapfile", "readarray",
-      "help", "builtin", "logout", "hash", "shopt", nullptr};
-  for (int i = 0; names[i]; i++)
-    if (n == names[i]) return true;
+  for (int i = 0; kBuiltinNames[i]; i++)
+    if (n == kBuiltinNames[i]) return true;
   return false;
+}
+
+std::vector<std::string> builtin_names_sorted() {
+  std::vector<std::string> v;
+  for (int i = 0; kBuiltinNames[i]; i++) v.emplace_back(kBuiltinNames[i]);
+  std::sort(v.begin(), v.end());
+  return v;
 }
 
 // Shared logic for declare/local/readonly/typeset.
@@ -1207,6 +1217,9 @@ static const BuiltinHelp kBuiltinHelp[] = {
     {"logout", "logout [n]", "Exit a login shell."},
     {"hash", "hash [-lr] [-p pathname] [-dt] [name ...]", "Remember or display program locations."},
     {"shopt", "shopt [-pqsu] [-o] [optname ...]", "Set and unset shell options."},
+    {"ulimit", "ulimit [-SHabcdefiklmnpqrstuvxPRT] [limit]", "Modify shell resource limits."},
+    {"enable", "enable [-a] [-dnps] [-f filename] [name ...]", "Enable and disable shell builtins."},
+    {"caller", "caller [expr]", "Return the context of the current subroutine call."},
 };
 
 int bi_help(Shell &sh, const std::vector<std::string> &argv) {
@@ -1428,6 +1441,152 @@ int bi_shopt(Shell &sh, const std::vector<std::string> &argv) {
   return st;
 }
 
+// ---- ulimit --------------------------------------------------------------
+struct UlimitRes { char opt; int res; long factor; const char *desc; const char *unit; };
+static const UlimitRes kUlimits[] = {
+    {'c', RLIMIT_CORE, 1024, "core file size", "blocks"},
+    {'d', RLIMIT_DATA, 1024, "data seg size", "kbytes"},
+    {'f', RLIMIT_FSIZE, 1024, "file size", "blocks"},
+    {'l', RLIMIT_MEMLOCK, 1024, "max locked memory", "kbytes"},
+    {'m', RLIMIT_RSS, 1024, "max memory size", "kbytes"},
+    {'n', RLIMIT_NOFILE, 1, "open files", nullptr},
+    {'p', -1, 512, "pipe size", "512 bytes"},  // no real rlimit; bash reports 1
+    {'s', RLIMIT_STACK, 1024, "stack size", "kbytes"},
+    {'t', RLIMIT_CPU, 1, "cpu time", "seconds"},
+    {'u', RLIMIT_NPROC, 1, "max user processes", nullptr},
+#ifdef RLIMIT_AS
+    {'v', RLIMIT_AS, 1024, "virtual memory", "kbytes"},
+#endif
+};
+
+static void ulimit_print_one(const UlimitRes &r, bool hard) {
+  std::string val;
+  if (r.res < 0) {
+    val = "1";  // pipe size
+  } else {
+    struct rlimit rl;
+    if (getrlimit(r.res, &rl) != 0) return;
+    rlim_t v = hard ? rl.rlim_max : rl.rlim_cur;
+    if (v == RLIM_INFINITY) val = "unlimited";
+    else val = std::to_string(static_cast<unsigned long long>(v) / static_cast<unsigned long long>(r.factor));
+  }
+  char unitstr[32];
+  if (r.unit) std::snprintf(unitstr, sizeof unitstr, "(%s, -%c) ", r.unit, r.opt);
+  else std::snprintf(unitstr, sizeof unitstr, "(-%c) ", r.opt);
+  std::printf("%-20s %20s%s\n", r.desc, unitstr, val.c_str());
+}
+
+int bi_ulimit(Shell &sh, const std::vector<std::string> &argv) {
+  bool hard = false, soft = false, all = false;
+  char opt = 'f';  // default resource
+  std::string value;
+  bool have_opt = false;
+  size_t i = 1;
+  for (; i < argv.size(); i++) {
+    const std::string &a = argv[i];
+    if (a == "--") { i++; break; }
+    if (a.size() < 2 || (a[0] != '-' && a[0] != '+')) break;
+    for (size_t k = 1; k < a.size(); k++) {
+      char o = a[k];
+      if (o == 'H') hard = true;
+      else if (o == 'S') soft = true;
+      else if (o == 'a') all = true;
+      else { opt = o; have_opt = true; }
+    }
+  }
+  if (i < argv.size()) value = argv[i];
+  if (!hard && !soft) soft = true;  // default acts on the soft limit
+
+  if (all) {
+    for (const auto &r : kUlimits) ulimit_print_one(r, hard);
+    return 0;
+  }
+
+  const UlimitRes *r = nullptr;
+  for (const auto &e : kUlimits) if (e.opt == opt) { r = &e; break; }
+  if (!r) { std::fprintf(stderr, "%sulimit: -%c: invalid option\n", sh.err_prefix().c_str(), opt); return 2; }
+  (void)have_opt;
+
+  if (value.empty()) {  // report
+    ulimit_print_one(*r, hard);
+    return 0;
+  }
+  if (r->res < 0) return 0;  // pipe size is not settable
+  struct rlimit rl;
+  getrlimit(r->res, &rl);
+  rlim_t nv;
+  if (value == "unlimited") nv = RLIM_INFINITY;
+  else if (value == "hard") nv = rl.rlim_max;
+  else if (value == "soft") nv = rl.rlim_cur;
+  else nv = static_cast<rlim_t>(std::strtoull(value.c_str(), nullptr, 10) * static_cast<unsigned long long>(r->factor));
+  if (hard) rl.rlim_max = nv;
+  if (soft) rl.rlim_cur = nv;
+  if (setrlimit(r->res, &rl) != 0) {
+    std::fprintf(stderr, "%sulimit: %s\n", sh.err_prefix().c_str(), std::strerror(errno));
+    return 1;
+  }
+  return 0;
+}
+
+// ---- enable --------------------------------------------------------------
+int bi_enable(Shell &sh, const std::vector<std::string> &argv) {
+  bool disable = false, all = false;
+  size_t i = 1;
+  for (; i < argv.size(); i++) {
+    const std::string &a = argv[i];
+    if (a == "--") { i++; break; }
+    if (a.size() < 2 || a[0] != '-') break;
+    for (size_t k = 1; k < a.size(); k++) {
+      if (a[k] == 'n') disable = true;
+      else if (a[k] == 'a') all = true;
+      else if (a[k] == 'p') { /* posix reusable list: like default */ }
+    }
+  }
+  if (i >= argv.size()) {  // list
+    for (const std::string &nm : builtin_names_sorted()) {
+      bool off = sh.disabled_builtins.count(nm) != 0;
+      if (all) std::printf("enable %s%s\n", off ? "-n " : "", nm.c_str());
+      else if (disable) { if (off) std::printf("enable -n %s\n", nm.c_str()); }
+      else if (!off) std::printf("enable %s\n", nm.c_str());
+    }
+    return 0;
+  }
+  int st = 0;
+  for (; i < argv.size(); i++) {
+    const std::string &n = argv[i];
+    if (!is_builtin_name(n)) {
+      std::fprintf(stderr, "%senable: %s: not a shell builtin\n", sh.err_prefix().c_str(), n.c_str());
+      st = 1;
+      continue;
+    }
+    if (disable) sh.disabled_builtins.insert(n);
+    else sh.disabled_builtins.erase(n);
+  }
+  return st;
+}
+
+// ---- caller --------------------------------------------------------------
+int bi_caller(Shell &sh, const std::vector<std::string> &argv) {
+  if (sh.call_stack.empty()) return 1;
+  size_t top = sh.call_stack.size() - 1;
+  // call_stack[k].line is where call_stack[k].func was invoked.  For frame N,
+  // bash reports that call line, but the *calling* function's name/source (the
+  // frame just below), FUNCNAME[N+1]/BASH_SOURCE[N+1].
+  if (argv.size() > 1) {  // caller N: "line function source"
+    long n = std::atol(argv[1].c_str());
+    // Valid only while FUNCNAME[N+1] is a real function (not the main script).
+    if (n < 0 || static_cast<size_t>(n) + 1 >= sh.call_stack.size()) return 1;
+    const auto &fr = sh.call_stack[top - static_cast<size_t>(n)];
+    const auto &caller = sh.call_stack[top - static_cast<size_t>(n) - 1];
+    std::printf("%d %s %s\n", fr.line, caller.func.c_str(), caller.source.c_str());
+    return 0;
+  }
+  const auto &fr = sh.call_stack[top];  // caller (no arg): "line source"
+  std::string source = (top >= 1) ? sh.call_stack[top - 1].source : fr.source;
+  std::printf("%d %s\n", fr.line, source.c_str());
+  return 0;
+}
+
 }  // namespace
 
 // [[ ]] evaluation over the reconstructed expression (re-tokenized).
@@ -1437,6 +1596,10 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
   if (argv.empty()) return false;
   const std::string &cmd = argv[0];
   int st = 0;
+
+  // A builtin disabled with `enable -n' is treated as not a builtin, so an
+  // external command of the same name runs instead.
+  if (sh.disabled_builtins.count(cmd) && cmd != "enable") return false;
 
   if (cmd == ":" || cmd == "true") st = 0;
   else if (cmd == "false") st = 1;
@@ -1500,6 +1663,12 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
     st = bi_hash(sh, argv);
   } else if (cmd == "shopt") {
     st = bi_shopt(sh, argv);
+  } else if (cmd == "ulimit") {
+    st = bi_ulimit(sh, argv);
+  } else if (cmd == "enable") {
+    st = bi_enable(sh, argv);
+  } else if (cmd == "caller") {
+    st = bi_caller(sh, argv);
   } else if (cmd == "trap") {
     st = bi_trap(sh, argv);
   } else if (cmd == "umask") {
