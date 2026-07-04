@@ -147,9 +147,11 @@ void Shell::run_debug_trap(const std::string &cmd_text) {
   in_debug_trap = true;
   bash_command = cmd_text;
   int saved = last_status;  // $? inside the trap is the previous command's status
+  int saved_line = cur_lineno;  // the trap must not leak its own line numbers
   std::string body = it->second;
   run_string(body);
   last_status = saved;  // the trap does not alter $? for the upcoming command
+  cur_lineno = saved_line;
   in_debug_trap = false;
 }
 
