@@ -752,11 +752,14 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
 }
 
 void Expander::process(const std::string &text, std::string &out, std::string &mask,
-                       bool /*assignment_rhs*/) {
+                       bool /*assignment_rhs*/, bool heredoc) {
   size_t i = 0;
   while (i < text.size()) {
     char c = text[i];
-    if (c == '\'') {
+    if (heredoc && (c == '\'' || c == '"')) {
+      // Inside a here-document, quote characters are ordinary text.
+      out += c; mask += '0'; i++;
+    } else if (c == '\'') {
       out += QNULL; mask += '1';  // a quote region yields a field even if empty
       i++;
       while (i < text.size() && text[i] != '\'') { out += text[i]; mask += '1'; i++; }
@@ -797,7 +800,7 @@ void Expander::process(const std::string &text, std::string &out, std::string &m
         }
       }
       if (i < text.size()) i++;
-    } else if (c == '$' && i + 1 < text.size() && text[i + 1] == '\'') {
+    } else if (!heredoc && c == '$' && i + 1 < text.size() && text[i + 1] == '\'') {
       out += QNULL; mask += '1';
       size_t j = i + 2;
       std::string inner;
@@ -991,6 +994,17 @@ std::string Expander::expand_no_split(const std::string &text, bool do_glob) {
 
 std::string Expander::expand_assignment(const std::string &text) {
   return expand_no_split(tilde_assign(sh_, text));
+}
+
+std::string Expander::expand_heredoc(const std::string &text) {
+  std::string out, mask;
+  process(text, out, mask, false, /*heredoc=*/true);  // quotes stay literal
+  std::string joined;
+  for (char c : out) {
+    if (c == FIELD_SEP) joined += ' ';
+    else if (c != QNULL) joined += c;
+  }
+  return joined;
 }
 
 // ---- brace expansion ------------------------------------------------------

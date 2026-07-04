@@ -119,7 +119,7 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved) {
     }
     case RedirOp::HereDoc:
     case RedirOp::HereDocStrip: {
-      std::string body = r.heredoc_quoted ? r.heredoc_body : ex.expand_no_split(r.heredoc_body);
+      std::string body = r.heredoc_quoted ? r.heredoc_body : ex.expand_heredoc(r.heredoc_body);
       int f = heredoc_fd(body);
       if (f < 0) return false;
       redir_to(f, target_fd < 0 ? 0 : target_fd);

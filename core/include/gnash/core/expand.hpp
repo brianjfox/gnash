@@ -30,6 +30,11 @@ class Expander {
   // no glob.
   std::string expand_assignment(const std::string &text);
 
+  // Here-document body (unquoted delimiter): parameter/command/arithmetic
+  // expansion and `\'-escaping of $ ` \ only.  Quote characters are literal
+  // (unlike expand_no_split, which would treat them as quoting).
+  std::string expand_heredoc(const std::string &text);
+
   // Value of a parameter (including specials); `set` reports whether it was set.
   std::string param_value(const std::string &name, bool &set);
 
@@ -43,7 +48,7 @@ class Expander {
   // Core: turn one raw word into (result string, per-char quoted mask), with
   // `\x01' field-separator markers inserted for "$@" splitting.
   void process(const std::string &text, std::string &out, std::string &mask,
-               bool assignment_rhs);
+               bool assignment_rhs, bool heredoc = false);
 
   // Expand a ${...} / $name / $(...) / $((...)) starting at text[i] (i at `$').
   void expand_dollar(const std::string &text, size_t &i, bool dq, std::string &out,
