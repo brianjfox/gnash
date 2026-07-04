@@ -2194,6 +2194,19 @@ namespace gnash::core {
 
 namespace {
 
+// Compile REG_EXTENDED regexes once and reuse them: regcomp() is expensive
+// (it builds a whole automaton) and a loop such as opsh's semver::parse runs
+// `[[ $v =~ $re ]]' with the same pattern every iteration, as bash caches too.
+regex_t *cached_regex(const std::string &pat) {
+  static std::map<std::string, regex_t> cache;
+  auto it = cache.find(pat);
+  if (it != cache.end()) return &it->second;
+  if (cache.size() >= 64) { for (auto &kv : cache) regfree(&kv.second); cache.clear(); }
+  regex_t rx;
+  if (regcomp(&rx, pat.c_str(), REG_EXTENDED) != 0) return nullptr;
+  return &cache.emplace(pat, rx).first->second;  // map owns the compiled data
+}
+
 struct CondEval {
   Shell &sh;
   std::vector<Token> t;
@@ -2280,12 +2293,11 @@ struct CondEval {
         }
         if (op == "=~") {
           std::string re = expand(rhs_raw);
-          regex_t rx;
-          if (regcomp(&rx, re.c_str(), REG_EXTENDED) != 0) return false;
-          size_t ng = rx.re_nsub + 1;
+          regex_t *rx = cached_regex(re);
+          if (!rx) return false;
+          size_t ng = rx->re_nsub + 1;
           std::vector<regmatch_t> m(ng);
-          bool matched = regexec(&rx, lhs.c_str(), ng, m.data(), 0) == 0;
-          regfree(&rx);
+          bool matched = regexec(rx, lhs.c_str(), ng, m.data(), 0) == 0;
           // BASH_REMATCH[0] is the whole match; [1..] are the capture groups.
           sh.unset("BASH_REMATCH");
           if (matched) {
