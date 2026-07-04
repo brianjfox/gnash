@@ -46,7 +46,9 @@ static std::string last_components(const std::string &dir, int n) {
 
 // zsh prompt expansion: escapes are introduced by `%' rather than `\', and may
 // carry a numeric argument (e.g. %1~ = last cwd component).
-static std::string expand_prompt_zsh(Shell &sh, const std::string &ps) {
+// zsh and csh share `%'-style prompt escapes.  `csh' selects the few points
+// where they differ: csh's `%#' is `>'/`#' (zsh's is `%'/`#').
+static std::string expand_prompt_pct(Shell &sh, const std::string &ps, bool csh) {
   std::string out;
   for (size_t i = 0; i < ps.size(); i++) {
     if (ps[i] != '%') { out += ps[i]; continue; }
@@ -81,7 +83,10 @@ static std::string expand_prompt_zsh(Shell &sh, const std::string &ps) {
         out += last_components(dir, keep);
         break;
       }
-      case '#': out += (getuid() == 0 ? '#' : '%'); break;
+      case '#': out += (getuid() == 0 ? '#' : (csh ? '>' : '%')); break;
+      case '!': case 'h':  // history number (both shells)
+        out += std::to_string(history_base + history_length);
+        break;
       case '%': out += '%'; break;
       case 'T': case '*': case 't': {
         std::time_t now = std::time(nullptr);
@@ -113,7 +118,18 @@ static std::string expand_prompt_zsh(Shell &sh, const std::string &ps) {
 }
 
 std::string expand_prompt(Shell &sh, const std::string &ps) {
-  if (sh.is_zsh()) return expand_prompt_zsh(sh, ps);
+  if (sh.is_zsh()) return expand_prompt_pct(sh, ps, false);
+  if (sh.is_csh()) {
+    // csh: a bare `!' in the prompt is the history number (`\!' is a literal
+    // `!'); the rest are `%'-escapes.
+    std::string tmp;
+    for (size_t i = 0; i < ps.size(); i++) {
+      if (ps[i] == '\\' && i + 1 < ps.size() && ps[i + 1] == '!') { tmp += '!'; i++; }
+      else if (ps[i] == '!') tmp += std::to_string(history_base + history_length);
+      else tmp += ps[i];
+    }
+    return expand_prompt_pct(sh, tmp, true);
+  }
   // ash/POSIX: the prompt is subject to parameter/command/arithmetic expansion,
   // not backslash escapes.
   if (sh.is_ash()) return Expander(sh).expand_no_split(ps);

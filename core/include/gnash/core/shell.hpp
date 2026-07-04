@@ -115,12 +115,17 @@ class Shell {
   // name or the --personality=<name> option.  Persona selects the surface
   // behaviors that differ (startup files, prompt syntax, identity variables,
   // highlighting); behaviors that are a subset of bash's are left unchanged.
-  enum class Persona { Bash, Zsh, Ash, Ksh };
+  enum class Persona { Bash, Zsh, Ash, Ksh, Csh };
   Persona persona = Persona::Bash;
   std::string personality_name = "gnash";  // exposed as $GNASH_PERSONALITY
   bool is_zsh() const { return persona == Persona::Zsh; }
   bool is_ash() const { return persona == Persona::Ash; }
   bool is_ksh() const { return persona == Persona::Ksh; }
+  bool is_csh() const { return persona == Persona::Csh; }
+  // csh keeps word-list shell variables in their own namespace (separate from
+  // the Bourne `vars'); used only by the csh interpreter (csh.cpp).
+  std::map<std::string, std::vector<std::string>> csh_vars;
+  bool csh_inited = false;
 
   // --- diagnostics -------------------------------------------------------
   std::string shell_name = "gnash";  // program name shown in error messages

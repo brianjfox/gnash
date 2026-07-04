@@ -77,6 +77,15 @@ if(BASH_EXECUTABLE)
             $<TARGET_FILE:gnash> ${CMAKE_CURRENT_SOURCE_DIR}/bash-tests)
 endif()
 
+# Differential execution check for the csh personality vs a reference tcsh.
+find_program(TCSH_EXECUTABLE tcsh)
+if(BASH_EXECUTABLE AND TCSH_EXECUTABLE)
+  add_test(
+    NAME run_diff_csh
+    COMMAND ${BASH_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/harness/run_diff_csh.sh
+            $<TARGET_FILE:gnash> ${TCSH_EXECUTABLE})
+endif()
+
 # ---------------------------------------------------------------------------
 # Conformance harness self-check.
 #
