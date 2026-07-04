@@ -43,6 +43,9 @@ void source_if_exists(Shell &sh, const std::string &path) {
   std::ostringstream ss;
   ss << f.rdbuf();
   sh.run_string(ss.str());
+  // A top-level `return' ends the startup file (as when sourced), it must not
+  // unwind into the next startup file or the main command (`exit' still exits).
+  sh.returning = false;
 }
 
 std::string upper(std::string s) {
@@ -349,6 +352,13 @@ int main(int argc, char **argv) {
   // The personality: the --personality flag wins, else the invocation name.
   configure_persona(sh, personality_flag.empty() ? prefix : personality_flag, exec_path);
 
+  // Startup (and logout) files follow the shell's *identity* -- the personality
+  // name if given, else the invocation name.  So `gnash --personality=bash'
+  // reads ~/.bash_profile / ~/.bashrc (not ~/.gnash*), just as a `bash'-named
+  // symlink would.  (Error messages still use the invocation name via
+  // sh.shell_name.)
+  const std::string &startup_prefix = sh.personality_name;
+
   // ---- dispatch ----------------------------------------------------------
   if (have_c) {
     std::string cmd = idx < args.size() ? args[idx++] : "";
@@ -357,7 +367,7 @@ int main(int argc, char **argv) {
       sh.positional.assign(args.begin() + idx + 1, args.end());
     }
     sh.init_job_control(false);
-    read_startup_files(sh, prefix, login, false, sopts);
+    read_startup_files(sh, startup_prefix, login, false, sopts);
     sh.run_string(cmd);
   } else if (!force_stdin && idx < args.size()) {
     std::ifstream f(args[idx]);
@@ -372,7 +382,7 @@ int main(int argc, char **argv) {
     sh.shell_name = args[idx];  // scripts report errors as "SCRIPT: line N: ..."
     sh.positional.assign(args.begin() + idx + 1, args.end());
     sh.init_job_control(false);
-    read_startup_files(sh, prefix, login, false, sopts);
+    read_startup_files(sh, startup_prefix, login, false, sopts);
     // Base frame for BASH_SOURCE[0]/$0 = the script path, as bash reports it.
     sh.push_src_frame("main", args[idx], 0, false);
     sh.run_string(ss.str());
@@ -403,11 +413,11 @@ int main(int argc, char **argv) {
         if (!sh.is_set("PS1")) sh.set("PS1", "\\u@\\h:\\w\\$ ");
         if (!sh.is_set("PS2")) sh.set("PS2", "> ");
       }
-      read_startup_files(sh, prefix, login, true, sopts);
+      read_startup_files(sh, startup_prefix, login, true, sopts);
       return gnash::core::run_interactive(sh);
     }
     sh.init_job_control(false);
-    read_startup_files(sh, prefix, login, false, sopts);
+    read_startup_files(sh, startup_prefix, login, false, sopts);
     std::ostringstream ss;
     ss << std::cin.rdbuf();
     sh.run_string(ss.str());

@@ -2071,6 +2071,10 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
         // where `source' appears in the current file.
         sh.push_src_frame("source", path, sh.cur_lineno, false);
         st = sh.run_string(ss.str());
+        // `return' inside a sourced file ends the file (and sets its status),
+        // like reaching EOF -- it must not unwind past `source' or exit the
+        // shell (bash semantics; e.g. /etc/bashrc does `[ -z "$PS1" ] && return').
+        if (sh.returning) { sh.returning = false; st = sh.exit_status; }
         sh.pop_src_frame();
       }
       else { std::fprintf(stderr, "gnash: %s: %s\n", argv[1].c_str(), std::strerror(errno)); st = 1; }
