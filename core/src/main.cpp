@@ -413,6 +413,15 @@ int main(int argc, char **argv) {
         if (!sh.is_set("PS1")) sh.set("PS1", "\\u@\\h:\\w\\$ ");
         if (!sh.is_set("PS2")) sh.set("PS2", "> ");
       }
+      // History defaults for interactive shells (bash sets these; a startup
+      // file may override them).  HISTFILE follows the personality, e.g. the
+      // bash persona uses ~/.bash_history, gnash uses ~/.gnash_history.
+      if (!sh.is_set("HISTSIZE")) sh.set("HISTSIZE", "500");
+      if (!sh.is_set("HISTFILESIZE")) sh.set("HISTFILESIZE", "500");
+      if (!sh.is_set("HISTFILE")) {
+        const char *home = std::getenv("HOME");
+        if (home) sh.set("HISTFILE", std::string(home) + "/." + startup_prefix + "_history");
+      }
       read_startup_files(sh, startup_prefix, login, true, sopts);
       return gnash::core::run_interactive(sh);
     }

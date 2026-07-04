@@ -137,9 +137,15 @@ int run_interactive(Shell &sh) {
   sh.init_job_control(true);
   sh.interactive = true;
 
-  std::string histfile = history_path();
+  // The history file is $HISTFILE (set per-personality in main, e.g. the bash
+  // persona defaults to ~/.bash_history), falling back to the built-in default.
+  std::string histfile = sh.get("HISTFILE");
+  if (histfile.empty()) histfile = history_path();
   if (!histfile.empty()) read_history(histfile.c_str());
   using_history();
+  // Keep at most $HISTSIZE entries in memory (bash default 500).
+  int histsize = std::atoi(sh.get("HISTSIZE").c_str());
+  if (histsize > 0) stifle_history(histsize);
 
   // Report background-job completion asynchronously while idle at the prompt.
   g_notify_shell = &sh;
@@ -205,7 +211,15 @@ int run_interactive(Shell &sh) {
   rl_event_hook = nullptr;
   g_notify_shell = nullptr;
 
-  if (!histfile.empty()) write_history(histfile.c_str());
+  // Save to the current $HISTFILE (a startup file may have changed it) and
+  // truncate it to $HISTFILESIZE lines, as bash does on exit.
+  std::string savefile = sh.get("HISTFILE");
+  if (savefile.empty()) savefile = histfile;
+  if (!savefile.empty()) {
+    write_history(savefile.c_str());
+    int hfs = std::atoi(sh.get("HISTFILESIZE").c_str());
+    if (hfs > 0) history_truncate_file(savefile.c_str(), hfs);
+  }
   int rc = sh.exiting ? sh.exit_status : sh.last_status;
 
   // EXIT trap.

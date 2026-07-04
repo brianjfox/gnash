@@ -15,6 +15,8 @@
 #include <sys/time.h>
 #include <sys/wait.h>
 
+#include "readline/history.h"
+
 #include "gnash/core/csh.hpp"
 #include "gnash/core/executor.hpp"
 #include "gnash/core/parser.hpp"
@@ -78,7 +80,7 @@ int Shell::next_random() {
 const std::vector<std::string> &Shell::special_var_names() {
   static const std::vector<std::string> names = {
       "RANDOM", "SECONDS", "LINENO", "BASHPID", "BASH_SUBSHELL",
-      "EPOCHSECONDS", "EPOCHREALTIME"};
+      "EPOCHSECONDS", "EPOCHREALTIME", "HISTCMD"};
   return names;
 }
 
@@ -94,6 +96,7 @@ bool Shell::dynamic_var(const std::string &name, std::string &out) {
   if (name == "BASHPID") { out = std::to_string(static_cast<long>(getpid())); return true; }
   if (name == "BASH_ARGV0") { out = arg0; return true; }  // reflects $0; always set
   if (name == "BASH_COMMAND") { out = bash_command; return true; }  // command being run
+  if (name == "HISTCMD") { out = std::to_string(history_length); return true; }  // history number
   if (name == "BASH_SUBSHELL") { out = std::to_string(subshell_level); return true; }
   if (name == "EPOCHSECONDS") {
     out = std::to_string(static_cast<long long>(std::time(nullptr)));
