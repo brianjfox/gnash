@@ -61,6 +61,43 @@ struct Eval {
     return v;
   }
 
+  // An lvalue reference: a name, optionally with a [subscript] (array element).
+  // The subscript is kept raw so array_get/array_set can evaluate it (indexed)
+  // or use it as a key (associative).
+  struct Ref { std::string name; bool has_sub = false; std::string sub; };
+
+  Ref read_ref() {
+    Ref r;
+    r.name = read_name();
+    if (r.name.empty()) return r;
+    skip();
+    if (pos < s.size() && s[pos] == '[') {  // NAME[subscript]
+      pos++;
+      int bdepth = 1;
+      while (pos < s.size() && bdepth > 0) {
+        if (s[pos] == '[') bdepth++;
+        else if (s[pos] == ']') { if (--bdepth == 0) { pos++; break; } }
+        if (bdepth > 0) r.sub += s[pos];
+        pos++;
+      }
+      r.has_sub = true;
+    }
+    return r;
+  }
+  long long ref_get(const Ref &r) {
+    if (!r.has_sub) return var_value(r.name);
+    std::string v = sh.array_get(r.name, r.sub);
+    if (v.empty()) return 0;
+    if (depth > 100) return 0;
+    bool o = true;
+    long long rr = eval_expr_string(sh, v, depth + 1, &o);
+    return o ? rr : 0;
+  }
+  void ref_set(const Ref &r, long long val) {
+    if (!r.has_sub) sh.set(r.name, std::to_string(val));
+    else sh.array_set(r.name, r.sub, std::to_string(val));
+  }
+
   std::string read_name() {
     skip();
     size_t start = pos;
@@ -86,8 +123,8 @@ struct Eval {
 
   long long assignment() {
     size_t save = pos;
-    std::string name = read_name();
-    if (!name.empty()) {
+    Ref ref = read_ref();
+    if (!ref.name.empty()) {
       skip();
       static const char *ops[] = {"=",  "+=", "-=", "*=", "/=", "%=",
                                   "<<=", ">>=", "&=", "^=", "|=", nullptr};
@@ -98,7 +135,7 @@ struct Eval {
             !(ops[i][0] == '=' && pos + 1 < s.size() && s[pos + 1] == '=')) {
           pos += n;
           long long rhs = assignment();
-          long long cur = var_value(name);
+          long long cur = ref_get(ref);
           long long res = rhs;
           std::string o = ops[i];
           if (o == "+=") res = cur + rhs;
@@ -111,7 +148,7 @@ struct Eval {
           else if (o == "&=") res = cur & rhs;
           else if (o == "^=") res = cur ^ rhs;
           else if (o == "|=") res = cur | rhs;
-          sh.set(name, std::to_string(res));
+          ref_set(ref, res);
           return res;
         }
       }
@@ -241,19 +278,19 @@ struct Eval {
     return postfix();
   }
   long long preincr(int delta) {
-    std::string name = read_name();
-    if (name.empty()) { ok = false; return 0; }
-    long long v = var_value(name) + delta;
-    sh.set(name, std::to_string(v));
+    Ref ref = read_ref();
+    if (ref.name.empty()) { ok = false; return 0; }
+    long long v = ref_get(ref) + delta;
+    ref_set(ref, v);
     return v;
   }
   long long postfix() {
     size_t save = pos;
-    std::string name = read_name();
-    if (!name.empty()) {
+    Ref ref = read_ref();
+    if (!ref.name.empty()) {
       skip();
-      if (s.compare(pos, 2, "++") == 0) { pos += 2; long long v = var_value(name); sh.set(name, std::to_string(v + 1)); return v; }
-      if (s.compare(pos, 2, "--") == 0) { pos += 2; long long v = var_value(name); sh.set(name, std::to_string(v - 1)); return v; }
+      if (s.compare(pos, 2, "++") == 0) { pos += 2; long long v = ref_get(ref); ref_set(ref, v + 1); return v; }
+      if (s.compare(pos, 2, "--") == 0) { pos += 2; long long v = ref_get(ref); ref_set(ref, v - 1); return v; }
       pos = save;  // not a postfix; fall through to primary (which re-reads name)
     } else {
       pos = save;
@@ -276,9 +313,9 @@ struct Eval {
       pos = static_cast<size_t>(end - s.c_str());
       return v;
     }
-    // variable
-    std::string name = read_name();
-    if (!name.empty()) return var_value(name);
+    // variable (optionally an array element NAME[subscript])
+    Ref ref = read_ref();
+    if (!ref.name.empty()) return ref_get(ref);
     ok = false;
     return 0;
   }

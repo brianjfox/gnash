@@ -21,6 +21,11 @@ namespace gnash::core {
 namespace {
 
 constexpr char FIELD_SEP = '\x01';  // internal "$@" field boundary marker
+// Quoted-null marker: emitted when a quote region opens, so an expansion that
+// yields empty text still leaves a field ("" / "$empty" -> one empty field).
+// A double-quoted "$@"/"${a[@]}" that expands to nothing absorbs the marker,
+// so it yields *no* field (matching bash).  Stripped before the result is used.
+constexpr char QNULL = '\x02';
 
 bool pat_match(const std::string &pattern, const std::string &text) {
   std::string p = pattern, t = text;
@@ -187,11 +192,45 @@ static bool array_op_ref(const std::string &body, std::string &name, char &sel,
   return c == '^' || c == ',' || c == '#' || c == '%' || c == '/' || c == '@';
 }
 
+// Detect array/positional slicing: NAME[@]:off[:len] / NAME[*]:off[:len] and
+// the positional @:off[:len] / *:off[:len].  offx/lenx are the raw arithmetic
+// offset and length; haslen indicates whether a length was given.
+static bool slice_ref(const std::string &body, std::string &name, char &sel,
+                      std::string &offx, std::string &lenx, bool &haslen) {
+  size_t p = 0;
+  if (!body.empty() && (body[0] == '@' || body[0] == '*') && body.size() > 1 && body[1] == ':') {
+    name.clear();
+    sel = body[0];
+    p = 1;
+  } else {
+    if (body.empty() || !(std::isalpha(static_cast<unsigned char>(body[0])) || body[0] == '_'))
+      return false;
+    while (p < body.size() && (std::isalnum(static_cast<unsigned char>(body[p])) || body[p] == '_')) p++;
+    if (p + 4 > body.size() || body[p] != '[' ||
+        (body[p + 1] != '@' && body[p + 1] != '*') || body[p + 2] != ']' || body[p + 3] != ':')
+      return false;
+    name = body.substr(0, p);
+    sel = body[p + 1];
+    p += 3;
+  }
+  if (p >= body.size() || body[p] != ':') return false;
+  std::string tail = body.substr(p + 1);
+  size_t colon = tail.find(':');
+  if (colon == std::string::npos) { offx = tail; haslen = false; }
+  else { offx = tail.substr(0, colon); lenx = tail.substr(colon + 1); haslen = true; }
+  return true;
+}
+
 void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::string &out,
                              std::string &mask) {
   char qm = dq ? '1' : '0';
   // i is at '$'
   char n1 = i + 1 < t.size() ? t[i + 1] : '\0';
+  // A double-quoted "$@"/"${a[@]}" manages its own fields, so it absorbs the
+  // quoted-null the opening quote emitted -- letting an empty list drop the word.
+  auto absorb_qnull = [&]() {
+    if (!out.empty() && out.back() == QNULL) { out.pop_back(); mask.pop_back(); }
+  };
 
   // $((expr))
   if (n1 == '(' && i + 2 < t.size() && t[i + 2] == '(') {
@@ -233,6 +272,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
       int st = 0;
       std::string res = sh_.run_and_capture(inner, &st);
       sh_.last_status = st;
+      sh_.note_cmdsub(st);
       for (char c : res) { out += c; mask += qm; }
       i = end + 1;
       return;
@@ -249,6 +289,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
       int st = 0;
       std::string res = sh_.run_and_capture_inproc(inner, &st);
       sh_.last_status = st;
+      sh_.note_cmdsub(st);
       for (char c : res) { out += c; mask += qm; }
       i = end + 1;
       return;
@@ -269,6 +310,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
           std::vector<std::string> items =
               (lead == '!') ? sh_.array_keys(aname) : sh_.array_values(aname);
           if (sel == '@' && dq) {
+            absorb_qnull();
             for (size_t k = 0; k < items.size(); k++) {
               if (k) { out += FIELD_SEP; mask += '0'; }
               for (char c : items[k]) { out += c; mask += '1'; }
@@ -305,9 +347,54 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
           }
         } else {
           char m = (asel == '@' && dq) ? '1' : '0';
+          if (asel == '@' && dq) absorb_qnull();
           for (size_t k = 0; k < items.size(); k++) {
             if (k) { out += FIELD_SEP; mask += '0'; }
             for (char c : items[k]) { out += c; mask += m; }
+          }
+        }
+        i = end + 1;
+        return;
+      }
+      // ${a[@]:off:len} / ${@:off:len}: array/positional slice.
+      std::string slname, soffx, slenx; char ssel; bool shaslen = false;
+      if (slice_ref(body, slname, ssel, soffx, slenx, shaslen)) {
+        std::vector<std::string> list;
+        if (slname.empty()) {  // positionals: index 0 is $0
+          list.push_back(sh_.arg0);
+          for (const auto &pp : sh_.positional) list.push_back(pp);
+        } else {
+          list = sh_.array_values(slname);
+        }
+        long long n = static_cast<long long>(list.size());
+        bool ok = true;
+        long long off = eval_arith(sh_, expand_no_split(soffx), &ok);
+        if (!ok) off = 0;
+        if (off < 0) { off += n; if (off < 0) off = 0; }
+        long long count;
+        if (shaslen) {
+          long long len = eval_arith(sh_, expand_no_split(slenx), &ok);
+          if (!ok) len = 0;
+          count = (len < 0) ? (n + len - off) : len;  // negative len = offset from end
+        } else {
+          count = n - off;
+        }
+        std::vector<std::string> slice;
+        for (long long k = off; k < n && static_cast<long long>(slice.size()) < count; k++)
+          if (k >= 0) slice.push_back(list[static_cast<size_t>(k)]);
+        if (ssel == '*' && dq) {
+          std::string is = sh_.ifs();
+          std::string j = is.empty() ? std::string() : std::string(1, is[0]);
+          for (size_t k = 0; k < slice.size(); k++) {
+            if (k) for (char c : j) { out += c; mask += '1'; }
+            for (char c : slice[k]) { out += c; mask += '1'; }
+          }
+        } else {
+          char m = (ssel == '@' && dq) ? '1' : '0';
+          if (ssel == '@' && dq) absorb_qnull();
+          for (size_t k = 0; k < slice.size(); k++) {
+            if (k) { out += FIELD_SEP; mask += '0'; }
+            for (char c : slice[k]) { out += c; mask += m; }
           }
         }
         i = end + 1;
@@ -330,6 +417,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
     // positional list
     const auto &pos = sh_.positional;
     if (n1 == '@' && dq) {
+      absorb_qnull();
       for (size_t k = 0; k < pos.size(); k++) {
         if (k) { out += FIELD_SEP; mask += '0'; }
         for (char c : pos[k]) { out += c; mask += '1'; }
@@ -669,10 +757,12 @@ void Expander::process(const std::string &text, std::string &out, std::string &m
   while (i < text.size()) {
     char c = text[i];
     if (c == '\'') {
+      out += QNULL; mask += '1';  // a quote region yields a field even if empty
       i++;
       while (i < text.size() && text[i] != '\'') { out += text[i]; mask += '1'; i++; }
       if (i < text.size()) i++;
     } else if (c == '"') {
+      out += QNULL; mask += '1';
       i++;
       while (i < text.size() && text[i] != '"') {
         if (text[i] == '\\' && i + 1 < text.size() &&
@@ -697,6 +787,7 @@ void Expander::process(const std::string &text, std::string &out, std::string &m
           }
           int st = 0;
           std::string res = sh_.run_and_capture(inner, &st);
+          sh_.note_cmdsub(st);
           for (char ch : res) { out += ch; mask += '1'; }
           i = (j < text.size()) ? j + 1 : j;
         } else {
@@ -707,6 +798,7 @@ void Expander::process(const std::string &text, std::string &out, std::string &m
       }
       if (i < text.size()) i++;
     } else if (c == '$' && i + 1 < text.size() && text[i + 1] == '\'') {
+      out += QNULL; mask += '1';
       size_t j = i + 2;
       std::string inner;
       while (j < text.size() && text[j] != '\'') {
@@ -733,6 +825,7 @@ void Expander::process(const std::string &text, std::string &out, std::string &m
       }
       int st = 0;
       std::string res = sh_.run_and_capture(inner, &st);
+      sh_.note_cmdsub(st);
       for (char ch : res) { out += ch; mask += '0'; }
       i = (j < text.size()) ? j + 1 : j;
     } else {
@@ -802,18 +895,6 @@ std::vector<std::string> Expander::glob_field(const std::string &field, const st
   return matches;
 }
 
-// Does BRACED contain a quote character, so that expanding to empty still
-// yields one (empty) field -- e.g. "" or "$empty" -- unlike an unquoted empty
-// expansion such as $empty, which yields no field at all.
-static bool has_quote_char(const std::string &s) {
-  for (size_t i = 0; i < s.size(); i++) {
-    char c = s[i];
-    if (c == '\\') { i++; continue; }
-    if (c == '\'' || c == '"') return true;
-  }
-  return false;
-}
-
 namespace {
 // Fork CMD connected to a pipe and return the /dev/fd path the consumer opens.
 // input==true is <(cmd): the child's stdout feeds the pipe (parent reads);
@@ -873,9 +954,14 @@ std::vector<std::string> Expander::expand_args(const std::vector<Word> &words) {
       std::string out, mask;
       process(tilded, out, mask, false);
       auto fields = split_ifs(out, mask);
-      if (fields.empty() && has_quote_char(braced)) {
-        result.emplace_back();  // quoted null -> one empty field
-        continue;
+      // Strip quoted-null markers; a field that held only a marker survives as
+      // an empty field (so "" / "$empty" yield one empty argument).
+      for (auto &fm : fields) {
+        std::string v, m;
+        for (size_t k = 0; k < fm.first.size(); k++)
+          if (fm.first[k] != QNULL) { v += fm.first[k]; m += fm.second[k]; }
+        fm.first = std::move(v);
+        fm.second = std::move(m);
       }
       for (const auto &fm : fields)
         for (const std::string &g : glob_field(fm.first, fm.second)) result.push_back(g);
@@ -889,10 +975,12 @@ std::string Expander::expand_no_split(const std::string &text, bool do_glob) {
   extract_procsubs(src);  // e.g. a redirect target: < <(cmd)
   std::string out, mask;
   process(src, out, mask, false);
-  // drop field-separator markers
+  // drop internal markers: field separators become spaces, quoted-nulls vanish
   std::string joined;
-  for (char c : out)
-    if (c != FIELD_SEP) joined += c; else joined += ' ';
+  for (char c : out) {
+    if (c == FIELD_SEP) joined += ' ';
+    else if (c != QNULL) joined += c;
+  }
   if (do_glob) {
     std::string fmask(joined.size(), '0');
     auto g = glob_field(joined, fmask);

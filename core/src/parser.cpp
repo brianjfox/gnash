@@ -24,6 +24,19 @@ bool is_name(const std::string &s) {
   return true;
 }
 
+// A word usable as a function name in the `name ()' form.  bash permits far
+// more than POSIX identifiers here (e.g. `ns::fn', `verify-git-version').  The
+// lexer already guarantees an unquoted WORD contains no shell metacharacters,
+// so only reject characters that would make it an assignment or an expansion.
+bool is_funcname(const std::string &s) {
+  if (s.empty()) return false;
+  if (is_name(s)) return true;
+  for (char c : s)
+    if (c == '=' || c == '$' || c == '`' || c == '\'' || c == '"' || c == '\\')
+      return false;
+  return true;
+}
+
 std::string trim(const std::string &s) {
   std::size_t a = 0, b = s.size();
   while (a < b && std::isspace(static_cast<unsigned char>(s[a]))) a++;
@@ -357,7 +370,7 @@ struct Parser {
     }
 
     // name () { ... }
-    if (cur().type == Tok::Word && !cur().quoted && is_name(cur().text) &&
+    if (cur().type == Tok::Word && !cur().quoted && is_funcname(cur().text) &&
         peek(1).type == Tok::Lparen && peek(2).type == Tok::Rparen)
       return parse_funcdef_paren();
 
@@ -537,7 +550,7 @@ struct Parser {
         advance();
         continue;
       }
-      if (!parts[part].empty()) parts[part] += ' ';
+      if (!parts[part].empty() && cur().preceded_by_blank) parts[part] += ' ';
       parts[part] += tok_to_text(cur());
       advance();
     }
@@ -579,7 +592,12 @@ struct Parser {
         advance();
         continue;
       }
-      if (!expr.empty()) expr += ' ';
+      // Join tokens without inserting spaces: the lexer may split a compound
+      // arithmetic operator such as `>=' into a redirection token (`>') plus a
+      // word (`=3'); re-gluing them reconstructs the original operator, while a
+      // space ("> =3") would make it unparseable.  A blank in the source still
+      // separates operands, so distinct operands keep their own tokens.
+      if (!expr.empty() && cur().preceded_by_blank) expr += ' ';
       expr += tok_to_text(cur());
       advance();
     }

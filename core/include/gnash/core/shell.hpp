@@ -23,6 +23,7 @@ struct Variable {
   bool exported = false;
   bool readonly = false;
   bool integer = false;
+  bool nameref = false;  // `declare -n': value is the name of another variable
 };
 
 class Shell {
@@ -32,6 +33,9 @@ class Shell {
   // --- variables ---------------------------------------------------------
   std::map<std::string, Variable> vars;
   bool is_set(const std::string &n) const;
+  // Follow a `declare -n' nameref chain to the ultimate target name (with a
+  // cycle guard); returns n unchanged when it is not a nameref.
+  std::string deref(const std::string &n) const;
   std::string get(const std::string &n) const;  // "" if unset
   bool get_if_set(const std::string &n, std::string &out) const;
   void set(const std::string &n, const std::string &v);
@@ -67,6 +71,21 @@ class Shell {
   std::map<std::string, std::string> completions;  // `complete': name -> spec string
   struct CallFrame { int line; std::string func; std::string source; };
   std::vector<CallFrame> call_stack;          // `caller': active function calls
+
+  // --- call/source context for BASH_SOURCE / FUNCNAME / BASH_LINENO ------
+  // A frame per active context, bottom = the top-level script.  `name' is the
+  // function name, "source" for a sourced file, or "main" for the base script;
+  // `source' is the file the frame runs; `line' is the caller line that entered
+  // it.  Rebuilt into the three arrays by sync_source_arrays() on push/pop.
+  struct SrcFrame { std::string name; std::string source; int line; bool is_func; };
+  std::vector<SrcFrame> src_frames;
+  std::map<std::string, std::string> func_src;  // function name -> defining file
+  std::string current_source() const {          // file of the innermost frame
+    return src_frames.empty() ? std::string() : src_frames.back().source;
+  }
+  void push_src_frame(const std::string &name, const std::string &source, int line, bool is_func);
+  void pop_src_frame();
+  void sync_source_arrays();  // rewrite BASH_SOURCE/FUNCNAME/BASH_LINENO
 
   // --- traps -------------------------------------------------------------
   std::map<std::string, std::string> traps;  // signal name (e.g. "EXIT") -> command
@@ -156,6 +175,11 @@ class Shell {
   // --- status & options --------------------------------------------------
   int last_status = 0;
   int last_bg_pid = 0;  // $!
+  // Exit status of the most recent command substitution, so a pure-assignment
+  // command (a=$(cmd)) can take its status, as bash does.
+  int last_cmdsub_status = 0;
+  bool cmdsub_ran = false;
+  void note_cmdsub(int st) { last_cmdsub_status = st; cmdsub_ran = true; }
   bool opt_errexit = false;   // -e
   bool opt_xtrace = false;    // -x
   bool opt_nounset = false;   // -u

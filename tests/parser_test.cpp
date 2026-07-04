@@ -80,7 +80,9 @@ int main() {
   // arithmetic (( )) and arithmetic for
   ok("(( x + 1 ))", "((x + 1))");
   ok("(( i = 0 ))", "((i = 0))");
-  ok("for ((i=0; i<10; i++)); do echo $i; done", "for ((i=0; i < 10; i++)); do echo $i; done");
+  // arithmetic sections are rendered faithfully to the source spacing, so a
+  // glued operator like `<' (which the lexer splits) is re-glued, not spaced.
+  ok("for ((i=0; i<10; i++)); do echo $i; done", "for ((i=0; i<10; i++)); do echo $i; done");
   // `((cmd); cmd)` is not arithmetic -> falls back to nested subshells
   ok("(( echo hi ); echo bye )", "((echo hi); echo bye)");
 

@@ -433,6 +433,9 @@ int Executor::run_simple(const SimpleCommand *c) {
   std::vector<std::pair<std::string, std::string>> assigns;
   std::vector<std::string> argv;
   bool prefix = true;
+  // Track command substitutions in the assignment RHS: a pure-assignment
+  // command takes the status of the last one (bash), or 0 if there were none.
+  sh_.cmdsub_ran = false;
   for (const Word &w : c->words) {
     if (prefix && (w.flags & W_ASSIGNMENT)) {
       Assign a;
@@ -473,13 +476,14 @@ int Executor::run_simple(const SimpleCommand *c) {
     std::fprintf(stderr, "%s\n", line.c_str());
   }
 
-  // No command word: assignments take effect in the current shell.
+  // No command word: assignments take effect in the current shell.  The status
+  // is that of the last command substitution in the RHS, or 0 if there was none.
   if (argv.empty()) {
     std::vector<SavedFd> saved;
     apply_redirects(sh_, c->redirects, saved);
     for (const auto &a : assigns) sh_.set(a.first, a.second);
     restore_fds(saved);
-    return (sh_.last_status = 0);
+    return (sh_.last_status = sh_.cmdsub_ran ? sh_.last_cmdsub_status : 0);
   }
 
   // Builtins and functions run in-process (with redirects applied/restored).
@@ -527,9 +531,15 @@ int Executor::run_simple(const SimpleCommand *c) {
     // and the source.
     sh_.call_stack.push_back({sh_.cur_lineno, argv[0],
                               sh_.shell_name.empty() ? "main" : sh_.shell_name});
+    // BASH_SOURCE/FUNCNAME frame: the function runs in the file it was defined
+    // in; the call line is where it was invoked in the current file.
+    auto fsit = sh_.func_src.find(argv[0]);
+    std::string def_src = (fsit != sh_.func_src.end()) ? fsit->second : sh_.current_source();
+    sh_.push_src_frame(argv[0], def_src, sh_.cur_lineno, true);
     sh_.push_scope();
     status = run(fit->second);
     sh_.pop_scope();
+    sh_.pop_src_frame();
     sh_.call_stack.pop_back();
     sh_.positional = saved_pos;
     sh_.arg0 = saved_arg0;
@@ -648,17 +658,21 @@ int Executor::run_for(const ForCommand *c) {
   int st = 0;
   if (c->is_arith) {
     bool ok = true;
-    if (!c->a_init.empty()) eval_arith(sh_, c->a_init, &ok);
+    // The three arithmetic sections undergo parameter/command expansion before
+    // evaluation (as bash does), so forms like ${#arr[@]} work inside them.
+    Expander aex(sh_);
+    auto aeval = [&](const std::string &e) {
+      if (e.empty()) return 0LL;
+      return static_cast<long long>(eval_arith(sh_, aex.expand_no_split(e), &ok));
+    };
+    aeval(c->a_init);
     for (;;) {
-      if (!c->a_cond.empty()) {
-        long long v = eval_arith(sh_, c->a_cond, &ok);
-        if (v == 0) break;
-      }
+      if (!c->a_cond.empty() && aeval(c->a_cond) == 0) break;
       st = run(c->body.get());
       if (sh_.break_count) { sh_.break_count--; break; }
       if (sh_.continue_count) sh_.continue_count--;
       if (unwinding()) break;
-      if (!c->a_update.empty()) eval_arith(sh_, c->a_update, &ok);
+      aeval(c->a_update);
     }
     return st;
   }
@@ -697,6 +711,7 @@ int Executor::run_case(const CaseCommand *c) {
 
 int Executor::run_funcdef(const FunctionDef *c) {
   sh_.functions[c->name] = c->body.get();
+  sh_.func_src[c->name] = sh_.current_source();  // file it was defined in, for BASH_SOURCE
   return 0;
 }
 
@@ -713,7 +728,8 @@ int Executor::run_cond(const CondCommand *c) {
 
 int Executor::run_arith(const ArithCommand *c) {
   bool ok = true;
-  long long v = eval_arith(sh_, c->expression, &ok);
+  Expander ex(sh_);  // expand ${#arr[@]} etc. before arithmetic evaluation
+  long long v = eval_arith(sh_, ex.expand_no_split(c->expression), &ok);
   if (!ok) return 1;
   return v != 0 ? 0 : 1;
 }

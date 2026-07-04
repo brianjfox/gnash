@@ -164,9 +164,25 @@ void Shell::reap_procsubs(size_t from) {
   if (from < procsubs.size()) procsubs.resize(from);
 }
 
-bool Shell::is_set(const std::string &n) const { return vars.count(n) != 0; }
+std::string Shell::deref(const std::string &n) const {
+  std::string cur = n;
+  for (int guard = 0; guard < 100; guard++) {
+    auto it = vars.find(cur);
+    if (it == vars.end() || !it->second.nameref) return cur;
+    const std::string &tgt = it->second.value;
+    if (tgt.empty() || tgt == cur) return cur;  // self/empty ref: stop
+    cur = tgt;
+  }
+  return cur;
+}
 
-std::string Shell::get(const std::string &n) const {
+bool Shell::is_set(const std::string &n_in) const {
+  std::string n = deref(n_in);
+  return vars.count(n) != 0;
+}
+
+std::string Shell::get(const std::string &n_in) const {
+  std::string n = deref(n_in);
   auto it = vars.find(n);
   if (it == vars.end()) return std::string();
   const Variable &v = it->second;
@@ -177,7 +193,8 @@ std::string Shell::get(const std::string &n) const {
 
 // ---- arrays ---------------------------------------------------------------
 
-std::vector<std::string> Shell::array_values(const std::string &n) const {
+std::vector<std::string> Shell::array_values(const std::string &n_in) const {
+  std::string n = deref(n_in);
   std::vector<std::string> out;
   auto it = vars.find(n);
   if (it == vars.end()) return out;
@@ -191,7 +208,8 @@ std::vector<std::string> Shell::array_values(const std::string &n) const {
   return out;
 }
 
-std::vector<std::string> Shell::array_keys(const std::string &n) const {
+std::vector<std::string> Shell::array_keys(const std::string &n_in) const {
+  std::string n = deref(n_in);
   std::vector<std::string> out;
   auto it = vars.find(n);
   if (it == vars.end()) return out;
@@ -205,7 +223,8 @@ std::vector<std::string> Shell::array_keys(const std::string &n) const {
   return out;
 }
 
-std::string Shell::array_get(const std::string &n, const std::string &sub) const {
+std::string Shell::array_get(const std::string &n_in, const std::string &sub) const {
+  std::string n = deref(n_in);
   auto it = vars.find(n);
   if (it == vars.end()) return std::string();
   const Variable &v = it->second;
@@ -217,7 +236,8 @@ std::string Shell::array_get(const std::string &n, const std::string &sub) const
   return (k == 0) ? v.value : std::string();
 }
 
-void Shell::array_set(const std::string &n, const std::string &sub, const std::string &val) {
+void Shell::array_set(const std::string &n_in, const std::string &sub, const std::string &val) {
+  std::string n = deref(n_in);
   Variable &v = vars[n];
   if (v.readonly) return;
   if (v.kind == VarKind::Assoc) {
@@ -232,7 +252,8 @@ void Shell::array_set(const std::string &n, const std::string &sub, const std::s
   if (k == 0) v.value = val;
 }
 
-int Shell::array_count(const std::string &n) const {
+int Shell::array_count(const std::string &n_in) const {
+  std::string n = deref(n_in);
   auto it = vars.find(n);
   if (it == vars.end()) return 0;
   const Variable &v = it->second;
@@ -241,15 +262,17 @@ int Shell::array_count(const std::string &n) const {
   return 1;
 }
 
-void Shell::make_array(const std::string &n, bool assoc) {
+void Shell::make_array(const std::string &n_in, bool assoc) {
+  std::string n = deref(n_in);
   Variable &v = vars[n];
   if (v.kind == VarKind::Scalar) v.kind = assoc ? VarKind::Assoc : VarKind::Indexed;
 }
 
 void Shell::array_assign(
-    const std::string &n,
+    const std::string &n_in,
     const std::vector<std::pair<std::optional<std::string>, std::string>> &elems,
     bool append, bool assoc) {
+  std::string n = deref(n_in);
   Variable &v = vars[n];
   if (v.readonly) return;
   if (!append) {
@@ -274,6 +297,59 @@ void Shell::array_assign(
     }
   }
   if (v.kind == VarKind::Indexed && v.idx.count(0)) v.value = v.idx[0];
+}
+
+// ---- BASH_SOURCE / FUNCNAME / BASH_LINENO --------------------------------
+
+// Rebuild the three call-context arrays from src_frames, matching bash: index 0
+// is the innermost frame.  BASH_SOURCE lists the source file of every frame
+// (including the base script).  FUNCNAME / BASH_LINENO are populated only while
+// the innermost frame is a function -- then they run from that function down
+// through the enclosing frames to a trailing "main" / 0 (the base script).
+void Shell::sync_source_arrays() {
+  auto set_indexed = [&](const char *name, const std::vector<std::string> &vals) {
+    if (vals.empty()) { unset(name); return; }
+    std::vector<std::pair<std::optional<std::string>, std::string>> e;
+    e.reserve(vals.size());
+    for (const auto &v : vals) e.push_back({std::nullopt, v});
+    bool was_ro = vars.count(name) && vars[name].readonly;
+    if (was_ro) vars[name].readonly = false;
+    array_assign(name, e, false, false);
+    if (was_ro) vars[name].readonly = true;
+  };
+  if (src_frames.empty()) {
+    unset("BASH_SOURCE"); unset("FUNCNAME"); unset("BASH_LINENO");
+    return;
+  }
+  std::vector<std::string> sources;
+  for (auto it = src_frames.rbegin(); it != src_frames.rend(); ++it)
+    sources.push_back(it->source);
+  set_indexed("BASH_SOURCE", sources);
+
+  if (!src_frames.back().is_func) {  // FUNCNAME/BASH_LINENO exist only in functions
+    unset("FUNCNAME"); unset("BASH_LINENO");
+    return;
+  }
+  std::vector<std::string> names, lines;
+  for (size_t i = src_frames.size(); i-- > 1;) {  // top down to frame 1 (above base)
+    names.push_back(src_frames[i].name);
+    lines.push_back(std::to_string(src_frames[i].line));
+  }
+  names.push_back("main");
+  lines.push_back("0");
+  set_indexed("FUNCNAME", names);
+  set_indexed("BASH_LINENO", lines);
+}
+
+void Shell::push_src_frame(const std::string &name, const std::string &source, int line,
+                           bool is_func) {
+  src_frames.push_back({name, source, line, is_func});
+  sync_source_arrays();
+}
+
+void Shell::pop_src_frame() {
+  if (!src_frames.empty()) src_frames.pop_back();
+  sync_source_arrays();
 }
 
 // ---- local scopes ---------------------------------------------------------
@@ -302,14 +378,19 @@ void Shell::make_local(const std::string &n) {
   vars[n] = Variable{};  // fresh empty local
 }
 
-bool Shell::get_if_set(const std::string &n, std::string &out) const {
+bool Shell::get_if_set(const std::string &n_in, std::string &out) const {
+  std::string n = deref(n_in);
   auto it = vars.find(n);
   if (it == vars.end()) return false;
   out = it->second.value;
   return true;
 }
 
-void Shell::set(const std::string &n, const std::string &v) {
+void Shell::set(const std::string &n_in, const std::string &v) {
+  std::string n = deref(n_in);
+  // Assigning BASH_ARGV0 resets $0 (and the name used in error messages), as
+  // bash does; still stored so `$BASH_ARGV0' reads back the value.
+  if (n == "BASH_ARGV0") { arg0 = v; shell_name = v; }
   // Assigning to a dynamic variable seeds/rebases it rather than storing.
   if (n == "RANDOM") {
     rand_seed = static_cast<unsigned long>(std::strtoul(v.c_str(), nullptr, 10));
@@ -329,7 +410,8 @@ void Shell::set(const std::string &n, const std::string &v) {
   var.value = v;
 }
 
-void Shell::set_exported(const std::string &n, const std::string &v) {
+void Shell::set_exported(const std::string &n_in, const std::string &v) {
+  std::string n = deref(n_in);
   Variable &var = vars[n];
   if (var.readonly) return;
   var.value = v;
@@ -338,7 +420,10 @@ void Shell::set_exported(const std::string &n, const std::string &v) {
 
 void Shell::export_name(const std::string &n) { vars[n].exported = true; }
 
-void Shell::unset(const std::string &n) {
+void Shell::unset(const std::string &n_in) {
+  // `unset name' on a nameref removes the target; only `unset -n' (not modeled
+  // here) removes the nameref itself.  Following the ref matches common usage.
+  std::string n = deref(n_in);
   auto it = vars.find(n);
   if (it != vars.end() && !it->second.readonly) vars.erase(it);
 }

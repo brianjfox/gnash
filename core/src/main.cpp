@@ -370,6 +370,8 @@ int main(int argc, char **argv) {
     sh.positional.assign(args.begin() + idx + 1, args.end());
     sh.init_job_control(false);
     read_startup_files(sh, prefix, login, false, sopts);
+    // Base frame for BASH_SOURCE[0]/$0 = the script path, as bash reports it.
+    sh.push_src_frame("main", args[idx], 0, false);
     sh.run_string(ss.str());
   } else {
     // Read commands from standard input.

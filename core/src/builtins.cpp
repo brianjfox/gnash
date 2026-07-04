@@ -868,7 +868,8 @@ std::vector<std::string> builtin_names_sorted() {
 // Shared logic for declare/local/readonly/typeset.
 int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local, bool force_ro) {
   bool mk_array = false, mk_assoc = false, integer = false, readonly = force_ro;
-  bool exported = false, global = false, local = force_local;
+  bool exported = false, global = false, local = force_local, nameref = false;
+  bool lcase = false, ucase = false;  // -l lowercase / -u uppercase attribute
   size_t i = 1;
   for (; i < argv.size(); i++) {
     const std::string &a = argv[i];
@@ -881,6 +882,9 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
           case 'r': readonly = true; break;
           case 'x': exported = true; break;
           case 'g': global = true; break;
+          case 'n': nameref = true; break;
+          case 'l': lcase = true; break;
+          case 'u': ucase = true; break;
           case 'p': break;
           default: break;
         }
@@ -907,6 +911,8 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
         Expander ex(sh);
         val = ex.expand_assignment(val);  // arg arrives raw (assignment builtin)
         if (integer) { bool ok = true; val = std::to_string(eval_arith(sh, val, &ok)); }
+        if (lcase) for (char &c : val) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        else if (ucase) for (char &c : val) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
         sh.set(name, val);
       }
     }
@@ -914,6 +920,9 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     if (readonly) v.readonly = true;
     if (exported) v.exported = true;
     if (integer) v.integer = true;
+    // Mark the nameref last, so the assignment above stored the *target name*
+    // as this variable's value rather than being redirected through it.
+    if (nameref) v.nameref = true;
   }
   return 0;
 }
@@ -2031,8 +2040,32 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
     st = sh.run_string(join(argv, 1));
   } else if (cmd == "source" || cmd == ".") {
     if (argv.size() > 1) {
-      std::ifstream f(argv[1]);
-      if (f) { std::ostringstream ss; ss << f.rdbuf(); st = sh.run_string(ss.str()); }
+      // Like bash: a filename without a slash is looked up on PATH first, then
+      // (as a fallback) in the current directory.
+      std::string path = argv[1];
+      if (path.find('/') == std::string::npos && access(path.c_str(), R_OK) != 0) {
+        const char *penv = std::getenv("PATH");
+        std::string ps = penv ? penv : "";
+        size_t start = 0;
+        while (start <= ps.size()) {
+          size_t e = ps.find(':', start);
+          std::string dir = ps.substr(start, e == std::string::npos ? std::string::npos : e - start);
+          if (dir.empty()) dir = ".";
+          std::string cand = dir + "/" + argv[1];
+          if (access(cand.c_str(), R_OK) == 0) { path = cand; break; }
+          if (e == std::string::npos) break;
+          start = e + 1;
+        }
+      }
+      std::ifstream f(path);
+      if (f) {
+        std::ostringstream ss; ss << f.rdbuf();
+        // A sourced file becomes the innermost BASH_SOURCE frame; the call line
+        // is where `source' appears in the current file.
+        sh.push_src_frame("source", argv[1], sh.cur_lineno, false);
+        st = sh.run_string(ss.str());
+        sh.pop_src_frame();
+      }
       else { std::fprintf(stderr, "gnash: %s: %s\n", argv[1].c_str(), std::strerror(errno)); st = 1; }
     }
   } else if (cmd == "local") {
