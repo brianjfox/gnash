@@ -1,11 +1,13 @@
 # gnash
 
-A modular C++ reimplementation of **bash 5.3**.
+A modular C++ reimplementation of the **GNU Bash** shell, with multiple personalities.
 
-The overriding goal: when running scripts, `gnash` behaves **identically** to bash 5.3
-— same stdout/stderr, exit status, side effects, and error semantics. Job-control
-fidelity is a first-class concern. Structural reference is the bash 5.3 source in
-`../bash`; the definitive behavioral manual is `../bash/doc/bash.pdf`.
+When humans used to write software, the time and effort to create something was much larger than today.  This often created competition between different versions of the same functional software, where people would declare that they liked feature X over feature Y, or that this peice of software was better at doing X.  This kind of religious fervor over which software was *better*, led to operating system distributors having to choose which software would be the default on their systems.
+
+Sometimes, people were confused by licensing, and chose software based on how lenient the licensing was.  **gnash** is an attempt to make all of this nonsense go away, and simply deliver the functionality and features of multiple different shells in the same software package.
+
+The overriding goal: when running scripts, `gnash` behaves **identically** to the personality
+it is invoked as: **bash**, **ash**, **ksh**, or **zsh** -- the same stdout/stderr, exit status, side effects, and error semantics.
 
 ## Design
 
@@ -15,13 +17,31 @@ dependency graph can't silently erode.
 
 ```
 libsh        low-level utilities (alloc, quoting, shell-env seam)
-  ├─ libhistory     GNU History reimplementation        [complete]
-  ├─ libtilde       tilde expansion                      [complete]
-  ├─ libtermcap     terminal capabilities                [complete]
-  ├─ libreadline    line editing + completion hooks      [functional]
-  └─ libglob        pattern matching + filename globbing  [complete]
-core   shell: parse → expand → execute + jobs + REPL        [interactive]
-       (next: conformance vs bash tests/, funsub, more builtins)
+  ├─ libhistory     GNU History reimplementation
+  ├─ libtilde       tilde expansion
+  ├─ libtermcap     terminal capabilities
+  ├─ libreadline    line editing + completion hooks
+  └─ libglob        pattern matching + filename globbing
+core   shell: parse → expand → execute + jobs + REPL    
+```:
+
+Build it: gnash needs a C++20 compiler and CMake ≥ 3.16.
+
+- **macOS** — install the Xcode command-line tools and CMake:
+  `xcode-select --install`, then `brew install cmake`.
+- **Linux** — install a C++20 compiler, CMake, and Make:
+  `sudo apt install build-essential cmake` (Debian/Ubuntu) or
+  `sudo dnf install gcc-c++ cmake make` (Fedora/RHEL).
+- **Windows** — build under **WSL** (Windows Subsystem for Linux) and follow the
+  Linux steps; **MSYS2** or **Cygwin** also work. A native MSVC build is not
+  supported: gnash relies on POSIX process/terminal APIs (`fork`, `termios`,
+  `tcsetpgrp`, `setpgid`, …) that Windows lacks outside those environments.
+
+Then, on any platform:
+
+```sh
+cmake -S . -B build -DGNASH_WERROR=ON
+cmake --build build -j
 ```
 
 Run it: `build/core/gnash` (interactive), `gnash -c 'CMD'`, or `gnash SCRIPT`.
