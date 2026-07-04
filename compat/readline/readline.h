@@ -86,6 +86,7 @@ extern int rl_delete (int count, int key);
 extern int rl_rubout (int count, int key);
 extern int rl_eof_or_delete (int count, int key);
 extern int rl_kill_line (int count, int key);
+extern int rl_clear_screen (int count, int key);
 extern int rl_backward_kill_line (int count, int key);
 extern int rl_unix_line_discard (int count, int key);
 extern int rl_kill_word (int count, int key);

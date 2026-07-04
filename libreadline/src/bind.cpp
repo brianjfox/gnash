@@ -40,6 +40,7 @@ const NamedFunc kFunmap[] = {
     {"delete-char", rl_delete},
     {"backward-delete-char", rl_rubout},
     {"kill-line", rl_kill_line},
+    {"clear-screen", rl_clear_screen},
     {"backward-kill-line", rl_backward_kill_line},
     {"unix-line-discard", rl_unix_line_discard},
     {"kill-word", rl_kill_word},

@@ -102,6 +102,7 @@ void build_emacs_keymaps() {
   bind_func(std_km, 0x08, rl_rubout);             // C-h (backspace)
   bind_func(std_km, 0x0a, rl_newline);            // C-j (LF) -> accept
   bind_func(std_km, 0x0b, rl_kill_line);          // C-k
+  bind_func(std_km, 0x0c, rl_clear_screen);       // C-l -> clear screen
   bind_func(std_km, 0x0d, rl_newline);            // C-m (CR) -> accept
   bind_func(std_km, 0x0e, rl_get_next_history);   // C-n
   bind_func(std_km, 0x10, rl_get_previous_history);  // C-p

@@ -72,6 +72,22 @@ const char *clear_eol() {
   return ce.c_str();
 }
 
+// Termcap "cl" (clear screen + home cursor), with an ANSI fallback.
+const char *clear_screen_seq() {
+  static std::string cl;
+  static bool init = false;
+  if (!init) {
+    init = true;
+    const char *term = std::getenv("TERM");
+    if (term && tgetent(nullptr, term) == 1) {
+      char *s = tgetstr("cl", nullptr);
+      if (s) cl = s;
+    }
+    if (cl.empty()) cl = "\033[H\033[2J";  // ANSI: home + clear entire screen
+  }
+  return cl.c_str();
+}
+
 int dispatch(int key, Keymap map);
 
 // Accumulate a numeric argument, then dispatch the terminating key with it.
@@ -238,6 +254,15 @@ extern "C" void rl_redisplay(void) {
   int curcol = plen + (rl_point - off);
   for (int i = endcol; i > curcol; i--) std::fputc('\b', o);
   std::fflush(o);
+}
+
+// C-l: clear the terminal and redraw the prompt with the current input line at
+// the top of the screen (readline's `clear-screen').
+extern "C" int rl_clear_screen(int /*count*/, int /*key*/) {
+  if (rl_outstream == nullptr) rl_outstream = stdout;
+  std::fputs(clear_screen_seq(), rl_outstream);
+  rl_redisplay();  // repaint prompt + buffer at row 0
+  return 0;
 }
 
 // Erase the current input line so a caller (e.g. an event hook printing a
