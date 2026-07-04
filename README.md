@@ -2,30 +2,18 @@
 
 A modular C++ reimplementation of the **GNU Bash** shell, with multiple personalities.
 
+## Rationale
 When humans used to write software, the time and effort to create something was much larger than today.  This often created competition between different versions of the same functional software, where people would declare that they liked feature X over feature Y, or that this peice of software was better at doing X.  This kind of religious fervor over which software was *better*, led to operating system distributors having to choose which software would be the default on their systems.
 
 Sometimes, people were confused by licensing, and chose software based on how lenient the licensing was.  **gnash** is an attempt to make all of this nonsense go away, and simply deliver the functionality and features of multiple different shells in the same software package.
 
-The overriding goal: when running scripts, `gnash` behaves **identically** to the personality
-it is invoked as: **bash**, **ash**, **ksh**, or **zsh** -- the same stdout/stderr, exit status, side effects, and error semantics.
+I had multiple goals in mind when creating gnash:
 
-## Design
+1. Create a replacement shell that makes the reasons for having different shells go away. When running scripts, `gnash` should behave *identically* to the personality it is invoked as: **bash**, **ash**, **ksh**, or **zsh** -- the same stdout/stderr, exit status, side effects, and error semantics.
+2. I wanted to connect people to the fact that the relationship of humans to software is changing drastically.  Humans still need to be motivating factor behind the existance of the software, and often, we have architectural goals that are larger than a single, or even a suite, of software.  But writing clean and efficient code is no longer the purview of meat-people.  gnash was conceived of, designed, and written in approximately 3 hours of human attention coupled with 5 hours of computational coding.
 
-gnash is built as a stack of independent libraries, lowest-dependency-first, each a
-separate CMake target. Modularity is enforced through target link visibility, so the
-dependency graph can't silently erode.
-
-```
-libsh        low-level utilities (alloc, quoting, shell-env seam)
-  ├─ libhistory     GNU History reimplementation
-  ├─ libtilde       tilde expansion
-  ├─ libtermcap     terminal capabilities
-  ├─ libreadline    line editing + completion hooks
-  └─ libglob        pattern matching + filename globbing
-core   shell: parse → expand → execute + jobs + REPL    
-```
-
-Build it: gnash needs a C++20 compiler and CMake ≥ 3.16.
+## How to Build
+**gnash** needs a C++20 compiler and CMake ≥ 3.16.
 
 - **macOS** — install the Xcode command-line tools and CMake:
   `xcode-select --install`, then `brew install cmake`.
@@ -44,7 +32,34 @@ cmake -S . -B build -DGNASH_WERROR=ON
 cmake --build build -j
 ```
 
-Run it: `build/core/gnash` (interactive), `gnash -c 'CMD'`, or `gnash SCRIPT`.
+## Run it
+**gnash** can be run under many different personalities.  The name of the binary (or the value of the `--personality=XXX` option) control which startup files are read, whether syntax highlighting on the command line exists, and other behaviors.  Currently, **gnash** supports running as:
+* **bash** -- reads `~/.bash_profile`, `~/.bashrc`, behaves like **bash-5.3**
+* **gnash** -- reads `~/.gnash_profile`, `~/.gnashrc`, behaves like **bash-5.3**
+* **zsh** -- reads `~/.zshenv`, `~/.zprofile`, `~/.zshrc`, `~/.zlogin`, uses `%`-style prompts and highlights the command line as you type, behaves like **bash-5.3**
+* **ash** (also **dash**, **sh**) -- reads `/etc/profile`, `~/.profile`, and `$ENV`, uses a plain POSIX `$ ` prompt, behaves like **bash-5.3**
+* **ksh** (also **ksh93**, **mksh**, **pdksh**) -- reads `/etc/profile`, `~/.profile`, and `$ENV`, uses a `$ ` prompt in which `!` expands to the history number, behaves like **bash-5.3**
+
+Choose a personality by the binary's name -- e.g. a `zsh` symlink to `gnash`, or a copy named `ksh` -- or with the `--personality=<name>` option, which takes precedence over the name. The active personality is exposed in `$GNASH_PERSONALITY`.
+
+Run it as `build/core/gnash` (interactive), `gnash -c 'CMD'`, or `gnash SCRIPT`.
+
+
+## Design
+
+gnash is built as a stack of independent libraries, lowest-dependency-first, each a
+separate CMake target. Modularity is enforced through target link visibility, so the
+dependency graph can't silently erode.
+
+```
+libsh        low-level utilities (alloc, quoting, shell-env seam)
+  ├─ libhistory     GNU History reimplementation
+  ├─ libtilde       tilde expansion
+  ├─ libtermcap     terminal capabilities
+  ├─ libreadline    line editing + completion hooks
+  └─ libglob        pattern matching + filename globbing
+core   shell: parse → expand → execute + jobs + REPL    
+```
 
 Each library exposes a **modern C++ API** under `namespace gnash::*` (headers in
 `include/gnash/`) plus a **thin C shim** with the classic names and ABI (headers in
