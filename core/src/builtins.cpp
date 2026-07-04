@@ -9,6 +9,7 @@
 #include <cctype>
 #include <csignal>
 #include <cstdio>
+#include <optional>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -800,32 +801,107 @@ int bi_set(Shell &sh, const std::vector<std::string> &argv) {
 }
 
 int bi_read(Shell &sh, const std::vector<std::string> &argv) {
-  std::vector<std::string> names(argv.begin() + 1, argv.end());
+  bool raw = false;                 // -r: don't process backslashes
+  std::string arrayname;            // -a NAME: read words into the array NAME
+  std::string prompt;               // -p PROMPT
+  int fd = 0;                       // -u FD
+  int delim = '\n';                 // -d DELIM (default newline; -d '' is NUL)
+  bool have_n = false, exact = false;  // -n / -N
+  long nchars = 0;
+  std::vector<std::string> names;
+
+  for (size_t i = 1; i < argv.size(); i++) {
+    const std::string &a = argv[i];
+    if (a == "--") { for (size_t j = i + 1; j < argv.size(); j++) names.push_back(argv[j]); break; }
+    if (a.size() >= 2 && a[0] == '-' && a != "-") {
+      for (size_t k = 1; k < a.size(); k++) {
+        char o = a[k];
+        auto val = [&]() -> std::string {       // option argument (rest of word or next word)
+          if (k + 1 < a.size()) { std::string v = a.substr(k + 1); k = a.size(); return v; }
+          return (i + 1 < argv.size()) ? argv[++i] : std::string();
+        };
+        switch (o) {
+          case 'r': raw = true; break;
+          case 'a': arrayname = val(); break;
+          case 'p': prompt = val(); break;
+          case 'u': fd = std::atoi(val().c_str()); break;
+          case 'd': { std::string d = val(); delim = d.empty() ? 0 : static_cast<unsigned char>(d[0]); break; }
+          case 'n': have_n = true; exact = false; nchars = std::atol(val().c_str()); break;
+          case 'N': have_n = true; exact = true; nchars = std::atol(val().c_str()); break;
+          case 't': case 'i': (void)val(); break;   // timeout / initial text: accepted, not acted on
+          case 's': case 'e': case 'E': break;       // silent / readline editing: accepted
+          default: break;
+        }
+      }
+    } else {
+      names.push_back(a);
+    }
+  }
+
+  if (!prompt.empty() && isatty(fd)) { std::fputs(prompt.c_str(), stderr); std::fflush(stderr); }
+
+  // Read one "line" (up to the delimiter, or `nchars' with -n/-N) byte by byte
+  // so we don't consume input past it.
   std::string line;
-  int c;
   bool got = false;
-  while ((c = std::getchar()) != EOF) {
+  char ch;
+  while (!(have_n && static_cast<long>(line.size()) >= nchars)) {
+    if (::read(fd, &ch, 1) != 1) break;
     got = true;
-    if (c == '\n') break;
-    line += static_cast<char>(c);
+    if (!exact && static_cast<unsigned char>(ch) == static_cast<unsigned char>(delim)) break;
+    if (!raw && ch == '\\') {                 // backslash escaping (unless -r)
+      char nx;
+      if (::read(fd, &nx, 1) != 1) { line += '\\'; break; }
+      if (nx == '\n') continue;               // line continuation: drop both
+      line += nx;
+      continue;
+    }
+    line += ch;
   }
   if (!got && line.empty()) return 1;
+
+  const std::string ifs = sh.ifs();
+  auto is_ifs = [&](char c) { return ifs.find(c) != std::string::npos; };
+  auto is_ifs_ws = [&](char c) { return is_ifs(c) && (c == ' ' || c == '\t' || c == '\n'); };
+
+  // Split LINE into fields on IFS (whitespace runs collapse; each non-whitespace
+  // IFS char is its own delimiter, so empty fields are possible).
+  auto split_all = [&]() {
+    std::vector<std::string> out;
+    size_t i = 0, n = line.size();
+    while (i < n && is_ifs_ws(line[i])) i++;   // strip leading IFS whitespace
+    while (i < n) {
+      std::string f;
+      while (i < n && !is_ifs(line[i])) f += line[i++];
+      out.push_back(f);
+      while (i < n && is_ifs_ws(line[i])) i++;
+      if (i < n && is_ifs(line[i]) && !is_ifs_ws(line[i])) { i++; while (i < n && is_ifs_ws(line[i])) i++; }
+      if (i >= n) break;
+    }
+    return out;
+  };
+
+  if (!arrayname.empty()) {                    // -a: all words into the array
+    std::vector<std::pair<std::optional<std::string>, std::string>> elems;
+    for (const std::string &w : split_all()) elems.emplace_back(std::nullopt, w);
+    sh.array_assign(arrayname, elems, false, false);
+    return 0;
+  }
   if (names.empty()) { sh.set("REPLY", line); return 0; }
-  // split by IFS into names; last gets the remainder
-  std::string ifs = sh.ifs();
+
+  // Assign fields to names; the last name gets the unsplit remainder.
   std::vector<std::string> fields;
-  std::string cur;
-  auto is_ifs = [&](char ch) { return ifs.find(ch) != std::string::npos; };
   size_t p = 0;
-  while (p < line.size() && is_ifs(line[p])) p++;
+  while (p < line.size() && is_ifs_ws(line[p])) p++;
   for (size_t k = names.size(); k > 1 && p < line.size(); k--) {
-    cur.clear();
+    std::string cur;
     while (p < line.size() && !is_ifs(line[p])) cur += line[p++];
     fields.push_back(cur);
-    while (p < line.size() && is_ifs(line[p])) p++;
+    while (p < line.size() && is_ifs_ws(line[p])) p++;
+    if (p < line.size() && is_ifs(line[p]) && !is_ifs_ws(line[p])) { p++; while (p < line.size() && is_ifs_ws(line[p])) p++; }
   }
   std::string rest = line.substr(p);
-  while (!rest.empty() && is_ifs(rest.back())) rest.pop_back();
+  while (!rest.empty() && is_ifs_ws(rest.back())) rest.pop_back();
   fields.push_back(rest);
   for (size_t k = 0; k < names.size(); k++)
     sh.set(names[k], k < fields.size() ? fields[k] : std::string());

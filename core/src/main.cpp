@@ -267,6 +267,9 @@ int main(int argc, char **argv) {
   if (slash != std::string::npos) base = base.substr(slash + 1);
   if (base.empty()) base = "gnash";
   sh.shell_name = base;
+  // $0 defaults to argv[0] (as bash: `bash -c' shows "bash", "/bin/bash", etc.);
+  // a script path or a -c name argument overrides it below.
+  sh.arg0 = prog;
   const std::string prefix = base;
 
   // $SHELL is the execution path of the current shell (persona-independent).

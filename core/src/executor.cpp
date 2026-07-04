@@ -562,10 +562,13 @@ int Executor::run_simple(const SimpleCommand *c) {
     sh_.arg0 = saved_arg0;
     if (sh_.returning) { sh_.returning = false; status = sh_.exit_status; }
     undo_temp();
-  } else if (run_builtin(sh_, argv, &status)) {
-    // builtins see the temp assignments as shell vars
+  } else if ((apply_temp(), run_builtin(sh_, argv, &status))) {
+    // A preceding `VAR=val builtin' applies to the builtin (e.g. IFS=, read),
+    // then is restored.
     builtin = true;
+    undo_temp();
   } else {
+    undo_temp();  // not a builtin after all: the external path sets its own env
     // external command.  If we are a disposable subshell child whose sole
     // command this is, exec it in place -- become the command with no second
     // fork/wait (exec_replace was consumed at the top of run_simple).
