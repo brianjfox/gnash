@@ -92,6 +92,9 @@ class Shell {
   bool in_trap = false;                       // guard against trap recursion
   void set_signal_trap(int signo, bool active);  // (de)install the shared handler
   void run_pending_traps();                   // run traps for signals received
+  // Run the DEBUG trap (if set) before a command, with $BASH_COMMAND set to
+  // CMD_TEXT.  Only fires inside functions when functrace (-T) is enabled.
+  void run_debug_trap(const std::string &cmd_text);
 
   // --- job control -------------------------------------------------------
   struct Job {
@@ -185,7 +188,10 @@ class Shell {
   bool opt_nounset = false;   // -u
   bool opt_noglob = false;    // -f
   bool opt_verbose = false;   // -v
+  bool opt_functrace = false; // -T / -o functrace: DEBUG/RETURN traps inherited
   int errexit_suppress = 0;   // >0 while a command's status is being checked
+  std::string bash_command;   // $BASH_COMMAND: the command currently executing
+  bool in_debug_trap = false; // guard: don't fire the DEBUG trap within itself
 
   // --- functions ---------------------------------------------------------
   std::map<std::string, const Command *> functions;

@@ -90,6 +90,7 @@ bool Shell::dynamic_var(const std::string &name, std::string &out) {
   if (name == "LINENO") { out = std::to_string(cur_lineno); return true; }
   if (name == "BASHPID") { out = std::to_string(static_cast<long>(getpid())); return true; }
   if (name == "BASH_ARGV0") { out = arg0; return true; }  // reflects $0; always set
+  if (name == "BASH_COMMAND") { out = bash_command; return true; }  // command being run
   if (name == "BASH_SUBSHELL") { out = std::to_string(subshell_level); return true; }
   if (name == "EPOCHSECONDS") {
     out = std::to_string(static_cast<long long>(std::time(nullptr)));
@@ -136,6 +137,20 @@ void Shell::set_signal_trap(int signo, bool active) {
   sa.sa_flags = SA_RESTART;  // let blocking waits resume; traps run between commands
   sa.sa_handler = active ? trap_signal_handler : SIG_DFL;
   sigaction(signo, &sa, nullptr);
+}
+
+void Shell::run_debug_trap(const std::string &cmd_text) {
+  auto it = traps.find("DEBUG");
+  if (it == traps.end() || in_debug_trap) return;
+  // Without functrace, the DEBUG trap fires only outside functions.
+  if (!opt_functrace && in_function()) return;
+  in_debug_trap = true;
+  bash_command = cmd_text;
+  int saved = last_status;  // $? inside the trap is the previous command's status
+  std::string body = it->second;
+  run_string(body);
+  last_status = saved;  // the trap does not alter $? for the upcoming command
+  in_debug_trap = false;
 }
 
 void Shell::run_pending_traps() {

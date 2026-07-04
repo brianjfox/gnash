@@ -422,6 +422,12 @@ int Executor::run_pipeline(const Connection *c) {
 
 int Executor::run_simple(const SimpleCommand *c) {
   if (c->line > 0) sh_.cur_lineno = c->line;  // $LINENO
+  // DEBUG trap: fires before the command, with $BASH_COMMAND set.  If the trap
+  // runs `return'/`exit', skip the command and let the unwind propagate.
+  if (sh_.traps.count("DEBUG") && !sh_.in_debug_trap) {
+    sh_.run_debug_trap(to_string(c));
+    if (unwinding()) return sh_.last_status;
+  }
   Expander ex(sh_);
   // Reap any <(...) / >(...) set up for this command once it (and any function
   // body it invokes) has finished, on every return path.

@@ -723,7 +723,7 @@ std::vector<std::pair<std::string, bool>> set_option_states(Shell &sh) {
   return {
       {"allexport", false},   {"braceexpand", true},
       {"emacs", i},           {"errexit", sh.opt_errexit},
-      {"errtrace", false},    {"functrace", false},
+      {"errtrace", sh.opt_functrace}, {"functrace", sh.opt_functrace},
       {"hashall", true},      {"histexpand", i},
       {"history", i},         {"ignoreeof", false},
       {"interactive-comments", true}, {"keyword", false},
@@ -764,6 +764,7 @@ int bi_set(Shell &sh, const std::vector<std::string> &argv) {
           case 'u': sh.opt_nounset = on; break;
           case 'f': sh.opt_noglob = on; break;
           case 'v': sh.opt_verbose = on; break;
+          case 'T': sh.opt_functrace = on; break;  // DEBUG/RETURN trap inheritance
           case 'o': {
             if (i + 1 >= argv.size()) {
               // `set -o' lists states; `set +o' reproduces as commands.
@@ -778,6 +779,7 @@ int bi_set(Shell &sh, const std::vector<std::string> &argv) {
               else if (o == "nounset") sh.opt_nounset = on;
               else if (o == "noglob") sh.opt_noglob = on;
               else if (o == "verbose") sh.opt_verbose = on;
+              else if (o == "functrace" || o == "errtrace") sh.opt_functrace = on;
             }
             k = a.size();  // -o consumes the rest of the word
             break;
