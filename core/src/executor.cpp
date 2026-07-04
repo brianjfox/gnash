@@ -319,6 +319,17 @@ int Executor::run_connection(const Connection *c) {
       return st;
     }
     case Connector::Amp: {
+      // A bare job spec with `&' (`%1 &') is a synonym for `bg %1': resume the
+      // job in the background rather than launching a new child.
+      if (auto *sc = dynamic_cast<const SimpleCommand *>(c->first.get())) {
+        if (sc->redirects.empty() && sc->words.size() == 1 &&
+            !sc->words[0].text.empty() && sc->words[0].text[0] == '%') {
+          std::vector<std::string> bgargv = {"bg", sc->words[0].text};
+          int status = 0;
+          run_builtin(sh_, bgargv, &status);
+          return (sh_.last_status = status);
+        }
+      }
       // Background the first command in its own process group.
       std::string cmd = to_string(c->first.get());
       pid_t pid = fork();
@@ -498,6 +509,16 @@ int Executor::run_simple(const SimpleCommand *c) {
     for (const auto &a : assigns) sh_.set(a.first, a.second);
     restore_fds(saved);
     return (sh_.last_status = sh_.cmdsub_ran ? sh_.last_cmdsub_status : 0);
+  }
+
+  // A bare job spec in command position (`%1', `%', `%%', `%-', `%name') is a
+  // synonym for `fg %spec'.  (The backgrounding form `%spec &' is turned into
+  // `bg %spec' in run_connection before we ever get here.)
+  if (argv.size() == 1 && argv[0][0] == '%') {
+    std::vector<std::string> fgargv = {"fg", argv[0]};
+    int status = 0;
+    run_builtin(sh_, fgargv, &status);
+    return (sh_.last_status = status);
   }
 
   // Builtins and functions run in-process (with redirects applied/restored).

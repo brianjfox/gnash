@@ -52,7 +52,11 @@ void Shell::init_job_control(bool interactive_shell) {
 Shell::Job *Shell::add_job(long pgid, const std::vector<long> &pids, const std::string &cmd,
                            bool background) {
   Job j;
-  j.id = next_job_id++;
+  // Job numbers are one above the highest currently-tracked job, so the count
+  // starts back at 1 whenever the job table has drained (matching bash).
+  int maxid = 0;
+  for (const auto &e : jobs) maxid = std::max(maxid, e.id);
+  j.id = maxid + 1;
   j.pgid = pgid;
   j.pids = pids;
   j.command = cmd;

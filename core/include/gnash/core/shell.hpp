@@ -121,7 +121,6 @@ class Shell {
     bool background = false;
   };
   std::vector<Job> jobs;
-  int next_job_id = 1;
   long shell_pgid = 0;
   int job_terminal = -1;        // controlling-terminal fd, or -1
   bool job_control = false;     // interactive + tty

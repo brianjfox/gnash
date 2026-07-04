@@ -2222,13 +2222,34 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
     sh.print_jobs();
     st = 0;
   } else if (cmd == "fg") {
-    Shell::Job *j = sh.job_by_spec(argv.size() > 1 ? argv[1] : "");
-    if (j) st = sh.foreground_job(*j, true);
-    else { std::fprintf(stderr, "gnash: fg: no current job\n"); st = 1; }
+    std::string spec = argv.size() > 1 ? argv[1] : "";
+    if (!sh.job_control) {
+      std::fprintf(stderr, "%sfg: no job control\n", sh.err_prefix().c_str());
+      st = 1;
+    } else if (Shell::Job *j = sh.job_by_spec(spec)) {
+      std::printf("%s\n", j->command.c_str());  // bash echoes the command
+      std::fflush(stdout);
+      st = sh.foreground_job(*j, true);
+    } else {
+      std::fprintf(stderr, "%sfg: %s: no such job\n", sh.err_prefix().c_str(),
+                   spec.empty() ? "current" : spec.c_str());
+      st = 1;
+    }
   } else if (cmd == "bg") {
-    Shell::Job *j = sh.job_by_spec(argv.size() > 1 ? argv[1] : "");
-    if (j) { sh.background_job(*j, true); st = 0; }
-    else { std::fprintf(stderr, "gnash: bg: no current job\n"); st = 1; }
+    std::string spec = argv.size() > 1 ? argv[1] : "";
+    if (!sh.job_control) {
+      std::fprintf(stderr, "%sbg: no job control\n", sh.err_prefix().c_str());
+      st = 1;
+    } else if (Shell::Job *j = sh.job_by_spec(spec)) {
+      sh.background_job(*j, true);
+      std::printf("[%d]+ %s &\n", j->id, j->command.c_str());  // bash echoes it
+      std::fflush(stdout);
+      st = 0;
+    } else {
+      std::fprintf(stderr, "%sbg: %s: no such job\n", sh.err_prefix().c_str(),
+                   spec.empty() ? "current" : spec.c_str());
+      st = 1;
+    }
   } else if (cmd == "disown") {
     Shell::Job *j = sh.job_by_spec(argv.size() > 1 ? argv[1] : "");
     if (j) {
