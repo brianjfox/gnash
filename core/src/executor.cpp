@@ -503,20 +503,23 @@ int Executor::run_simple(const SimpleCommand *c) {
     return (sh_.last_status = 1);
   }
 
-  // Temporary assignments: set as shell vars for the command, restore after
+  // Temporary assignments: set as shell vars for the command and *exported* so
+  // child processes spawned by a function see them, then fully restored after
   // (for builtins/functions).  For external commands they go into the env.
-  std::vector<std::pair<std::string, std::pair<bool, std::string>>> restore;
+  std::vector<std::pair<std::string, std::optional<Variable>>> restore;
   auto apply_temp = [&]() {
     for (const auto &a : assigns) {
-      bool had = sh_.is_set(a.first);
-      restore.push_back({a.first, {had, had ? sh_.get(a.first) : std::string()}});
+      auto it = sh_.vars.find(a.first);
+      restore.push_back({a.first,
+                         it == sh_.vars.end() ? std::nullopt : std::optional<Variable>(it->second)});
       sh_.set(a.first, a.second);
+      sh_.vars[a.first].exported = true;  // visible to the command's children
     }
   };
   auto undo_temp = [&]() {
     for (auto it = restore.rbegin(); it != restore.rend(); ++it) {
-      if (it->second.first) sh_.set(it->first, it->second.second);
-      else sh_.unset(it->first);
+      if (it->second) sh_.vars[it->first] = *it->second;
+      else sh_.vars.erase(it->first);
     }
     restore.clear();
   };

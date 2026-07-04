@@ -2060,9 +2060,11 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
       std::ifstream f(path);
       if (f) {
         std::ostringstream ss; ss << f.rdbuf();
-        // A sourced file becomes the innermost BASH_SOURCE frame; the call line
-        // is where `source' appears in the current file.
-        sh.push_src_frame("source", argv[1], sh.cur_lineno, false);
+        // A sourced file becomes the innermost BASH_SOURCE frame; use the
+        // resolved path (bash records the PATH-found path, not the bare name),
+        // so ${BASH_SOURCE[0]} lets a script locate itself.  The call line is
+        // where `source' appears in the current file.
+        sh.push_src_frame("source", path, sh.cur_lineno, false);
         st = sh.run_string(ss.str());
         sh.pop_src_frame();
       }

@@ -89,6 +89,7 @@ bool Shell::dynamic_var(const std::string &name, std::string &out) {
   }
   if (name == "LINENO") { out = std::to_string(cur_lineno); return true; }
   if (name == "BASHPID") { out = std::to_string(static_cast<long>(getpid())); return true; }
+  if (name == "BASH_ARGV0") { out = arg0; return true; }  // reflects $0; always set
   if (name == "BASH_SUBSHELL") { out = std::to_string(subshell_level); return true; }
   if (name == "EPOCHSECONDS") {
     out = std::to_string(static_cast<long long>(std::time(nullptr)));

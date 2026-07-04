@@ -10,7 +10,7 @@ Sometimes, people were confused by licensing, and chose software based on how le
 I had multiple goals in mind when creating gnash:
 
 1. Create a replacement shell that makes the reasons for having different shells go away. When running scripts, `gnash` should behave *identically* to the personality it is invoked as: **bash**, **ash**, **ksh**, **zsh**, or even **csh**/**tcsh** -- the same stdout/stderr, exit status, side effects, and error semantics.
-2. I wanted to connect people to the fact that the relationship of humans to software is changing drastically.  Humans still need to be motivating factor behind the existance of the software, and often, we have architectural goals that are larger than a single, or even a suite, of software.  But writing clean and efficient code is no longer the purview of meat-people.  gnash was conceived of, designed, and written in approximately 3 hours of human attention coupled with 5 hours of computational coding.
+2. I wanted to connect people to the fact that the relationship of humans to software is changing drastically.  Humans still need to be the motivating factor behind the existance of the software, and often, we have architectural goals that are larger than a single, or even a suite, of software.  But writing clean and efficient code is no longer the purview of meat-people.  gnash was conceived of, designed, and written in approximately 3 hours of human attention coupled with 5 hours of computational coding.
 
 ## How to Build It
 **gnash** needs a C++20 compiler and CMake ≥ 3.16.
