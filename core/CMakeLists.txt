@@ -10,6 +10,7 @@ add_library(gnash_core STATIC
   src/builtins.cpp
   src/jobs.cpp
   src/prompt.cpp
+  src/csh.cpp
   src/repl.cpp)
 add_library(gnash::core ALIAS gnash_core)
 

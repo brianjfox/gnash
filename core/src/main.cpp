@@ -135,9 +135,31 @@ void read_posix_startup_files(Shell &sh, bool login, bool interactive, const Sta
   }
 }
 
+// csh/tcsh: a login shell reads /etc/csh.cshrc then /etc/csh.login then
+// ~/.cshrc (or ~/.tcshrc) then ~/.login; a non-login interactive shell reads
+// just the cshrc files.  These files are csh syntax, so source_if_exists runs
+// them through the csh interpreter (run_string dispatches on the persona).
+void read_csh_startup_files(Shell &sh, bool login, bool interactive, const StartupOpts &o) {
+  const char *home = std::getenv("HOME");
+  std::string h = home ? home : "";
+  if (!o.norc) {
+    source_if_exists(sh, "/etc/csh.cshrc");
+    if (!h.empty()) {
+      if (file_readable(h + "/.tcshrc")) source_if_exists(sh, h + "/.tcshrc");
+      else source_if_exists(sh, h + "/.cshrc");
+    }
+  }
+  if (login && !o.noprofile) {
+    source_if_exists(sh, "/etc/csh.login");
+    if (!h.empty()) source_if_exists(sh, h + "/.login");
+  }
+  (void)interactive;
+}
+
 void read_startup_files(Shell &sh, const std::string &prefix, bool login, bool interactive,
                         const StartupOpts &o) {
   if (sh.is_zsh()) { read_zsh_startup_files(sh, login, interactive, o); return; }
+  if (sh.is_csh()) { read_csh_startup_files(sh, login, interactive, o); return; }
   if (sh.is_ash() || sh.is_ksh()) { read_posix_startup_files(sh, login, interactive, o); return; }
 
   const char *home = std::getenv("HOME");
@@ -188,6 +210,8 @@ void configure_persona(Shell &sh, const std::string &personality, const std::str
   else if (personality == "ksh" || personality == "ksh93" || personality == "mksh" ||
            personality == "pdksh" || personality == "rksh")
     sh.persona = Shell::Persona::Ksh;
+  else if (personality == "csh" || personality == "tcsh")
+    sh.persona = Shell::Persona::Csh;
   else sh.persona = Shell::Persona::Bash;
   sh.set("GNASH_PERSONALITY", personality);
 
@@ -208,6 +232,10 @@ void configure_persona(Shell &sh, const std::string &personality, const std::str
     sh.set("KSH_VERSION", "Version AJM 93u+ 2012-08-01");
   } else if (sh.persona == Shell::Persona::Ash) {
     // ash is minimal: it advertises no BASH_/ZSH_ identity variables.
+  } else if (sh.persona == Shell::Persona::Csh) {
+    // csh identity ($shell, $version) is set up by the csh interpreter; the
+    // language is different enough that the Bourne BASH_* vars don't apply.
+    sh.set("shell", exec_path);
   } else {
     sh.set("BASH", exec_path);
     sh.set("BASH_VERSION", "5.3.0(1)-release");
@@ -358,6 +386,10 @@ int main(int argc, char **argv) {
         // zsh prompt escapes use `%': user@host:cwd then %/# (root).
         if (!sh.is_set("PS1")) sh.set("PS1", "%n@%m:%~%# ");
         if (!sh.is_set("PS2")) sh.set("PS2", "%_> ");
+      } else if (sh.is_csh()) {
+        // csh prompt escapes also use `%': host:cwd then %# (`#' for root).
+        if (!sh.is_set("PS1")) sh.set("PS1", "%m:%~%# ");
+        if (!sh.is_set("PS2")) sh.set("PS2", "? ");
       } else if (sh.is_ash() || sh.is_ksh()) {
         // ash/ksh/POSIX: a plain "$ " prompt ("# " for root).
         if (!sh.is_set("PS1")) sh.set("PS1", getuid() == 0 ? "# " : "$ ");

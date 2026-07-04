@@ -12,6 +12,7 @@
 #include <sys/time.h>
 #include <sys/wait.h>
 
+#include "gnash/core/csh.hpp"
 #include "gnash/core/executor.hpp"
 #include "gnash/core/parser.hpp"
 
@@ -355,6 +356,7 @@ std::vector<std::string> Shell::environ_block() const {
 }
 
 int Shell::run_string(const std::string &script) {
+  if (is_csh()) return run_csh(*this, script);  // csh is a different language
   // Aliases are expanded only when interactive or `shopt -s expand_aliases'.
   bool expand_al = interactive;
   auto eit = shopt_opts.find("expand_aliases");
