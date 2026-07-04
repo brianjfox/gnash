@@ -10,6 +10,7 @@
 #include <cstring>
 #include <csignal>
 #include <ctime>
+#include <time.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/time.h>
@@ -80,7 +81,7 @@ int Shell::next_random() {
 const std::vector<std::string> &Shell::special_var_names() {
   static const std::vector<std::string> names = {
       "RANDOM", "SECONDS", "LINENO", "BASHPID", "BASH_SUBSHELL",
-      "EPOCHSECONDS", "EPOCHREALTIME", "HISTCMD"};
+      "EPOCHSECONDS", "EPOCHREALTIME", "BASH_MONOSECONDS", "HISTCMD"};
   return names;
 }
 
@@ -109,6 +110,12 @@ bool Shell::dynamic_var(const std::string &name, std::string &out) {
     std::snprintf(b, sizeof b, "%lld.%06d", static_cast<long long>(tv.tv_sec),
                   static_cast<int>(tv.tv_usec));
     out = b;
+    return true;
+  }
+  if (name == "BASH_MONOSECONDS") {  // seconds from the monotonic clock (bash 5.3)
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    out = std::to_string(static_cast<long long>(ts.tv_sec));
     return true;
   }
   return false;
