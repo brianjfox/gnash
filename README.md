@@ -23,7 +23,7 @@ libsh        low-level utilities (alloc, quoting, shell-env seam)
   ├─ libreadline    line editing + completion hooks
   └─ libglob        pattern matching + filename globbing
 core   shell: parse → expand → execute + jobs + REPL    
-```:
+```
 
 Build it: gnash needs a C++20 compiler and CMake ≥ 3.16.
 
@@ -39,7 +39,7 @@ Build it: gnash needs a C++20 compiler and CMake ≥ 3.16.
 
 Then, on any platform:
 
-```sh
+```bash
 cmake -S . -B build -DGNASH_WERROR=ON
 cmake --build build -j
 ```
@@ -94,7 +94,8 @@ Each library exposes a **modern C++ API** under `namespace gnash::*` (headers in
   `<strmatch.h>` and `<glob.h>`. Extended-glob and bracket results verified against bash 5.3.
   Locale collation is simplified to C/ASCII; wide-character matching is a later addition.
 
-- **core** — the shell, in progress. Landed: the **lexer** (quoting, `$(...)`/`` ` ``/`${...}`
+- **core** — the shell: a working, interactive, bash-5.3-compatible shell. Landed: the
+  **lexer** (quoting, `$(...)`/`` ` ``/`${...}`
   opaque spans, extended-glob patterns, array-assignment words, operators, IO numbers,
   comments, line continuation, here-document collection, and unterminated-span detection) and
   a recursive-descent **parser → AST** (`gnash::core`) covering lists, and-or, pipelines
@@ -108,38 +109,48 @@ Each library exposes a **modern C++ API** under `namespace gnash::*` (headers in
   files with no crashes and **74/83 accept/reject agreement** — the remaining few are `bash -n`
   oracle limits (extglob/printf checked without `shopt`) or deep edge cases (comments inside
   `$(...)`, array-element syntax, exported-function env encoding).
-  - **Expansion + execution** — gnash now *runs scripts*. The expander implements the
-    `subst.c` pipeline in order: brace expansion, tilde, parameter/`${...}` (defaults, length,
-    prefix/suffix removal, substitution, substring, case-mod), command substitution
-    `$(...)`/`` ` ``, arithmetic `$(( ))`, word splitting on `IFS`, pathname (via libglob), and
-    quote removal. A recursive-descent arithmetic evaluator backs `$(( ))`/`(( ))`. The executor
-    runs simple commands (PATH exec + fork), pipelines, `&&`/`||`/`;`/`&`, subshells, groups,
-    `if`/`while`/`until`/`for` (incl. arithmetic-for)/`case`, functions (with `local` scoping),
-    redirections (incl. here-docs/here-strings/dup/`&>`), and `[[ ]]`/`(( ))`. **Indexed and
-    associative arrays** (`a=(...)`, `a[i]=`, `a+=(...)`, `${a[@]}`, `${#a[@]}`, `${!a[@]}`,
-    `declare -A`). Options: `set -e` (errexit, with condition-context suppression) and `set -u`
-    (nounset). **Traps** (`trap … EXIT` and by-signal storage). Builtins: `: true false echo
-    printf cd pwd export unset set shift exit return break continue eval source/. read test/[
-    local declare typeset readonly let type trap umask getopts exec command times wait`. The
-    `gnash` binary runs `gnash -c CMD`, `gnash SCRIPT`, or stdin. Verified by a **differential
-    execution harness** (`run_diff.sh`): 63 scripts spanning all of the above produce identical
-    stdout and exit status to bash 5.3.
-  - **Job control** — each pipeline / background command runs in its own process group;
-    the shell hands the controlling terminal to a foreground job and reclaims it (when
-    interactive), reaps children, and maintains a job table. `&` backgrounding with `$!`,
-    and the builtins `jobs`/`fg`/`bg`/`wait`/`disown`/`kill` (with signal-name lookup). The
-    63→70-script differential harness now also covers backgrounding, `wait`/`$!`, `kill`,
-    and multi-stage pipelines feeding builtins — all matching bash 5.3 (incl. `128+signum`
-    exit status and correct output ordering across the stdio/redirection boundary).
-    Not yet: array literals *via* `declare -a name=(...)` (prefix `name=(...)` works),
-    `Ctrl-Z`/`fg` round-trip, signal-trap delivery, full option set.
-  - **Interactive REPL** — `gnash` with a terminal starts a full read-eval-print loop that
-    ties the whole project together: **libreadline** does the line editing, **libhistory**
-    does history + `!`-expansion, and the shell core parses/executes. Prompt expansion
-    (`PS1`/`PS2` with `\u \h \w \W \$ \s \v \t \d …`), multi-line continuation for compound
-    commands, unterminated quotes, here-documents and trailing `\`, arrow-key history recall,
-    `!!`/`^old^new^` expansion, a persistent history file (`$HISTFILE`/`~/.gnash_history`),
-    interactive job control, and the `EXIT` trap. Verified by driving gnash through a
+  - **Expansion + execution** — gnash *runs scripts* and matches bash 5.3. The expander
+    implements the `subst.c` pipeline in order: brace, tilde, parameter/`${...}` (defaults,
+    length, prefix/suffix removal, substitution, substring, case-mod, and the
+    `@Q/@E/@P/@U/@u/@L/@a/@A` transformations — applied element-wise over `${a[@]}`), command
+    substitution `$(...)`/`` ` ``, **function substitution `${ cmd; }`**, arithmetic `$(( ))`,
+    **process substitution `<(...)`/`>(...)`**, word splitting on `IFS` (quoted-null and
+    quoted-glob correct), pathname (via libglob, incl. `nullglob`), and quote removal. Dynamic
+    specials: `$RANDOM` (bit-exact to bash's PRNG), `$SECONDS`, `$LINENO`, `$BASHPID`,
+    `$BASH_SUBSHELL`, `$EPOCHSECONDS`/`$EPOCHREALTIME`, plus `$BASH_VERSINFO`, `$SHELL`,
+    `$MACHTYPE`. The executor runs simple commands, pipelines, `&&`/`||`/`;`/`&`, subshells,
+    groups, every compound command, functions (with `local` scoping and a `caller` call stack),
+    redirections, and `[[ ]]` (incl. `=~` populating `BASH_REMATCH`) / `(( ))`. Indexed &
+    associative arrays, incl. `declare -a a=(...)` and assignment-builtin no-split. `cd`/`pwd`
+    track the logical `$PWD` (not the symlink-resolved path). `set -e`/`set -u`/`set -o`,
+    `shopt`, and **traps delivered asynchronously between commands** (via a signal-safe pending
+    flag). Runtime errors use bash's `name: line N: …` format. **Builtins: the full set bash
+    documents** — the core `: echo printf read test cd export unset set eval source …`, plus
+    `jobs/fg/bg/disown/kill/suspend`, `pushd/popd/dirs`, `mapfile/readarray`, `alias/unalias`,
+    `history/fc`, `hash`, `shopt`, `ulimit`, `enable`, `caller`, `bind`, `compgen/complete/
+    compopt`, `help`, and `builtin`; `printf` supports `-v`/`%q`/`%b`, `type` all its flags.
+    Verified by a **differential execution harness** (`run_diff.sh`): **152 scripts** produce
+    identical stdout and exit status to bash 5.3.
+  - **Job control** — each pipeline / background command runs in its own process group; the
+    shell hands the controlling terminal to a foreground job and reclaims it, reaps children,
+    and maintains a job table. `&` with `$!`, `%n` job specs, and the `jobs/fg/bg/wait/disown/
+    kill/suspend` builtins (incl. `128+signum` status). Background-completion notices are
+    reported **asynchronously the moment a job finishes**, not just before the next prompt.
+  - **Startup, options & personalities** — bash-compliant command-line parsing (grouped short
+    flags `-lx`, `+`-unset, long options, `-c`/`-s`/`-l`/`--`), and bash-style startup files
+    (`/etc/profile`, `~/.bash_profile` / `~/.bashrc` / `$BASH_ENV`) with the personal-file names
+    derived from the invocation. gnash can also take on the **personality** of another shell via
+    `--personality=<name>` (which wins) or its invocation name, exposed as `$GNASH_PERSONALITY`:
+    **zsh** (`%`-prompt, `.zsh*` startup, `$ZSH_VERSION`, live command-line syntax highlighting),
+    **ash/dash** (POSIX `$ENV` startup, a `$ ` prompt via parameter expansion), and **ksh**
+    (`$KSH_VERSION`, `!`→history-number prompt) — alongside the default bash/gnash.
+  - **Interactive REPL** — `gnash` with a terminal starts a full read-eval-print loop that ties
+    the whole project together: **libreadline** edits, **libhistory** does history + `!`-
+    expansion, the core parses/executes. Prompt expansion (a `\u@\h:\w\$ ` default), multi-line
+    continuation, arrow-key recall, `!!`/`^old^new^`, a persistent history file
+    (`$HISTFILE`/`~/.gnash_history`), interactive job control, `EXIT`/signal traps, and
+    completion — filenames (a trailing `/` for directories), `$`-variable names (incl. the
+    dynamic specials), and per-persona syntax highlighting. Verified by driving gnash through a
     pseudo-terminal.
 
 ## Build & test
@@ -156,18 +167,22 @@ Options: `-DGNASH_SANITIZE=ON` (ASan/UBSan), `-DGNASH_BUILD_TESTS=OFF`.
 
 ## Conformance
 
-Two harnesses:
+Three harnesses:
 
 - **Differential** (`tests/harness/run_diff.sh`, gated in ctest) — runs a growing corpus
   of scripts under both gnash and bash 5.3 and requires identical stdout + exit status.
-  Currently 70 scripts covering expansion, arithmetic, control flow, arrays, functions,
-  redirection, and job control — all matching.
+  Currently **152 scripts** covering expansion, arithmetic, control flow, arrays, functions,
+  redirection, process substitution, the special variables, the full builtin set, and job
+  control — all matching.
+- **Error format** (`tests/harness/errfmt.sh`, gated in ctest) — diffs stderr for a set of
+  error cases against bash, normalizing the leading program name. gnash now emits bash's
+  exact `name: line N: context: message` format; the only difference is the program name
+  (`gnash` vs `bash`), which is inherent.
 - **bash test suite** (`tests/harness/conformance.sh`) — runs bash's own `tests/*.tests`
   under gnash (with `$THIS_SH`/env set up like bash's `run-all`, and the `recho`/`zecho`
   helpers built) and diffs against the checked-in `.right` files. This is a *progress
-  metric*, not a hard gate: many `.right` files capture bash's exact error-message text
-  (`bash: line N: …: command not found`) and self-test summaries, so a behaviourally-correct
-  gnash still diverges on those lines. Current baseline: **2/82 byte-identical** — the
-  differential harness (individual constructs cross-checked against real bash) is the more
-  representative signal. The tests gnash reproduces exactly are pinned as a ctest regression
-  gate (`conformance_gate.sh`).
+  metric*, not a hard gate: many `.right` files capture the exact program name in error text
+  and self-test summaries, so a behaviourally-correct gnash still diverges on those lines.
+  The differential and error-format harnesses (individual constructs cross-checked against
+  real bash) are the more representative signal. The tests gnash reproduces exactly are
+  pinned as a ctest regression gate (`conformance_gate.sh`).
