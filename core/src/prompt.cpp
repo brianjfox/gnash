@@ -7,6 +7,7 @@
 #include "readline/history.h"
 #include "gnash/core/shell.hpp"
 
+#include <cctype>
 #include <cstdlib>
 #include <ctime>
 #include <vector>
