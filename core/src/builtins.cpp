@@ -2227,6 +2227,28 @@ struct CondEval {
       if (!at_end()) i++;
       if (o == 'z') return arg.empty();
       if (o == 'n') return !arg.empty();
+      if (o == 'v') {  // -v NAME: true if the variable (or array element) is set
+        size_t br = arg.find('[');
+        if (br != std::string::npos && !arg.empty() && arg.back() == ']') {
+          std::string nm = arg.substr(0, br);
+          std::string sub = arg.substr(br + 1, arg.size() - br - 2);
+          if (sub == "@" || sub == "*") return sh.array_count(nm) > 0;
+          for (const std::string &k : sh.array_keys(nm)) if (k == sub) return true;
+          return false;
+        }
+        if (sh.is_set(arg)) return true;
+        std::string dv;
+        if (sh.dynamic_var(arg, dv)) return true;
+        if (!arg.empty() && std::isdigit(static_cast<unsigned char>(arg[0]))) {
+          size_t idx = static_cast<size_t>(std::atoi(arg.c_str()));
+          return idx >= 1 && idx <= sh.positional.size();
+        }
+        return false;
+      }
+      if (o == 'R') {  // -R NAME: set and a nameref
+        auto it = sh.vars.find(arg);
+        return it != sh.vars.end() && it->second.nameref;
+      }
       return file_test(o, arg);
     }
     // word [ binop word ]
