@@ -758,7 +758,7 @@ void Expander::process(const std::string &text, std::string &out, std::string &m
     char c = text[i];
     if (heredoc && (c == '\'' || c == '"')) {
       // Inside a here-document, quote characters are ordinary text.
-      out += c; mask += '0'; i++;
+      out += c; mask += '2'; i++;
     } else if (c == '\'') {
       out += QNULL; mask += '1';  // a quote region yields a field even if empty
       i++;
@@ -832,8 +832,11 @@ void Expander::process(const std::string &text, std::string &out, std::string &m
       for (char ch : res) { out += ch; mask += '0'; }
       i = (j < text.size()) ? j + 1 : j;
     } else {
+      // Literal (unquoted, not from expansion): mask '2' -- glob-active like an
+      // unquoted char, but NOT subject to IFS word-splitting (only expansion
+      // output, mask '0', is split).
       out += c;
-      mask += '0';
+      mask += '2';
       i++;
     }
   }
@@ -851,7 +854,9 @@ std::vector<std::pair<std::string, std::string>> Expander::split_ifs(const std::
   size_t i = 0;
   while (i < s.size()) {
     char c = s[i];
-    bool q = mask[i] == '1';
+    // Only expansion output (mask '0') is IFS-split; quoted ('1') and literal
+    // ('2') text is never split, even when it contains IFS characters.
+    bool q = mask[i] != '0';
     if (!q && c == FIELD_SEP) {
       flush();
       i++;
@@ -860,7 +865,7 @@ std::vector<std::pair<std::string, std::string>> Expander::split_ifs(const std::
     if (!q && is_ifs(c)) {
       if (is_ws(c)) {
         if (have) flush();
-        while (i < s.size() && mask[i] != '1' && is_ifs(s[i]) && is_ws(s[i])) i++;
+        while (i < s.size() && mask[i] == '0' && is_ifs(s[i]) && is_ws(s[i])) i++;
       } else {
         flush();
         i++;
