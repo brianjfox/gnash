@@ -12,7 +12,7 @@ I had multiple goals in mind when creating gnash:
 1. Create a replacement shell that makes the reasons for having different shells go away. When running scripts, `gnash` should behave *identically* to the personality it is invoked as: **bash**, **ash**, **ksh**, or **zsh** -- the same stdout/stderr, exit status, side effects, and error semantics.
 2. I wanted to connect people to the fact that the relationship of humans to software is changing drastically.  Humans still need to be motivating factor behind the existance of the software, and often, we have architectural goals that are larger than a single, or even a suite, of software.  But writing clean and efficient code is no longer the purview of meat-people.  gnash was conceived of, designed, and written in approximately 3 hours of human attention coupled with 5 hours of computational coding.
 
-## How to Build
+## How to Build It
 **gnash** needs a C++20 compiler and CMake ≥ 3.16.
 
 - **macOS** — install the Xcode command-line tools and CMake:
@@ -32,11 +32,12 @@ cmake -S . -B build -DGNASH_WERROR=ON
 cmake --build build -j
 ```
 
-## Run it
+## How to Run It
 **gnash** can be run under many different personalities.  The name of the binary (or the value of the `--personality=XXX` option) control which startup files are read, whether syntax highlighting on the command line exists, and other behaviors.  Currently, **gnash** supports running as:
+
 * **bash** -- reads `~/.bash_profile`, `~/.bashrc`, behaves like **bash-5.3**
 * **gnash** -- reads `~/.gnash_profile`, `~/.gnashrc`, behaves like **bash-5.3**
-* **zsh** -- reads `~/.zshenv`, `~/.zprofile`, `~/.zshrc`, `~/.zlogin`, uses `%`-style prompts and highlights the command line as you type, behaves like **bash-5.3**
+* **zsh** -- reads `~/.zshenv`, `~/.zprofile`, `~/.zshrc`, `~/.zlogin`, uses `%`-style prompts and highlights the command line as you type, behaves like **zsh-5.1**
 * **ash** (also **dash**, **sh**) -- reads `/etc/profile`, `~/.profile`, and `$ENV`, uses a plain POSIX `$ ` prompt, behaves like **bash-5.3**
 * **ksh** (also **ksh93**, **mksh**, **pdksh**) -- reads `/etc/profile`, `~/.profile`, and `$ENV`, uses a `$ ` prompt in which `!` expands to the history number, behaves like **bash-5.3**
 
