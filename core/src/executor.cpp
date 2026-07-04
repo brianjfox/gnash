@@ -422,6 +422,11 @@ int Executor::run_pipeline(const Connection *c) {
 
 int Executor::run_simple(const SimpleCommand *c) {
   if (c->line > 0) sh_.cur_lineno = c->line;  // $LINENO
+  // Consume the exec-in-place permission for *this* command up front, so it
+  // applies only to a direct external here -- never to commands that a builtin
+  // (eval/source) or function invoked by this command goes on to run.
+  bool exec_replace = sh_.can_exec_replace;
+  sh_.can_exec_replace = false;
   // DEBUG trap: fires before the command, with $BASH_COMMAND set.  If the trap
   // runs `return'/`exit', skip the command and let the unwind propagate.
   if (sh_.traps.count("DEBUG") && !sh_.in_debug_trap) {
@@ -558,6 +563,27 @@ int Executor::run_simple(const SimpleCommand *c) {
     // builtins see the temp assignments as shell vars
     builtin = true;
   } else {
+    // external command.  If we are a disposable subshell child whose sole
+    // command this is, exec it in place -- become the command with no second
+    // fork/wait (exec_replace was consumed at the top of run_simple).
+    if (exec_replace) {
+      std::vector<std::string> envs = sh_.environ_block();
+      for (const auto &a : assigns) envs.push_back(a.first + "=" + a.second);
+      std::vector<char *> envp;
+      for (auto &e : envs) envp.push_back(const_cast<char *>(e.c_str()));
+      envp.push_back(nullptr);
+      environ = envp.data();
+      std::vector<char *> cargv;
+      for (auto &a : argv) cargv.push_back(const_cast<char *>(a.c_str()));
+      cargv.push_back(nullptr);
+      std::fflush(nullptr);
+      execvp(cargv[0], cargv.data());
+      if (errno == ENOENT && argv[0].find('/') == std::string::npos)
+        std::fprintf(stderr, "%s%s: command not found\n", sh_.err_prefix().c_str(), argv[0].c_str());
+      else
+        std::fprintf(stderr, "%s%s: %s\n", sh_.err_prefix().c_str(), argv[0].c_str(), std::strerror(errno));
+      _exit(errno == EACCES ? 126 : 127);
+    }
     // external command, in its own process group
     pid_t pid = fork();
     if (pid == 0) {
@@ -626,8 +652,11 @@ int Executor::run_subshell(const Subshell *c) {
   if (pid == 0) {
     sh_.job_control = false;  // the subshell runs as one unit; no nested tty control
     sh_.subshell_level++;
+    // (external): a lone simple command can exec in place, no second fork.
+    if (dynamic_cast<const SimpleCommand *>(c->body.get())) sh_.can_exec_replace = true;
     Executor ex(sh_);
     int s = ex.run(c->body.get());
+    sh_.can_exec_replace = false;
     std::fflush(nullptr);
     _exit(s & 0xff);
   }

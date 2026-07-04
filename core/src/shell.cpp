@@ -471,11 +471,16 @@ int Shell::run_string(const std::string &script) {
     last_status = 2;
     return 2;
   }
-  if (!r.command) return last_status;
+  if (!r.command) { subshell_leaf = false; return last_status; }
   const Command *c = r.command.get();
   retained.push_back(std::move(r.command));
+  // A disposable subshell child (command substitution) whose whole body is a
+  // single simple command lets that command's external exec replace us.
+  if (subshell_leaf && dynamic_cast<const SimpleCommand *>(c)) can_exec_replace = true;
+  subshell_leaf = false;
   Executor ex(*this);
   int st = ex.run(c);
+  can_exec_replace = false;
   last_status = st;
   run_pending_traps();  // deliver signals received during the final command
   last_status = st;
@@ -518,6 +523,7 @@ std::string Shell::run_and_capture(const std::string &script, int *status) {
     close(fds[1]);
     job_control = false;  // command substitution: no nested tty control
     subshell_level++;  // $BASH_SUBSHELL
+    subshell_leaf = true;  // a lone external here can exec in place (no 2nd fork)
     int st = run_string(script);
     std::fflush(stdout);
     _exit(st & 0xff);

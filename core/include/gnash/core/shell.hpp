@@ -171,6 +171,13 @@ class Shell {
   long long seconds_base = 0;    // epoch second that $SECONDS counts from
   int cur_lineno = 0;            // $LINENO of the command being executed
   int subshell_level = 0;        // $BASH_SUBSHELL: subshell nesting depth
+  // Exec-in-place optimization: a forked subshell/command-substitution child
+  // whose entire body is a single simple command can `exec' the external
+  // directly instead of forking a second time (matching bash).  subshell_leaf
+  // marks such a disposable child; can_exec_replace is set once the body is
+  // confirmed to be a lone simple command and consumed by the next run_simple.
+  bool subshell_leaf = false;
+  bool can_exec_replace = false;
   int next_random();             // advance the PRNG, return 0..32767
   bool dynamic_var(const std::string &name, std::string &out);  // RANDOM/SECONDS/...
   static const std::vector<std::string> &special_var_names();   // for completion
