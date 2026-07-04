@@ -753,6 +753,10 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
 
 void Expander::process(const std::string &text, std::string &out, std::string &mask,
                        bool /*assignment_rhs*/, bool heredoc) {
+  // Most output is about as long as the input; reserve to avoid reallocating
+  // (and memmoving) the out/mask pair as they grow char by char.
+  out.reserve(out.size() + text.size());
+  mask.reserve(mask.size() + text.size());
   size_t i = 0;
   while (i < text.size()) {
     char c = text[i];
@@ -966,6 +970,8 @@ std::vector<std::string> Expander::expand_args(const std::vector<Word> &words) {
       // an empty field (so "" / "$empty" yield one empty argument).
       for (auto &fm : fields) {
         std::string v, m;
+        v.reserve(fm.first.size());
+        m.reserve(fm.first.size());
         for (size_t k = 0; k < fm.first.size(); k++)
           if (fm.first[k] != QNULL) { v += fm.first[k]; m += fm.second[k]; }
         fm.first = std::move(v);
@@ -985,6 +991,7 @@ std::string Expander::expand_no_split(const std::string &text, bool do_glob) {
   process(src, out, mask, false);
   // drop internal markers: field separators become spaces, quoted-nulls vanish
   std::string joined;
+  joined.reserve(out.size());
   for (char c : out) {
     if (c == FIELD_SEP) joined += ' ';
     else if (c != QNULL) joined += c;
