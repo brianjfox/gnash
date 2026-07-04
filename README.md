@@ -12,6 +12,46 @@ I had multiple goals in mind when creating gnash:
 1. Create a replacement shell that makes the reasons for having different shells go away. When running scripts, `gnash` should behave *identically* to the personality it is invoked as: **bash**, **ash**, **ksh**, **zsh**, or even **csh**/**tcsh** -- the same stdout/stderr, exit status, side effects, and error semantics.
 2. I wanted to connect people to the fact that the relationship of humans to software is changing drastically.  Humans still need to be the motivating factor behind the existance of the software, and often, we have architectural goals that are larger than a single, or even a suite, of software.  But writing clean and efficient code is no longer the purview of meat-people.  gnash was conceived of, designed, and written in approximately 3 hours of human attention coupled with 5 hours of computational coding.
 
+## How to Install It
+
+If you don't want to build from source yourself, install a released version.
+
+### macOS or Linux — Homebrew (recommended)
+
+Homebrew runs on both macOS and Linux, and the same tap works on either:
+
+```sh
+brew tap brianjfox/tools
+brew install gnash
+```
+
+Later, `brew upgrade gnash` picks up new releases. (Homebrew builds gnash from
+source, so there are no macOS code-signing or Gatekeeper prompts.)
+
+### Linux or macOS — install script
+
+No Homebrew? This one-liner downloads the latest release, builds it from source,
+and installs the `gnash` binary:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/brianjfox/gnash/main/install.sh | bash
+```
+
+It needs a C++20 compiler and CMake ≥ 3.16 — install them first if needed
+(`sudo apt install build-essential cmake`, `sudo dnf install gcc-c++ cmake`,
+`sudo pacman -S base-devel cmake`, or `brew install cmake`). By default it
+installs to `/usr/local/bin`, falling back to `~/.local/bin`; override with
+`PREFIX=~/somewhere`, or pin a version with `GNASH_REF=gnash-1.0.2`.
+
+Prefer to look before you leap? The script is [`install.sh`](install.sh) — read
+it, then run `bash install.sh`.
+
+### Prebuilt macOS binary
+
+Every [release](https://github.com/brianjfox/gnash/releases) also ships a
+universal (Apple Silicon + Intel) macOS binary tarball, if you'd rather not use
+Homebrew or build anything.
+
 ## How to Build It
 **gnash** needs a C++20 compiler and CMake ≥ 3.16.
 
