@@ -10,13 +10,14 @@
 # they are never asked again.  Re-comment "recreate-signatures" (maintainers)
 # to rebuild the signature check.
 #
-# Setup required once (see the runbook in the PR / commit message):
-#   1. A repo secret named CLA_SIGNATURES_TOKEN holding a Personal Access Token
-#      with permission to write this repo (classic: `repo` scope; fine-grained:
-#      Contents + Pull requests = Read/Write).  The bot uses it to store
-#      signatures and to comment.
-#   2. Make the "CLA Assistant" check a required status check on the protected
-#      branch so PRs cannot merge until it passes.
+# Signatures are stored in this repo on the dedicated `cla-signatures' branch,
+# so the built-in GITHUB_TOKEN is enough -- no Personal Access Token or secret
+# is required (a PAT is only needed to store signatures in a *separate* repo),
+# and signature commits never touch the protected `main' branch.
+#
+# Setup required once: make the CLA check a required status check on `main' so
+# pull requests cannot merge until it passes (its exact name is read off the
+# first PR run).
 
 name: CLA Assistant
 
@@ -47,11 +48,10 @@ jobs:
         uses: contributor-assistant/github-action@v2.6.1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PERSONAL_ACCESS_TOKEN: ${{ secrets.CLA_SIGNATURES_TOKEN }}
         with:
           path-to-document: 'https://github.com/brianjfox/gnash/blob/main/CLA.md'
           path-to-signatures: 'signatures/version1/cla.json'
-          branch: 'main'
+          branch: 'cla-signatures'
           # People who never need to sign (the maintainer, bots).
           allowlist: brianjfox,*[bot]
           custom-notsigned-prcomment: >-
