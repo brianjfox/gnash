@@ -553,9 +553,17 @@ int Executor::run_simple(const SimpleCommand *c) {
     auto fsit = sh_.func_src.find(argv[0]);
     std::string def_src = (fsit != sh_.func_src.end()) ? fsit->second : sh_.current_source();
     sh_.push_src_frame(argv[0], def_src, sh_.cur_lineno, true);
+    // BASH_ARGC/BASH_ARGV call-argument stack (extdebug only).  At the outermost
+    // call, snapshot the script's positionals for the trailing "main" frame.
+    bool pushed_argframe = sh_.opt_extdebug;
+    if (pushed_argframe) {
+      if (sh_.argframes.empty()) sh_.top_positionals = saved_pos;
+      sh_.argframes.emplace_back(argv.begin() + 1, argv.end());
+    }
     sh_.push_scope();
     status = run(fit->second);
     sh_.pop_scope();
+    if (pushed_argframe && !sh_.argframes.empty()) sh_.argframes.pop_back();
     sh_.pop_src_frame();
     sh_.call_stack.pop_back();
     sh_.positional = saved_pos;

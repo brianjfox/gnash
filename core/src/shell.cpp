@@ -81,7 +81,8 @@ int Shell::next_random() {
 const std::vector<std::string> &Shell::special_var_names() {
   static const std::vector<std::string> names = {
       "RANDOM", "SECONDS", "LINENO", "BASHPID", "BASH_SUBSHELL",
-      "EPOCHSECONDS", "EPOCHREALTIME", "BASH_MONOSECONDS", "HISTCMD"};
+      "EPOCHSECONDS", "EPOCHREALTIME", "BASH_MONOSECONDS", "HISTCMD",
+      "BASHOPTS", "BASH_ALIASES", "BASH_CMDS", "BASH_ARGC", "BASH_ARGV"};
   return names;
 }
 
@@ -116,6 +117,53 @@ bool Shell::dynamic_var(const std::string &name, std::string &out) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     out = std::to_string(static_cast<long long>(ts.tv_sec));
+    return true;
+  }
+  if (name == "BASHOPTS") {  // colon-separated list of the enabled shopt options
+    std::string r;
+    for (const auto &kv : shopt_opts) if (kv.second) { if (!r.empty()) r += ':'; r += kv.first; }
+    out = r;
+    return true;
+  }
+  return false;
+}
+
+// The call-stack argument arrays $BASH_ARGC / $BASH_ARGV, populated only under
+// `shopt -s extdebug'.  Both list the innermost frame first, with a trailing
+// entry for the base ("main") script.  In $BASH_ARGV each frame's arguments
+// appear in reverse order (bash builds it by pushing args as they are seen).
+std::vector<std::string> Shell::bash_argc_view() const {
+  std::vector<std::string> out;
+  if (argframes.empty()) return out;  // only exists while in a function w/ extdebug
+  for (auto it = argframes.rbegin(); it != argframes.rend(); ++it)
+    out.push_back(std::to_string(static_cast<int>(it->size())));
+  out.push_back(std::to_string(static_cast<int>(top_positionals.size())));
+  return out;
+}
+std::vector<std::string> Shell::bash_argv_view() const {
+  std::vector<std::string> out;
+  if (argframes.empty()) return out;
+  for (auto it = argframes.rbegin(); it != argframes.rend(); ++it)
+    for (auto a = it->rbegin(); a != it->rend(); ++a) out.push_back(*a);
+  for (auto it = top_positionals.rbegin(); it != top_positionals.rend(); ++it) out.push_back(*it);
+  return out;
+}
+
+// BASH_ALIASES/BASH_CMDS/BASH_ARGC/BASH_ARGV present live shell tables as
+// arrays.  Fills PAIRS (ordered key,value) and returns true for those names.
+bool Shell::virtual_array(const std::string &name,
+                          std::vector<std::pair<std::string, std::string>> &pairs) const {
+  if (name == "BASH_ALIASES") {
+    for (const auto &kv : aliases) pairs.emplace_back(kv.first, kv.second);
+    return true;
+  }
+  if (name == "BASH_CMDS") {
+    for (const auto &kv : hashed) pairs.emplace_back(kv.first, kv.second);
+    return true;
+  }
+  if (name == "BASH_ARGC" || name == "BASH_ARGV") {
+    auto v = (name == "BASH_ARGC") ? bash_argc_view() : bash_argv_view();
+    for (size_t i = 0; i < v.size(); i++) pairs.emplace_back(std::to_string(i), v[i]);
     return true;
   }
   return false;
@@ -208,6 +256,10 @@ std::string Shell::deref(const std::string &n) const {
 }
 
 bool Shell::is_set(const std::string &n_in) const {
+  // BASH_ALIASES/BASH_CMDS always exist; BASH_ARGC/BASH_ARGV exist while their
+  // (extdebug-only) view is non-empty.
+  if (n_in == "BASH_ALIASES" || n_in == "BASH_CMDS") return true;
+  if (n_in == "BASH_ARGC" || n_in == "BASH_ARGV") return !argframes.empty();
   std::string n = deref(n_in);
   return vars.count(n) != 0;
 }
@@ -225,8 +277,15 @@ std::string Shell::get(const std::string &n_in) const {
 // ---- arrays ---------------------------------------------------------------
 
 std::vector<std::string> Shell::array_values(const std::string &n_in) const {
-  std::string n = deref(n_in);
   std::vector<std::string> out;
+  {
+    std::vector<std::pair<std::string, std::string>> vp;
+    if (virtual_array(n_in, vp)) {
+      for (auto &kv : vp) out.push_back(kv.second);
+      return out;
+    }
+  }
+  std::string n = deref(n_in);
   auto it = vars.find(n);
   if (it == vars.end()) return out;
   const Variable &v = it->second;
@@ -240,8 +299,15 @@ std::vector<std::string> Shell::array_values(const std::string &n_in) const {
 }
 
 std::vector<std::string> Shell::array_keys(const std::string &n_in) const {
-  std::string n = deref(n_in);
   std::vector<std::string> out;
+  {
+    std::vector<std::pair<std::string, std::string>> vp;
+    if (virtual_array(n_in, vp)) {
+      for (auto &kv : vp) out.push_back(kv.first);
+      return out;
+    }
+  }
+  std::string n = deref(n_in);
   auto it = vars.find(n);
   if (it == vars.end()) return out;
   const Variable &v = it->second;
@@ -255,6 +321,18 @@ std::vector<std::string> Shell::array_keys(const std::string &n_in) const {
 }
 
 std::string Shell::array_get(const std::string &n_in, const std::string &sub) const {
+  if (n_in == "BASH_ALIASES" || n_in == "BASH_CMDS") {  // string-keyed live tables
+    const auto &tbl = (n_in == "BASH_ALIASES") ? aliases : hashed;
+    auto it = tbl.find(sub);
+    return it != tbl.end() ? it->second : std::string();
+  }
+  if (n_in == "BASH_ARGC" || n_in == "BASH_ARGV") {  // numeric-indexed views
+    auto v = (n_in == "BASH_ARGC") ? bash_argc_view() : bash_argv_view();
+    bool ok = true;
+    long long k = eval_arith(const_cast<Shell &>(*this), sub, &ok);
+    if (!ok) k = 0;
+    return (k >= 0 && k < static_cast<long long>(v.size())) ? v[k] : std::string();
+  }
   std::string n = deref(n_in);
   auto it = vars.find(n);
   if (it == vars.end()) return std::string();
@@ -284,6 +362,10 @@ void Shell::array_set(const std::string &n_in, const std::string &sub, const std
 }
 
 int Shell::array_count(const std::string &n_in) const {
+  {
+    std::vector<std::pair<std::string, std::string>> vp;
+    if (virtual_array(n_in, vp)) return static_cast<int>(vp.size());
+  }
   std::string n = deref(n_in);
   auto it = vars.find(n);
   if (it == vars.end()) return 0;

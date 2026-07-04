@@ -50,6 +50,14 @@ class Shell {
   std::vector<std::string> array_values(const std::string &n) const;
   std::vector<std::string> array_keys(const std::string &n) const;
   std::string array_get(const std::string &n, const std::string &sub) const;
+  // $BASH_ARGC / $BASH_ARGV views (only non-empty inside a function under
+  // `shopt -s extdebug'); see bash_argc_view/bash_argv_view in shell.cpp.
+  std::vector<std::string> bash_argc_view() const;
+  std::vector<std::string> bash_argv_view() const;
+  // BASH_ALIASES/BASH_CMDS/BASH_ARGC/BASH_ARGV expose live shell tables as
+  // arrays; fills PAIRS (ordered key,value) and returns true for those names.
+  bool virtual_array(const std::string &name,
+                     std::vector<std::pair<std::string, std::string>> &pairs) const;
   void array_set(const std::string &n, const std::string &sub, const std::string &v);
   int array_count(const std::string &n) const;
   // Assign name=(elements...); each element is (optional explicit subscript, value).
@@ -203,6 +211,14 @@ class Shell {
   std::string bash_command;   // $BASH_COMMAND: the command currently executing
   bool in_debug_trap = false; // guard: don't fire the DEBUG trap within itself
   int command_number = 1;     // \# prompt escape: commands entered this session
+  bool opt_extdebug = false;  // `shopt -s extdebug': enables BASH_ARGC/BASH_ARGV
+  // Call-argument stack for $BASH_ARGC/$BASH_ARGV (only maintained under
+  // extdebug).  argframes holds one entry per active function call -- that
+  // call's positional arguments ($1..$n, in order) -- pushed on entry, popped
+  // on return.  top_positionals snapshots the outermost (script) $1.. so the
+  // trailing "main" frame can be reported.  See bash_argc_view/bash_argv_view.
+  std::vector<std::vector<std::string>> argframes;
+  std::vector<std::string> top_positionals;
 
   // --- functions ---------------------------------------------------------
   std::map<std::string, const Command *> functions;

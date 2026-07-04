@@ -1481,11 +1481,15 @@ static const struct { const char *name; bool on; } kShoptDefaults[] = {
     {"shift_verbose", false}, {"sourcepath", true}, {"varredir_close", false}, {"xpg_echo", false},
 };
 
+}  // namespace (close the anonymous namespace so shopt_seed has external linkage)
+
 void shopt_seed(Shell &sh) {
   if (!sh.shopt_opts.empty()) return;
   for (const auto &o : kShoptDefaults) sh.shopt_opts[o.name] = o.on;
   sh.shopt_opts["login_shell"] = sh.login_shell;
 }
+
+namespace {  // reopen the anonymous namespace
 
 int bi_shopt(Shell &sh, const std::vector<std::string> &argv) {
   shopt_seed(sh);
@@ -1540,6 +1544,7 @@ int bi_shopt(Shell &sh, const std::vector<std::string> &argv) {
       if (!it->second) st = 1;
     }
   }
+  sh.opt_extdebug = sh.shopt_opts["extdebug"];  // gates BASH_ARGC/BASH_ARGV
   return st;
 }
 

@@ -20,6 +20,10 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status);
 // interactive syntax highlighting.
 bool command_is_valid(Shell &sh, const std::string &name);
 
+// Populate sh.shopt_opts with the default shopt option states (idempotent).
+// Called at startup so $BASHOPTS reflects the defaults before any `shopt' runs.
+void shopt_seed(Shell &sh);
+
 }  // namespace gnash::core
 
 #endif  // GNASH_CORE_BUILTINS_HPP

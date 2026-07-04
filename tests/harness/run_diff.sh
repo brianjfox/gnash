@@ -165,6 +165,16 @@ scripts=(
   'compgen -P pre- -S -suf -W "a b" a; compgen -W "x y z" q; echo "nomatch=$?"'
   'complete -W "alpha beta" mycmd; complete -p mycmd'
   'bind -l 2>/dev/null | grep -c beginning-of-line'
+  # BASH_* introspection variables
+  'shopt -s extdebug; f(){ echo "[${BASH_ARGC[@]}] [${BASH_ARGV[@]}]"; }; f a b c'
+  'shopt -s extdebug; g(){ echo "[${BASH_ARGC[@]}] [${BASH_ARGV[@]}]"; }; f(){ g x y; }; f a b c'
+  'shopt -s extdebug; f(){ echo "${BASH_ARGC[0]} ${#BASH_ARGV[@]} ${BASH_ARGV[0]}"; }; f a b c'
+  'f(){ echo "[${BASH_ARGC[@]}][${BASH_ARGV[@]}]"; }; f a b c'
+  'alias ll="ls -l" gg=grep; echo "${!BASH_ALIASES[@]}|${BASH_ALIASES[ll]}|${#BASH_ALIASES[@]}"'
+  'hash -p /bin/ls ls; echo "${BASH_CMDS[ls]}|${#BASH_CMDS[@]}"'
+  'echo "$BASHOPTS" | tr : "\n" | sort'
+  'shopt -s extglob nullglob; echo "$BASHOPTS" | tr : "\n" | grep -E "extglob|nullglob"'
+  'echo "${BASH_VERSINFO[3]} ${BASH_VERSINFO[4]}"'
 )
 
 fails=0

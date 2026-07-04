@@ -26,6 +26,7 @@
 #include <unistd.h>
 #include <vector>
 
+#include "gnash/core/builtins.hpp"
 #include "gnash/core/expand.hpp"
 #include "gnash/core/shell.hpp"
 
@@ -250,6 +251,11 @@ void configure_persona(Shell &sh, const std::string &personality, const std::str
         {std::nullopt, "1"}, {std::nullopt, "release"}, {std::nullopt, mach}};
     sh.array_assign("BASH_VERSINFO", vi, false, false);
     sh.vars["BASH_VERSINFO"].readonly = true;
+    // Default search path for `enable -f' dynamically-loadable builtins.
+    if (!sh.is_set("BASH_LOADABLES_PATH"))
+      sh.set("BASH_LOADABLES_PATH",
+             "/usr/local/lib/bash:/usr/lib/bash:/opt/local/lib/bash:"
+             "/usr/pkg/lib/bash:/opt/pkg/lib/bash:.");
   }
 }
 
@@ -257,6 +263,7 @@ void configure_persona(Shell &sh, const std::string &personality, const std::str
 
 int main(int argc, char **argv) {
   Shell sh;
+  shopt_seed(sh);  // seed default shopt states so $BASHOPTS is populated
 
   // Invocation name: basename of argv[0], minus a leading '-' (which marks a
   // login shell).  Drives error-message prefixes and startup-file names.
