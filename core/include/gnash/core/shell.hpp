@@ -202,6 +202,7 @@ class Shell {
   int errexit_suppress = 0;   // >0 while a command's status is being checked
   std::string bash_command;   // $BASH_COMMAND: the command currently executing
   bool in_debug_trap = false; // guard: don't fire the DEBUG trap within itself
+  int command_number = 1;     // \# prompt escape: commands entered this session
 
   // --- functions ---------------------------------------------------------
   std::map<std::string, const Command *> functions;

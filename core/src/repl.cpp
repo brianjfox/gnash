@@ -206,6 +206,7 @@ int run_interactive(Shell &sh) {
 
     if (input.find_first_not_of(" \t\n") != std::string::npos) add_history(input.c_str());
     sh.run_string(input);
+    sh.command_number++;  // \# advances for the next prompt
   }
 
   rl_event_hook = nullptr;

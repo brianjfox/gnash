@@ -182,6 +182,9 @@ std::string expand_prompt(Shell &sh, const std::string &ps) {
         break;
       }
       case '$': out += (getuid() == 0 ? '#' : '$'); break;
+      case '#': out += std::to_string(sh.command_number); break;      // command number
+      case '!': out += std::to_string(history_base + history_length); break;  // history number
+      case 'j': out += std::to_string(sh.jobs.size()); break;          // number of managed jobs
       case 'n': out += '\n'; break;
       case 'r': out += '\r'; break;
       case 'a': out += '\a'; break;
