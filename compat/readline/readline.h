@@ -39,6 +39,11 @@ extern int rl_explicit_arg;
 /* Nonzero after readline() returned because of end-of-file on an empty line. */
 extern int rl_eof_found;
 
+/* Nonzero after readline() returned because SIGINT (C-c) aborted the line. The
+   returned string is empty; the caller should discard any pending input and
+   reprompt. */
+extern int rl_pending_sigint;
+
 /* ---- Top-level entry points --------------------------------------------- */
 
 /* Read a line interactively with PROMPT; returns a malloc'd line (without the

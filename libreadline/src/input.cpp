@@ -14,6 +14,7 @@
 #include <sys/select.h>
 #include <unistd.h>
 
+#include "gnash/readline_internal.hpp"
 #include "readline/readline.h"
 
 namespace {
@@ -30,6 +31,7 @@ extern "C" int rl_read_key(void) {
   }
 
   for (;;) {
+    if (gnash::readline::rl_sigint_flag) return EOF;  // C-c pending: abort read
     if (rl_event_hook) {
       fd_set rfds;
       FD_ZERO(&rfds);
@@ -38,6 +40,7 @@ extern "C" int rl_read_key(void) {
       tv.tv_sec = 0;
       tv.tv_usec = kIdlePollUsec;
       int r = select(fd + 1, &rfds, nullptr, nullptr, &tv);
+      if (gnash::readline::rl_sigint_flag) return EOF;  // C-c: let the loop abort
       if (r == 0) {          // idle: let the hook run, then keep waiting
         rl_event_hook();
         continue;
@@ -52,7 +55,7 @@ extern "C" int rl_read_key(void) {
     ssize_t n = read(fd, &ch, 1);
     if (n == 1) return ch;
     if (n == 0) return EOF;
-    if (errno == EINTR) continue;
+    if (errno == EINTR) continue;  // signal (incl. C-c): loop rechecks the flag
     return EOF;
   }
 }

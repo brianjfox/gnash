@@ -10,6 +10,7 @@
 // rl_done.  Redisplay is a full single-line repaint using termcap's
 // clear-to-end-of-line; multi-row wrapping is a later refinement.
 
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -43,9 +44,21 @@ rl_hook_func_t *rl_event_hook = nullptr;
 // Optional syntax-highlighting hook: fills colors[len] with a color id per
 // character (0=none, 1=green, 2=red, 3=yellow, 4=cyan).  NULL disables it.
 void (*rl_highlight_function)(const char *line, int len, int *colors) = nullptr;
+// Nonzero after readline() returned because a SIGINT (C-c) aborted the line.
+int rl_pending_sigint = 0;
+}
+
+// Shared with input.cpp so the key-read loop bails out of a blocked read().
+namespace gnash::readline {
+volatile std::sig_atomic_t rl_sigint_flag = 0;
 }
 
 namespace {
+
+// SIGINT handler installed for the duration of readline() on a tty.  Just
+// records the signal; the read loop notices the flag and aborts the line
+// (doing display/terminal cleanup outside async-signal context).
+void rl_sigint_handler(int) { gnash::readline::rl_sigint_flag = 1; }
 
 int arg_sign = 1;
 std::string saved_line;  // the typed line, stashed while browsing history
@@ -308,13 +321,35 @@ extern "C" char *readline(const char *prompt) {
 
   int fd = fileno(rl_instream);
   bool tty = isatty(fd) != 0;
+  rl_pending_sigint = 0;
+  gnash::readline::rl_sigint_flag = 0;
+  // On a tty, catch SIGINT ourselves so C-c aborts the current line and
+  // reprompts (the shell otherwise ignores SIGINT while at the prompt).  No
+  // SA_RESTART, so a blocked read()/select() returns EINTR and the loop can
+  // notice the flag.  The previous disposition is restored on return.
+  struct sigaction old_int;
+  bool int_installed = false;
   if (tty) {
+    struct sigaction sa;
+    std::memset(&sa, 0, sizeof sa);
+    sa.sa_handler = rl_sigint_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    if (sigaction(SIGINT, &sa, &old_int) == 0) int_installed = true;
     prep_terminal(fd);
     rl_redisplay();
   }
 
   while (!rl_done) {
     int c = rl_read_key();
+    if (gnash::readline::rl_sigint_flag) {  // C-c: abort this line, reprompt
+      gnash::readline::rl_sigint_flag = 0;
+      rl_pending_sigint = 1;
+      if (tty) { std::fputc('^', rl_outstream); std::fputc('C', rl_outstream); }
+      rl_line_buffer[0] = '\0';
+      rl_point = rl_end = 0;
+      break;
+    }
     if (c == EOF) {
       if (rl_end == 0) rl_eof_found = 1;
       break;
@@ -327,8 +362,10 @@ extern "C" char *readline(const char *prompt) {
     deprep_terminal(fd);
     std::fputc('\n', rl_outstream);
     std::fflush(rl_outstream);
+    if (int_installed) sigaction(SIGINT, &old_int, nullptr);
   }
 
+  if (rl_pending_sigint) return gnash::sh::savestring("");  // discarded line
   if (rl_eof_found && rl_end == 0) return nullptr;
   return gnash::sh::savestring(rl_line_buffer);
 }

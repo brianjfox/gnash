@@ -8,11 +8,16 @@
 #ifndef GNASH_READLINE_INTERNAL_HPP
 #define GNASH_READLINE_INTERNAL_HPP
 
+#include <csignal>
 #include <string>
 
 #include "readline/keymaps.h"
 
 namespace gnash::readline {
+
+// Set by the SIGINT handler that readline() installs while reading from a tty;
+// polled by the key-read loop (input.cpp) so C-c aborts the line in progress.
+extern volatile std::sig_atomic_t rl_sigint_flag;
 
 // Build (once) the emacs keymaps and select the standard keymap as current.
 void build_emacs_keymaps();

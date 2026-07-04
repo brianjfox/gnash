@@ -161,6 +161,10 @@ int run_interactive(Shell &sh) {
 
     std::string ps1 = sh.is_set("PS1") ? sh.get("PS1") : std::string("\\u@\\h:\\w\\$ ");
     char *line = readline(expand_prompt(sh, ps1).c_str());
+    if (rl_pending_sigint) {  // C-c: discard the line and reprompt fresh
+      std::free(line);
+      continue;
+    }
     if (!line) {  // Ctrl-D on an empty line
       std::printf("exit\n");
       break;
@@ -186,6 +190,7 @@ int run_interactive(Shell &sh) {
     }
 
     // Continue reading while the command is incomplete.
+    bool interrupted = false;
     for (;;) {
       bool backslash = trailing_backslash(input);
       bool need_more;
@@ -198,11 +203,17 @@ int run_interactive(Shell &sh) {
       if (!need_more) break;
       std::string ps2 = sh.is_set("PS2") ? sh.get("PS2") : std::string("> ");
       char *cont = readline(expand_prompt(sh, ps2).c_str());
+      if (rl_pending_sigint) {  // C-c mid-command: abandon the whole thing
+        std::free(cont);
+        interrupted = true;
+        break;
+      }
       if (!cont) break;  // EOF mid-command: run what we have
       if (!backslash) input += "\n";
       input += cont;
       std::free(cont);
     }
+    if (interrupted) continue;  // reprompt with PS1, discarding the partial command
 
     if (input.find_first_not_of(" \t\n") != std::string::npos) add_history(input.c_str());
     sh.run_string(input);
