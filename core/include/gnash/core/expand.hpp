@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // expand.hpp -- word expansion.
 //
 // Implements the bash expansion pipeline in order (subst.c): brace expansion,

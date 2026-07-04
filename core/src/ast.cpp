@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // ast.cpp -- canonical rendering of the command AST (analogue of print_cmd.c).
 //
 // The rendering is a normalized, re-parseable form used for round-trip testing;

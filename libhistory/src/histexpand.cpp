@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // histexpand.cpp -- history expansion (the `!' designators, `^old^new^', word
 // designators and modifiers).
 //

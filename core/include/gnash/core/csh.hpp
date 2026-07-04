@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // csh.hpp -- the csh/tcsh interpreter used by gnash's csh personality.
 //
 // Unlike the zsh/ash/ksh personas (surface behavior over the shared Bourne

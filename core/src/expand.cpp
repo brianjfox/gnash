@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // expand.cpp -- word expansion (see expand.hpp).
 //
 // A pragmatic but faithful implementation of the bash expansion pipeline.  Not

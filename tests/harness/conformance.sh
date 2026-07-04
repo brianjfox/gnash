@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (c) 2026 Brian J. Fox
+# Licensed under GPLv2 with the GPLv2-AI Exception.
+
 # conformance.sh GNASH [testdir]
 #
 # Run each of bash's own tests/*.tests under gnash and diff the combined

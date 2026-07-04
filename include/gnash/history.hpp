@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // history.hpp -- the modern C++ interface to gnash's GNU History reimplementation.
 //
 // This is the *real* interface.  The classic C entry points (add_history(),

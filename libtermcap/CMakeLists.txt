@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Brian J. Fox
+# Licensed under GPLv2 with the GPLv2-AI Exception.
+
 # Terminal capability access (termcap work-alike).
 #
 # Public C++ wrapper: <gnash/termcap.hpp>

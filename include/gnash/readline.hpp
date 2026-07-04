@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // readline.hpp -- modern C++ surface for gnash's Readline reimplementation.
 //
 // In progress.  Today this exposes the editing state so callers and tests can

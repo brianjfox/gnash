@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // prompt.cpp -- PS1/PS2 prompt-string expansion (bash backslash escapes).
 
 #include "gnash/core/expand.hpp"

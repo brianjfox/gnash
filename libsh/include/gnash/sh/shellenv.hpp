@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // shellenv.hpp -- the shell-environment interface that Readline/Tilde use to
 // resolve variables and the home directory.
 //

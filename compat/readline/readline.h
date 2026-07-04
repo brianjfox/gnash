@@ -1,3 +1,6 @@
+/* Copyright (c) 2026 Brian J. Fox
+   Licensed under GPLv2 with the GPLv2-AI Exception. */
+
 /* readline.h -- drop-in C interface to gnash's Readline reimplementation.
  *
  * In progress.  Present: the editing state, the bindable editing commands, the

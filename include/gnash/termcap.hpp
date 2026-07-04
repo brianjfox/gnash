@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // termcap.hpp -- modern C++ convenience wrapper over the termcap library.
 //
 // The full C interface is in <termcap.h>.  These helpers load an entry and

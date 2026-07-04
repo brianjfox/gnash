@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // main.cpp -- the gnash executable and its command-line handling.
 //
 //   gnash [options] [script [args...]]

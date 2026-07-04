@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // readline.cpp -- the interactive loop: key dispatch, redisplay, numeric
 // arguments, history movement, and the readline() entry point.
 //

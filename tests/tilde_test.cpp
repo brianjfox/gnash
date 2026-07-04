@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // tilde_test.cpp -- unit tests for the tilde library.
 //
 // HOME is pinned so expansions are deterministic and independent of the

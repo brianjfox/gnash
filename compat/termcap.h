@@ -1,3 +1,6 @@
+/* Copyright (c) 2026 Brian J. Fox
+   Licensed under GPLv2 with the GPLv2-AI Exception. */
+
 /* termcap.h -- drop-in C interface to gnash's termcap work-alike. */
 #ifndef _TERMCAP_H
 #define _TERMCAP_H 1

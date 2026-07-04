@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // termcap_test.cpp -- unit tests for the termcap library (built-in database).
 //
 // TERMCAP is cleared so the built-in entries are exercised deterministically.

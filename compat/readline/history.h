@@ -1,3 +1,6 @@
+/* Copyright (c) 2026 Brian J. Fox
+   Licensed under GPLv2 with the GPLv2-AI Exception. */
+
 /* history.h -- drop-in C interface to gnash's GNU History reimplementation.
  *
  * This is the compatibility shim: source that was written against GNU

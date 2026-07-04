@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // termcap_cxx.cpp -- std::string wrappers over the C termcap entry points.
 #include "gnash/termcap.hpp"
 

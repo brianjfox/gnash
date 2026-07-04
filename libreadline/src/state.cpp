@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // state.cpp -- Readline editing state, line-buffer primitives, and kill ring.
 //
 // Mirrors the relevant globals and helpers from bash 5.3 lib/readline

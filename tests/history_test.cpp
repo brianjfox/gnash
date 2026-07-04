@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // history_test.cpp -- unit/smoke tests for gnash's History library.
 //
 // Covers list management, navigation, search, stifling, and a file save/load

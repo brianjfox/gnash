@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // parser_test.cpp -- parser + AST canonical rendering, and error detection.
 
 #include <cstdio>

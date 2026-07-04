@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // complete.cpp -- the completion engine and its hook interface.
 //
 // Follows bash 5.3 lib/readline/complete.c in structure: find the word under

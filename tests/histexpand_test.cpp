@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // histexpand_test.cpp -- unit tests for history_expand() and friends.
 //
 // History set up as (base 1):

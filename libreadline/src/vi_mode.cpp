@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // vi_mode.cpp -- vi editing mode (a functional subset of vi_mode.c).
 //
 // Two keymaps: insertion (like emacs typing, ESC -> command) and movement

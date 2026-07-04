@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // executor.cpp -- execute the command AST.
 
 #include "gnash/core/executor.hpp"

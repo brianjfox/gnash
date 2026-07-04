@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // bind.cpp -- key binding, the function map, and inputrc parsing.
 //
 // A working subset of bash 5.3 lib/readline/bind.c: rl_bind_key /

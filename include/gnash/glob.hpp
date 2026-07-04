@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // glob.hpp -- modern C++ surface for the glob library.
 //
 // Pattern matching (fnmatch) and filename globbing, faithful to bash 5.3's

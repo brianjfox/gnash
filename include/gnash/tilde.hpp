@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // tilde.hpp -- modern C++ convenience wrapper over the tilde library.
 //
 // The full C interface (hooks, additional prefixes/suffixes) lives in

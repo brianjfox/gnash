@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (c) 2026 Brian J. Fox
+# Licensed under GPLv2 with the GPLv2-AI Exception.
+
 # conformance_gate.sh GNASH TESTDIR
 #
 # Regression gate over the bash tests/ files gnash currently passes *fully*

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // keymaps.cpp -- keymap allocation and the emacs key bindings.
 //
 // The emacs keymaps are built programmatically rather than as large static

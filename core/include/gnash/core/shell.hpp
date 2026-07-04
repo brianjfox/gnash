@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // shell.hpp -- the interpreter state (variables, options, positional params,
 // functions, status) and the top-level run/capture entry points.
 #ifndef GNASH_CORE_SHELL_HPP

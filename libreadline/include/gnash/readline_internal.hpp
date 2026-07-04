@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // readline_internal.hpp -- internal shared state for the libreadline sources.
 //
 // Not installed as a public header; it wires state.cpp, text.cpp, and the

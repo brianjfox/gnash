@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (c) 2026 Brian J. Fox
+# Licensed under GPLv2 with the GPLv2-AI Exception.
+
 # run_test.sh SHELL TESTFILE RIGHTFILE
 #
 # Run TESTFILE under SHELL and compare the combined stdout+stderr against

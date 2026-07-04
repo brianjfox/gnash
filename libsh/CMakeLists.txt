@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Brian J. Fox
+# Licensed under GPLv2 with the GPLv2-AI Exception.
+
 add_library(gnash_sh STATIC
   src/xmalloc.cpp
   src/quote.cpp

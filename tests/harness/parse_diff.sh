@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (c) 2026 Brian J. Fox
+# Licensed under GPLv2 with the GPLv2-AI Exception.
+
 # parse_diff.sh GNASH_PARSE BASH
 #
 # Differential parser check: every snippet below is in gnash's currently

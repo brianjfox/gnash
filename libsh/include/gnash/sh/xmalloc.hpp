@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // xmalloc.hpp -- checked allocation helpers shared across gnash libraries.
 //
 // These mirror bash's lib/malloc/xmalloc: allocation failure is fatal rather

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // tilde.cpp -- tilde expansion (~/foo := $HOME/foo).
 //
 // Faithful port of bash 5.3 lib/tilde/tilde.c.  The public entry points keep

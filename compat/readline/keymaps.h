@@ -1,3 +1,6 @@
+/* Copyright (c) 2026 Brian J. Fox
+   Licensed under GPLv2 with the GPLv2-AI Exception. */
+
 /* keymaps.h -- Readline keymaps (drop-in subset).
  *
  * Note: KEYMAP_ENTRY carries an explicit `kmap` pointer for ISKMAP entries

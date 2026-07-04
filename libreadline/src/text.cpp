@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // text.cpp -- bindable editing commands operating on the Readline line buffer.
 //
 // Ported behaviour from bash 5.3 lib/readline/text.c and kill.c.  Each function

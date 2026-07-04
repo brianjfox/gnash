@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // jobs.cpp -- job control: process groups, controlling terminal, job table.
 //
 // Follows the structure of bash 5.3 jobs.c at a high level: each pipeline (or

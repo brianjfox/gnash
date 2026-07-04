@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Brian J. Fox
+# Licensed under GPLv2 with the GPLv2-AI Exception.
+
 # The shell core (in progress): lexer, parser, AST, expansion, execution.
 add_library(gnash_core STATIC
   src/ast.cpp

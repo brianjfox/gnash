@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // termcap_db.cpp -- a small built-in termcap database.
 //
 // bash's termcap reads /etc/termcap, which does not exist on macOS and many

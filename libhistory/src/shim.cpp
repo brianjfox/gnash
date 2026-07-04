@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // shim.cpp -- the drop-in C entry points declared in <readline/history.h>.
 //
 // Each function forwards to the process-global History returned by

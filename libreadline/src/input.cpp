@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // input.cpp -- reading keys from rl_instream.
 //
 // For a terminal we read a byte at a time with read(2), waiting via select(2)

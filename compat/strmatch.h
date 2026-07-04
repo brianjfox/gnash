@@ -1,3 +1,6 @@
+/* Copyright (c) 2026 Brian J. Fox
+   Licensed under GPLv2 with the GPLv2-AI Exception. */
+
 /* strmatch.h -- ksh-like extended pattern matching (drop-in). */
 #ifndef _STRMATCH_H
 #define _STRMATCH_H 1

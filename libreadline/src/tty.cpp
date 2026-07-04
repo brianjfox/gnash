@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // tty.cpp -- terminal raw-mode setup and restore (rltty analogue).
 //
 // Puts the terminal into cbreak/no-echo so readline sees keystrokes as they

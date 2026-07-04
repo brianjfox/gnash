@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // executor.hpp -- walk the AST and run it.
 #ifndef GNASH_CORE_EXECUTOR_HPP
 #define GNASH_CORE_EXECUTOR_HPP

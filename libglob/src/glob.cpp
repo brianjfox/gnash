@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // glob.cpp -- filename globbing built on the strmatch engine.
 //
 // A component-by-component recursive expander in the spirit of bash 5.3

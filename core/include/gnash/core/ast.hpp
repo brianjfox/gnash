@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // ast.hpp -- the shell command AST.
 //
 // C++ analogue of bash 5.3 command.h.  Rather than a tagged union we use a

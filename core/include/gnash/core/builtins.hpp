@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // builtins.hpp -- shell builtin commands.
 #ifndef GNASH_CORE_BUILTINS_HPP
 #define GNASH_CORE_BUILTINS_HPP

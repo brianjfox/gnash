@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // smatch.cpp -- ksh-like extended pattern matching (strmatch).
 //
 // A byte-oriented port of bash 5.3 lib/glob/sm_loop.c (the single-byte

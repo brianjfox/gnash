@@ -1,3 +1,6 @@
+/* Copyright (c) 2026 Brian J. Fox
+   Licensed under GPLv2 with the GPLv2-AI Exception. */
+
 /* rltypedefs.h -- function-pointer typedefs for the Readline API (subset). */
 #ifndef _RL_TYPEDEFS_H_
 #define _RL_TYPEDEFS_H_

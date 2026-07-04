@@ -1,3 +1,6 @@
+/* Copyright (c) 2026 Brian J. Fox
+   Licensed under GPLv2 with the GPLv2-AI Exception. */
+
 /* hist_entry.h -- the single, C-compatible definition of a history entry.
  *
  * Both the modern C++ API (<gnash/history.hpp>) and the drop-in C shim

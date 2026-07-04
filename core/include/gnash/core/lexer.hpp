@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // lexer.hpp -- shell tokenizer.
 //
 // Splits shell input into the token stream the parser consumes, following the

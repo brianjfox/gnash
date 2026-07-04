@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // csh.cpp -- a csh/tcsh interpreter for gnash's csh personality.
 //
 // csh is not a Bourne-family shell, so this is a separate front end: a

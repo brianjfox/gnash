@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // gnash-parse -- syntax-check or dump the AST of a shell script.
 //
 //   gnash-parse [file]      # reads stdin if no file

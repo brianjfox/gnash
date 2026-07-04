@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (c) 2026 Brian J. Fox
+# Licensed under GPLv2 with the GPLv2-AI Exception.
+
 # run_diff_csh.sh GNASH TCSH
 #
 # Differential execution for gnash's csh personality: run each csh script under

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // termcap.cpp -- a termcap work-alike.
 //
 // The capability-parsing engine (find_capability, tgetst1, tgetnum, tgetflag,

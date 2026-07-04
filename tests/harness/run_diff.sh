@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (c) 2026 Brian J. Fox
+# Licensed under GPLv2 with the GPLv2-AI Exception.
+
 # run_diff.sh GNASH BASH
 #
 # Differential execution: run each script under gnash and bash, comparing

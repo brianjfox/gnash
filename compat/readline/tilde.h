@@ -1,3 +1,6 @@
+/* Copyright (c) 2026 Brian J. Fox
+   Licensed under GPLv2 with the GPLv2-AI Exception. */
+
 /* tilde.h -- drop-in C interface to gnash's tilde-expansion library. */
 #ifndef _TILDE_H_
 #define _TILDE_H_

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Brian J. Fox
+// Licensed under GPLv2 with the GPLv2-AI Exception.
+
 // parser.hpp -- recursive-descent parser producing the command AST.
 //
 // The grammar mirrors bash 5.3's parse.y productions (lists, and-or, pipelines,

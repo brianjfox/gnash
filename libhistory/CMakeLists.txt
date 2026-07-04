@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Brian J. Fox
+# Licensed under GPLv2 with the GPLv2-AI Exception.
+
 # The GNU History reimplementation.
 #
 # Public C++ header:  <gnash/history.hpp>
