@@ -187,6 +187,38 @@ int complete_internal(int what_to_do) {
   return 0;
 }
 
+// Lay `items` out in columns at the screen width (80, matching display_matches).
+// Returns the number of screen rows the grid occupies; if `print` is set, also
+// writes the grid to rl_outstream.  Used by the zsh menu to both list the
+// candidates and report the line count in the "see all N possibilities?" query.
+int completion_grid(const std::vector<std::string> &items, bool print) {
+  int longest = 0;
+  for (const auto &s : items)
+    if (static_cast<int>(s.size()) > longest) longest = static_cast<int>(s.size());
+  int colwidth = longest + 2;
+  int cols = colwidth > 0 ? 80 / colwidth : 1;
+  if (cols < 1) cols = 1;
+  int rows = static_cast<int>((items.size() + cols - 1) / cols);
+  if (print) {
+    FILE *o = rl_outstream ? rl_outstream : stdout;
+    std::fputc('\n', o);
+    int col = 0;
+    for (size_t i = 0; i < items.size(); i++) {
+      std::fputs(items[i].c_str(), o);
+      if (++col >= cols) {
+        std::fputc('\n', o);
+        col = 0;
+      } else {
+        for (int p = colwidth - static_cast<int>(items[i].size()); p > 0; p--)
+          std::fputc(' ', o);
+      }
+    }
+    if (col != 0) std::fputc('\n', o);
+    std::fflush(o);
+  }
+  return rows;
+}
+
 // ---- zsh-style menu completion --------------------------------------------
 // Repeated TAB cycles through the candidate completions, inserting each in
 // turn (Shift-TAB cycles backward).  State persists between calls and is
@@ -223,6 +255,23 @@ int menu_step(int dir) {
     free_matches(matches);
     menu_start = start;
     menu_idx = (dir < 0) ? menu_items.size() - 1 : 0;
+
+    // On a fresh menu, list the candidates so they can be chosen from.  A small
+    // set is shown outright; a large one (> rl_completion_query_items) first
+    // asks, like zsh.  Either way, tab cycling then proceeds as normal.
+    FILE *o = rl_outstream ? rl_outstream : stdout;
+    bool show = true;
+    if (rl_completion_query_items > 0 &&
+        static_cast<int>(menu_items.size()) > rl_completion_query_items) {
+      int rows = completion_grid(menu_items, /*print=*/false);
+      std::fprintf(o, "\nzsh: do you wish to see all %zu possibilities (%d lines)? ",
+                   menu_items.size(), rows);
+      std::fflush(o);
+      int c = rl_read_key();
+      show = (c == 'y' || c == 'Y');
+      if (!show) std::fputc('\n', o);  // leave the query line; drop to a new one
+    }
+    if (show) completion_grid(menu_items, /*print=*/true);
   } else {
     size_t n = menu_items.size();
     menu_idx = (menu_idx + (dir < 0 ? n - 1 : 1)) % n;
