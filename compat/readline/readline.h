@@ -39,6 +39,10 @@ extern int rl_explicit_arg;
 /* Nonzero after readline() returned because of end-of-file on an empty line. */
 extern int rl_eof_found;
 
+/* The command function dispatched most recently (NULL at the start of a line),
+   so a command can detect it was invoked twice in a row. */
+extern rl_command_func_t *rl_last_func;
+
 /* Nonzero after readline() returned because SIGINT (C-c) aborted the line. The
    returned string is empty; the caller should discard any pending input and
    reprompt. */
@@ -58,6 +62,9 @@ extern int rl_read_key (void);
 
 /* Repaint the current line. */
 extern void rl_redisplay (void);
+
+/* The terminal width in columns (TIOCGWINSZ, else $COLUMNS, else 80). */
+extern int rl_get_screen_width (void);
 
 /* Erase the current input line (carriage-return + clear-to-end-of-line) so a
    caller can print a message where the prompt was, then rl_redisplay(). */
@@ -131,6 +138,7 @@ extern char *rl_filename_quote_characters;
 extern int rl_completion_append_character;   /* appended after a sole match  */
 extern int rl_completion_suppress_append;
 extern int rl_completion_query_items;        /* ask before listing > N        */
+extern int rl_match_hidden_files;            /* 1: complete dotfiles w/o a `.' */
 extern int rl_ignore_completion_duplicates;
 extern int rl_completion_type;               /* how completion was invoked    */
 extern int rl_attempted_completion_over;     /* hook sets: don't fall back    */
@@ -150,6 +158,8 @@ extern char *rl_username_completion_function (const char *text, int state);
 extern int rl_complete (int count, int key);
 extern int rl_possible_completions (int count, int key);
 extern int rl_insert_completions (int count, int key);
+extern int rl_menu_complete (int count, int key);           /* zsh-style: cycle */
+extern int rl_backward_menu_complete (int count, int key);  /* cycle backward   */
 
 /* ---- Incremental search ------------------------------------------------- */
 extern int rl_reverse_search_history (int count, int key);

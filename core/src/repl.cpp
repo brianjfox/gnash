@@ -206,6 +206,16 @@ int run_interactive(Shell &sh) {
   rl_set_keymap(rl_get_keymap_by_name("emacs"));
   rl_bind_keyseq("\\C-x\\C-v", gnash_display_shell_version);
 
+  // zsh persona: TAB cycles through completions (menu completion), Shift-TAB
+  // cycles backward -- the characteristic zsh feel, versus bash's insert-common-
+  // prefix-then-list.  Also hide dotfiles unless the word begins with `.', as
+  // zsh does (bash-family personas keep readline's default of matching them).
+  if (sh.is_zsh()) {
+    rl_bind_key('\t', rl_menu_complete);
+    rl_bind_keyseq("\\e[Z", rl_backward_menu_complete);
+    rl_match_hidden_files = 0;
+  }
+
   while (!sh.exiting) {
     // Catch SIGINT during command execution so C-c aborts the running command
     // and reprompts, rather than killing the shell.  (readline saves/restores
