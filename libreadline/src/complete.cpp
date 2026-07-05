@@ -187,6 +187,54 @@ int complete_internal(int what_to_do) {
   return 0;
 }
 
+// ---- zsh-style menu completion --------------------------------------------
+// Repeated TAB cycles through the candidate completions, inserting each in
+// turn (Shift-TAB cycles backward).  State persists between calls and is
+// treated as a continuation only when the buffer is exactly what the previous
+// step left -- same text and point -- so any edit restarts a fresh completion.
+std::vector<std::string> menu_items;
+size_t menu_idx = 0;
+int menu_start = 0;
+int menu_end = -1;      // rl_point after the last menu insertion; -1 = inactive
+std::string menu_snap;  // buffer contents after the last menu insertion
+
+int menu_step(int dir) {
+  bool cont = menu_end >= 0 && rl_point == menu_end && menu_items.size() > 1 &&
+              std::string(rl_line_buffer, static_cast<size_t>(rl_end)) == menu_snap;
+  if (!cont) {
+    menu_items.clear();
+    menu_idx = 0;
+    menu_end = -1;
+    const char *brk = word_break_chars();
+    int start = rl_point;
+    while (start > 0 && std::strchr(brk, rl_line_buffer[start - 1]) == nullptr) start--;
+    std::string text(rl_line_buffer + start, static_cast<size_t>(rl_point - start));
+    char **matches = gather_matches(text.c_str(), start, rl_point);
+    if (matches == nullptr || matches[0] == nullptr) {
+      free_matches(matches);
+      return rl_ding();
+    }
+    // A sole match has nothing to cycle: complete it normally (append char/`/').
+    if (matches[2] == nullptr) {
+      free_matches(matches);
+      return complete_internal('\t');
+    }
+    for (int i = 1; matches[i]; i++) menu_items.emplace_back(matches[i]);
+    free_matches(matches);
+    menu_start = start;
+    menu_idx = (dir < 0) ? menu_items.size() - 1 : 0;
+  } else {
+    size_t n = menu_items.size();
+    menu_idx = (menu_idx + (dir < 0 ? n - 1 : 1)) % n;
+  }
+  rl_delete_text(menu_start, rl_point);
+  rl_point = menu_start;
+  rl_insert_text(menu_items[menu_idx].c_str());
+  menu_end = rl_point;
+  menu_snap.assign(rl_line_buffer, static_cast<size_t>(rl_end));
+  return 0;
+}
+
 }  // namespace
 
 // ---- public API -----------------------------------------------------------
@@ -296,3 +344,5 @@ extern "C" int rl_possible_completions(int /*count*/, int /*key*/) {
 extern "C" int rl_insert_completions(int /*count*/, int /*key*/) {
   return complete_internal('*');
 }
+extern "C" int rl_menu_complete(int /*count*/, int /*key*/) { return menu_step(+1); }
+extern "C" int rl_backward_menu_complete(int /*count*/, int /*key*/) { return menu_step(-1); }

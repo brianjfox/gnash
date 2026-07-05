@@ -86,6 +86,14 @@ int main() {
   // Unique: "fi" -> "fizz" + append space.
   expect("fi\t\n", "fizz ");
 
+  // zsh-style menu completion: TAB cycles through the candidates in turn,
+  // wrapping around.  (foobar/foobaz are the two matches for "foob".)
+  rl_bind_key('\t', rl_menu_complete);
+  expect("foob\t\n", "foobar");      // first candidate
+  expect("foob\t\t\n", "foobaz");    // second candidate
+  expect("foob\t\t\t\n", "foobar");  // wraps back to the first
+  rl_bind_key('\t', rl_complete);    // restore the default TAB completion
+
   rl_attempted_completion_function = nullptr;
 
   // -- filename completion in a temp directory -----------------------------

@@ -150,6 +150,8 @@ extern char *rl_username_completion_function (const char *text, int state);
 extern int rl_complete (int count, int key);
 extern int rl_possible_completions (int count, int key);
 extern int rl_insert_completions (int count, int key);
+extern int rl_menu_complete (int count, int key);           /* zsh-style: cycle */
+extern int rl_backward_menu_complete (int count, int key);  /* cycle backward   */
 
 /* ---- Incremental search ------------------------------------------------- */
 extern int rl_reverse_search_history (int count, int key);
