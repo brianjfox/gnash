@@ -150,7 +150,7 @@ extern "C" char **gnash_attempted_completion(const char *text, int start, int en
 // emulating and that shell's version -- then redraw the prompt and input line.
 extern "C" int gnash_display_shell_version(int /*count*/, int /*key*/) {
   FILE *o = rl_outstream ? rl_outstream : stdout;
-  std::string line = "gnash, version 0.1";
+  std::string line = "gnash, version " GNASH_VERSION;
   if (g_notify_shell) {
     Shell &sh = *g_notify_shell;
     std::string mach = sh.get("MACHTYPE");
@@ -163,7 +163,7 @@ extern "C" int gnash_display_shell_version(int /*count*/, int /*key*/) {
       case Shell::Persona::Ash: break;  // ash advertises no version
       default: pver = sh.get("BASH_VERSION"); break;  // Bash / gnash
     }
-    line = "gnash, version 0.1 (" + mach + ")";
+    line = "gnash, version " GNASH_VERSION " (" + mach + ")";
     if (!pname.empty()) {
       line += ", personality " + pname;
       if (!pver.empty()) line += " " + pver;
