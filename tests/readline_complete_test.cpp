@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "readline/history.h"
@@ -177,6 +178,17 @@ int main() {
     rl_match_hidden_files = 1;  // default (bash) shows them
     CHECK(has_secret(rl_completion_matches("", rl_filename_completion_function)));
     unlink(h.c_str());
+
+    // zsh menu completion appends `/' to a directory candidate, not to a file.
+    mkdir((std::string(dir) + "/subdir").c_str(), 0755);
+    fclose(fopen((std::string(dir) + "/subfile").c_str(), "w"));
+    rl_attempted_completion_function = nullptr;  // use filename completion
+    rl_bind_key('\t', rl_menu_complete);
+    expect("sub\t\t\n", "subdir/");    // 1st TAB lists, 2nd inserts subdir + `/'
+    expect("sub\t\t\t\n", "subfile");  // next candidate is a file: no slash
+    rl_bind_key('\t', rl_complete);
+    unlink((std::string(dir) + "/subfile").c_str());
+    rmdir((std::string(dir) + "/subdir").c_str());
 
     if (cwd) {
       chdir(cwd);

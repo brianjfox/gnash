@@ -121,6 +121,18 @@ char **gather_matches(const char *text, int start, int end) {
   return matches;
 }
 
+// Whether the completion `path' names a directory (honoring a leading ~).
+bool completion_is_dir(const std::string &path) {
+  std::string p = path;
+  if (!p.empty() && p[0] == '~') {
+    char *ex = tilde_expand(p.c_str());
+    p = ex;
+    xfree(ex);
+  }
+  struct stat st;
+  return stat(p.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
+}
+
 int complete_internal(int what_to_do) {
   const char *brk = word_break_chars();
   int start = rl_point;
@@ -152,26 +164,20 @@ int complete_internal(int what_to_do) {
   if (unique) {
     // For a filename completion that is a directory, append `/' rather than the
     // usual space so the next path component can be typed straight away.
-    bool is_dir = false;
-    if (rl_filename_completion_desired) {
-      std::string path = matches[0];
-      if (!path.empty() && path[0] == '~') {
-        char *ex = tilde_expand(path.c_str());
-        path = ex;
-        xfree(ex);
-      }
-      struct stat st;
-      if (stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) is_dir = true;
-    }
-    if (is_dir) {
+    if (rl_filename_completion_desired && completion_is_dir(matches[0])) {
       if (rl_point == 0 || rl_line_buffer[rl_point - 1] != '/') rl_insert_text("/");
     } else if (rl_completion_append_character && rl_completion_suppress_append == 0) {
       char a[2] = {static_cast<char>(rl_completion_append_character), '\0'};
       rl_insert_text(a);
     }
   } else if (std::strcmp(matches[0], text.c_str()) == 0) {
-    // No progress and ambiguous: list the alternatives.
-    display_matches(matches);
+    // Ambiguous with no common prefix to add: like bash (show-all-if-ambiguous
+    // off), ring the bell on the first TAB and list the alternatives only when
+    // TAB is pressed again.
+    if (rl_last_func == rl_complete)
+      display_matches(matches);
+    else
+      rl_ding();
   }
 
   free_matches(matches);
@@ -223,6 +229,7 @@ int completion_grid(const std::vector<std::string> &items, bool print) {
 std::vector<std::string> menu_items;
 int menu_idx = -1;  // -1 = list shown but nothing inserted yet
 int menu_start = 0;
+bool menu_filenames = false;  // candidates are filenames (so append `/' for dirs)
 
 // Alphabetical order, ignoring case; ties broken by the case-sensitive order so
 // the result is deterministic.
@@ -245,7 +252,9 @@ int menu_step(int dir) {
     int start = rl_point;
     while (start > 0 && std::strchr(brk, rl_line_buffer[start - 1]) == nullptr) start--;
     std::string text(rl_line_buffer + start, static_cast<size_t>(rl_point - start));
+    rl_filename_completion_desired = 0;  // set by the generator iff completing filenames
     char **matches = gather_matches(text.c_str(), start, rl_point);
+    menu_filenames = rl_filename_completion_desired != 0;
     if (matches == nullptr || matches[0] == nullptr) {
       free_matches(matches);
       return rl_ding();
@@ -287,7 +296,10 @@ int menu_step(int dir) {
     menu_idx = (menu_idx + (dir < 0 ? n - 1 : 1)) % n;
   rl_delete_text(menu_start, rl_point);
   rl_point = menu_start;
-  rl_insert_text(menu_items[static_cast<size_t>(menu_idx)].c_str());
+  const std::string &pick = menu_items[static_cast<size_t>(menu_idx)];
+  rl_insert_text(pick.c_str());
+  // zsh appends `/' when the chosen completion is a directory.
+  if (menu_filenames && completion_is_dir(pick)) rl_insert_text("/");
   return 0;
 }
 
