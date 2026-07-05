@@ -8,6 +8,7 @@
 // Multi-line constructs (unterminated quotes, `if'/`for' without their closers,
 // here-documents, trailing `\') are continued with the PS2 prompt.
 
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <algorithm>
@@ -23,9 +24,20 @@
 #include "readline/history.h"
 #include "readline/readline.h"
 
+extern "C" void strmatch_set_interrupt(int);
+
 namespace gnash::core {
 
 namespace {
+// SIGINT while a command is executing (interactive): record it and nudge the
+// pattern matcher to bail.  The executor's unwinding() check aborts the running
+// command so the loop reprompts instead of the shell being killed.  Both stores
+// are async-signal-safe.
+void interactive_sigint_handler(int) {
+  g_sigint_received = 1;
+  strmatch_set_interrupt(1);
+}
+
 bool trailing_backslash(const std::string &s) {
   int n = 0;
   for (auto it = s.rbegin(); it != s.rend() && *it == '\\'; ++it) n++;
@@ -156,6 +168,20 @@ int run_interactive(Shell &sh) {
   if (sh.is_zsh()) rl_highlight_function = gnash_zsh_highlight;
 
   while (!sh.exiting) {
+    // Catch SIGINT during command execution so C-c aborts the running command
+    // and reprompts, rather than killing the shell.  (readline saves/restores
+    // this around its own handler while reading a line.)  Re-asserted each
+    // iteration, but never over a user INT trap -- so `trap ... INT' keeps
+    // working and `trap - INT' cleanly restores this default next prompt.
+    if (sh.traps.find("INT") == sh.traps.end()) {
+      struct sigaction sa;
+      std::memset(&sa, 0, sizeof sa);
+      sigemptyset(&sa.sa_mask);
+      sa.sa_flags = SA_RESTART;
+      sa.sa_handler = interactive_sigint_handler;
+      sigaction(SIGINT, &sa, nullptr);
+    }
+
     sh.reap_jobs(true);      // report any finished background jobs
     sh.run_pending_traps();  // deliver signals received while at the prompt
 
@@ -216,7 +242,15 @@ int run_interactive(Shell &sh) {
     if (interrupted) continue;  // reprompt with PS1, discarding the partial command
 
     if (input.find_first_not_of(" \t\n") != std::string::npos) add_history(input.c_str());
+    g_sigint_received = 0;  // start the command uninterrupted
+    strmatch_set_interrupt(0);
     sh.run_string(input);
+    if (g_sigint_received) {  // C-c aborted the command mid-run: reprompt cleanly
+      g_sigint_received = 0;
+      strmatch_set_interrupt(0);
+      sh.last_status = 130;  // 128 + SIGINT, as bash reports
+      std::fputc('\n', stderr);
+    }
     sh.command_number++;  // \# advances for the next prompt
   }
 

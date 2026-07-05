@@ -169,6 +169,10 @@ bool Shell::virtual_array(const std::string &name,
   return false;
 }
 
+// C-c during command execution (interactive): the handler installed by the REPL
+// sets this, and the executor's unwinding() check aborts the running command.
+volatile std::sig_atomic_t g_sigint_received = 0;
+
 namespace {
 volatile sig_atomic_t g_trap_pending[NSIG];
 

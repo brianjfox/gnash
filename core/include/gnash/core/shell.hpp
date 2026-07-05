@@ -6,6 +6,7 @@
 #ifndef GNASH_CORE_SHELL_HPP
 #define GNASH_CORE_SHELL_HPP
 
+#include <csignal>
 #include <map>
 #include <optional>
 #include <set>
@@ -15,6 +16,11 @@
 #include "gnash/core/ast.hpp"
 
 namespace gnash::core {
+
+// Set by the interactive SIGINT handler (repl.cpp) when C-c is pressed while a
+// command is executing.  The executor's unwinding() check honors it, so the
+// running command aborts and the loop reprompts instead of the shell dying.
+extern volatile std::sig_atomic_t g_sigint_received;
 
 enum class VarKind { Scalar, Indexed, Assoc };
 
