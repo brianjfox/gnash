@@ -68,6 +68,11 @@ std::string common_prefix(const std::string &a, const std::string &b) {
 }
 
 // Print matches in columns to rl_outstream, then repaint the line.
+// Lay `items` out in a column-major grid at the terminal width (defined below).
+int completion_grid(const std::vector<std::string> &items, bool print);
+
+// List the matches, then repaint the line.  Like bash/readline, the list is
+// sorted and laid out in a column-major grid at the full terminal width.
 void display_matches(char **matches) {
   int count = 0;
   for (int i = 1; matches[i]; i++) count++;
@@ -83,31 +88,14 @@ void display_matches(char **matches) {
     return;
   }
 
-  FILE *o = rl_outstream ? rl_outstream : stdout;
-  int longest = 0;
-  for (int i = 1; matches[i]; i++) {
-    int l = static_cast<int>(std::strlen(matches[i]));
-    if (l > longest) longest = l;
-  }
-  int colwidth = longest + 2;
-  int screen = 80;
-  int cols = colwidth > 0 ? screen / colwidth : 1;
-  if (cols < 1) cols = 1;
-
-  std::fputc('\n', o);
-  int col = 0;
-  for (int i = 1; matches[i]; i++) {
-    std::fputs(matches[i], o);
-    if (++col >= cols) {
-      std::fputc('\n', o);
-      col = 0;
-    } else {
-      int pad = colwidth - static_cast<int>(std::strlen(matches[i]));
-      for (int p = 0; p < pad; p++) std::fputc(' ', o);
-    }
-  }
-  if (col != 0) std::fputc('\n', o);
-  std::fflush(o);
+  std::vector<std::string> items;
+  for (int i = 1; matches[i]; i++) items.emplace_back(matches[i]);
+  // Alphabetical, ignoring case -- matching how bash 5.3 collates its listing.
+  std::sort(items.begin(), items.end(), [](const std::string &a, const std::string &b) {
+    int c = strcasecmp(a.c_str(), b.c_str());
+    return c < 0 || (c == 0 && a < b);
+  });
+  completion_grid(items, /*print=*/true);
   rl_redisplay();
 }
 
