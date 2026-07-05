@@ -58,6 +58,21 @@ struct Parser {
   bool ok = true;
   explicit Parser(const std::string &str) : s(str) {}
 
+  // Bound recursion so a deeply nested expression -- e.g. thousands of nested
+  // parentheses or unary operators in $(( ... )) -- fails to parse instead of
+  // overflowing the call stack and crashing the shell.  Far above any real use.
+  int rec_depth = 0;
+  static constexpr int kMaxDepth = 1000;
+  struct DepthGuard {
+    Parser &p;
+    bool allowed;
+    explicit DepthGuard(Parser &pp) : p(pp) {
+      allowed = (++p.rec_depth <= kMaxDepth);
+      if (!allowed) p.ok = false;
+    }
+    ~DepthGuard() { --p.rec_depth; }
+  };
+
   void skip() { while (pos < s.size() && std::isspace(static_cast<unsigned char>(s[pos]))) pos++; }
   char peek() { skip(); return pos < s.size() ? s[pos] : '\0'; }
   bool eat(const char *op) {
@@ -229,6 +244,8 @@ struct Parser {
     return base;
   }
   NodeP unary() {
+    DepthGuard g(*this);
+    if (!g.allowed) return mk(K::Num);  // too deep: bail with a placeholder
     skip();
     if (eat("++")) return preincr(K::PreInc);
     if (eat("--")) return preincr(K::PreDec);

@@ -81,6 +81,23 @@ struct Parser {
 
   explicit Parser(std::vector<Token> t) : toks(std::move(t)) {}
 
+  // Recursion-depth guard: deeply nested constructs -- e.g. thousands of nested
+  // `(...)' subshells, `if's, or `[[ (...) ]]' -- would otherwise overflow the
+  // C++ call stack and crash the process.  The cap is far above any real script
+  // (bash tolerates a few thousand levels before it, too, segfaults); on excess
+  // we report a syntax error and unwind cleanly instead of faulting.
+  std::size_t nest_depth = 0;
+  static constexpr std::size_t kMaxNesting = 1000;
+  struct NestGuard {
+    Parser &p;
+    bool ok;
+    explicit NestGuard(Parser &pp) : p(pp) {
+      ok = (++p.nest_depth <= kMaxNesting);
+      if (!ok) p.fail("maximum nesting depth exceeded");
+    }
+    ~NestGuard() { --p.nest_depth; }
+  };
+
   const Token &cur() const { return toks[i]; }
   const Token &peek(std::size_t k) const {
     std::size_t j = i + k;
@@ -353,6 +370,8 @@ struct Parser {
 
   // -- commands ------------------------------------------------------------
   CommandPtr parse_command(std::initializer_list<const char *> stops) {
+    NestGuard g(*this);
+    if (!g.ok) return nullptr;
     if (is(Tok::Lparen)) {
       if (cur().glued && peek(1).type == Tok::Lparen) return parse_arith_command();
       return parse_subshell();
@@ -618,6 +637,8 @@ struct Parser {
 
   void cond_primary(std::string &e) {
     if (err) return;
+    NestGuard g(*this);
+    if (!g.ok) return;
     if (is(Tok::Lparen)) {
       e += "( ";
       advance();
@@ -685,6 +706,8 @@ struct Parser {
   }
 
   void cond_not(std::string &e) {
+    NestGuard g(*this);
+    if (!g.ok) return;
     if (reserved("!")) {
       e += "! ";
       advance();
