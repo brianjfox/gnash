@@ -226,6 +226,9 @@ int screen_width() {
 
 }  // namespace
 
+// The terminal width in columns (from TIOCGWINSZ, else $COLUMNS, else 80).
+extern "C" int rl_get_screen_width(void) { return screen_width(); }
+
 // Single-row redisplay with horizontal scrolling: the line stays on one screen
 // line, and the visible window slides to keep the cursor in view.  (Multi-row
 // wrapped redisplay is a later refinement.)

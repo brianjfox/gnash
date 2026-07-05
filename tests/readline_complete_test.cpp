@@ -160,6 +160,24 @@ int main() {
       for (int i = 0; fm2[i]; i++) std::free(fm2[i]);
       std::free(fm2);
     }
+
+    // Hidden files: with rl_match_hidden_files off (as in the zsh persona), a
+    // leading-dot entry is offered only when the word itself begins with `.'.
+    std::string h = std::string(dir) + "/.secret";
+    fclose(fopen(h.c_str(), "w"));
+    auto has_secret = [](char **mm) {
+      bool f = false;
+      if (mm) for (int i = 1; mm[i]; i++) if (std::strcmp(mm[i], ".secret") == 0) f = true;
+      if (mm) { for (int i = 0; mm[i]; i++) std::free(mm[i]); std::free(mm); }
+      return f;
+    };
+    rl_match_hidden_files = 0;
+    CHECK(!has_secret(rl_completion_matches("", rl_filename_completion_function)));
+    CHECK(has_secret(rl_completion_matches(".", rl_filename_completion_function)));
+    rl_match_hidden_files = 1;  // default (bash) shows them
+    CHECK(has_secret(rl_completion_matches("", rl_filename_completion_function)));
+    unlink(h.c_str());
+
     if (cwd) {
       chdir(cwd);
       std::free(cwd);

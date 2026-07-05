@@ -44,6 +44,7 @@ char *rl_filename_quote_characters = nullptr;
 int rl_completion_append_character = ' ';
 int rl_completion_suppress_append = 0;
 int rl_completion_query_items = 100;
+int rl_match_hidden_files = 1;  // zsh persona sets 0: no dotfiles without a `.'
 int rl_ignore_completion_duplicates = 1;
 int rl_completion_type = 0;
 int rl_attempted_completion_over = 0;
@@ -189,33 +190,36 @@ int complete_internal(int what_to_do) {
   return 0;
 }
 
-// Lay `items` out in columns at the screen width (80, matching display_matches).
-// Returns the number of screen rows the grid occupies; if `print` is set, also
-// writes the grid to rl_outstream.  Used by the zsh menu to both list the
-// candidates and report the line count in the "see all N possibilities?" query.
+// Lay `items` out in a grid at the terminal width, filled COLUMN-major (down
+// each column, then across) as zsh does -- so a sorted list reads alphabetically
+// down the columns.  Returns the number of screen rows; if `print` is set, also
+// writes the grid to rl_outstream.  Used by the zsh menu both to list the
+// candidates and to report the line count in the "see all N possibilities?" query.
 int completion_grid(const std::vector<std::string> &items, bool print) {
+  int n = static_cast<int>(items.size());
   int longest = 0;
   for (const auto &s : items)
     if (static_cast<int>(s.size()) > longest) longest = static_cast<int>(s.size());
   int colwidth = longest + 2;
-  int cols = colwidth > 0 ? 80 / colwidth : 1;
+  int width = rl_get_screen_width();
+  if (width <= 0) width = 80;
+  int cols = colwidth > 0 ? width / colwidth : 1;
   if (cols < 1) cols = 1;
-  int rows = static_cast<int>((items.size() + cols - 1) / cols);
+  int rows = (n + cols - 1) / cols;
   if (print) {
     FILE *o = rl_outstream ? rl_outstream : stdout;
     std::fputc('\n', o);
-    int col = 0;
-    for (size_t i = 0; i < items.size(); i++) {
-      std::fputs(items[i].c_str(), o);
-      if (++col >= cols) {
-        std::fputc('\n', o);
-        col = 0;
-      } else {
-        for (int p = colwidth - static_cast<int>(items[i].size()); p > 0; p--)
-          std::fputc(' ', o);
+    for (int r = 0; r < rows; r++) {
+      for (int c = 0; c < cols; c++) {
+        int idx = c * rows + r;  // column-major
+        if (idx >= n) continue;
+        std::fputs(items[idx].c_str(), o);
+        if (c * rows + rows + r < n)  // not the last populated column in this row
+          for (int p = colwidth - static_cast<int>(items[idx].size()); p > 0; p--)
+            std::fputc(' ', o);
       }
+      std::fputc('\n', o);
     }
-    if (col != 0) std::fputc('\n', o);
     std::fflush(o);
   }
   return rows;
@@ -366,15 +370,17 @@ extern "C" char *rl_filename_completion_function(const char *text, int state) {
   if (dir == nullptr) return nullptr;
 
   struct dirent *ent;
+  bool want_dot = !filename.empty() && filename[0] == '.';  // word begins with `.'
   while ((ent = readdir(dir)) != nullptr) {
     const char *name = ent->d_name;
-    if (filename.empty()) {
-      if (name[0] == '.' &&
-          (name[1] == '\0' || (name[1] == '.' && name[2] == '\0')))
-        continue;  // skip . and .. when not explicitly requested
-    } else if (std::strncmp(name, filename.c_str(), filename.size()) != 0) {
+    // `.' and `..' are never offered implicitly.
+    if (name[0] == '.' && (name[1] == '\0' || (name[1] == '.' && name[2] == '\0')))
       continue;
-    }
+    // A hidden file is offered only when the word itself begins with `.', or
+    // when hidden-file matching is enabled (off in the zsh persona).
+    if (name[0] == '.' && !want_dot && !rl_match_hidden_files) continue;
+    if (!filename.empty() && std::strncmp(name, filename.c_str(), filename.size()) != 0)
+      continue;
     std::string result = users_dirname + name;
     return savestring(result.c_str());
   }

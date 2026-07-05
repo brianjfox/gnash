@@ -63,6 +63,9 @@ extern int rl_read_key (void);
 /* Repaint the current line. */
 extern void rl_redisplay (void);
 
+/* The terminal width in columns (TIOCGWINSZ, else $COLUMNS, else 80). */
+extern int rl_get_screen_width (void);
+
 /* Erase the current input line (carriage-return + clear-to-end-of-line) so a
    caller can print a message where the prompt was, then rl_redisplay(). */
 extern void rl_clear_current_line (void);
@@ -135,6 +138,7 @@ extern char *rl_filename_quote_characters;
 extern int rl_completion_append_character;   /* appended after a sole match  */
 extern int rl_completion_suppress_append;
 extern int rl_completion_query_items;        /* ask before listing > N        */
+extern int rl_match_hidden_files;            /* 1: complete dotfiles w/o a `.' */
 extern int rl_ignore_completion_duplicates;
 extern int rl_completion_type;               /* how completion was invoked    */
 extern int rl_attempted_completion_over;     /* hook sets: don't fall back    */
