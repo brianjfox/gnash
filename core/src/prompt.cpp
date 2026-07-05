@@ -196,7 +196,22 @@ std::string expand_prompt(Shell &sh, const std::string &ps) {
         out += (s == std::string::npos) ? a0 : a0.substr(s + 1);
         break;
       }
-      case 'v': case 'V': out += "0.1"; break;
+      case 'v': case 'V': {
+        // bash's \v is the shell version (major.minor); \V adds the patchlevel.
+        // Reflect the emulated bash version; fall back to gnash's own version.
+        std::string bv = sh.get("BASH_VERSION");  // e.g. "5.3.0(1)-release"
+        if (bv.empty()) { out += GNASH_VERSION; break; }
+        size_t cut = bv.find_first_of("(-");
+        std::string num = (cut == std::string::npos) ? bv : bv.substr(0, cut);  // "5.3.0"
+        if (c == 'v') {
+          size_t d1 = num.find('.');
+          size_t d2 = (d1 == std::string::npos) ? std::string::npos : num.find('.', d1 + 1);
+          out += (d2 == std::string::npos) ? num : num.substr(0, d2);  // "5.3"
+        } else {
+          out += num;  // "5.3.0"
+        }
+        break;
+      }
       case 't': case 'T': case '@': case 'A': {
         std::time_t now = std::time(nullptr);
         std::tm tmv;

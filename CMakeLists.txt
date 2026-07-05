@@ -4,7 +4,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project(gnash
-  VERSION 0.1.0
+  VERSION 1.1.0
   DESCRIPTION "A modular C++ reimplementation of bash 5.3"
   LANGUAGES C CXX)
 
@@ -48,6 +48,9 @@ target_include_directories(gnash_common INTERFACE
   ${CMAKE_CURRENT_SOURCE_DIR}/include
   ${CMAKE_CURRENT_SOURCE_DIR}/compat)
 target_compile_features(gnash_common INTERFACE cxx_std_20)
+# Single source of truth for the gnash version (from project() above), available
+# to the code as the GNASH_VERSION string macro.
+target_compile_definitions(gnash_common INTERFACE GNASH_VERSION="${PROJECT_VERSION}")
 
 # ---------------------------------------------------------------------------
 # Libraries, lowest-dependency-first.  See the approved plan for the full

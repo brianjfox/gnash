@@ -221,6 +221,7 @@ void configure_persona(Shell &sh, const std::string &personality, const std::str
     sh.persona = Shell::Persona::Csh;
   else sh.persona = Shell::Persona::Bash;
   sh.set("GNASH_PERSONALITY", personality);
+  sh.set("GNASH_VERSION", GNASH_VERSION);  // gnash's own version, regardless of persona
 
   std::string mach = "unknown";
   struct utsname u;
@@ -312,7 +313,7 @@ int main(int argc, char **argv) {
       } else if (lo == "personality") {
         personality_flag = !val.empty() ? val : (idx + 1 < args.size() ? args[++idx] : "");
       } else if (lo == "version") {
-        std::printf("gnash, version 0.1 (bash-compatible reimplementation)\n");
+        std::printf("gnash, version " GNASH_VERSION " (bash-compatible reimplementation)\n");
         return 0;
       } else if (lo == "help") {
         std::printf("usage: %s [options] [script [args]]\n", prefix.c_str());
