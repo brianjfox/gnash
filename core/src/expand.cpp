@@ -903,8 +903,13 @@ std::vector<std::string> Expander::glob_field(const std::string &field, const st
   }
   if (sh_.opt_noglob || !magic) return {field};
   int gflags = 0;
-  auto gs = sh_.shopt_opts.find("globstar");  // `shopt -s globstar' enables **
-  if (gs != sh_.shopt_opts.end() && gs->second) gflags |= GX_GLOBSTAR;
+  // `**' recursive globbing is on under `shopt -s globstar', and -- because zsh
+  // enables it by default -- whenever the personality is zsh or the `zsh_globbing'
+  // variable is set to a non-null value.
+  auto gs = sh_.shopt_opts.find("globstar");
+  bool globstar = (gs != sh_.shopt_opts.end() && gs->second) || sh_.is_zsh() ||
+                  !sh_.get("zsh_globbing").empty();
+  if (globstar) gflags |= GX_GLOBSTAR;
   auto matches = gnash::glob::glob(pattern, gflags);
   if (matches.empty()) {
     auto it = sh_.shopt_opts.find("nullglob");
