@@ -24,6 +24,12 @@ extern "C" {
 /* Match STRING against PATTERN, returning 0 on match, FNM_NOMATCH otherwise. */
 extern int strmatch (char *pattern, char *string, int flags);
 
+/* Set (non-zero) or clear (zero) the flag that makes an in-progress strmatch()
+   bail out with FNM_NOMATCH.  Called from the shell's SIGINT handler so a
+   runaway extended-pattern match can be interrupted.  Async-signal-safe (it
+   only stores a sig_atomic_t). */
+extern void strmatch_set_interrupt (int state);
+
 #ifdef __cplusplus
 }
 #endif

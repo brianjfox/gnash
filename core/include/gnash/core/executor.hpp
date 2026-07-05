@@ -33,9 +33,12 @@ class Executor {
   int run_cond(const CondCommand *c);
   int run_arith(const ArithCommand *c);
 
-  // True if a break/continue/return/exit is unwinding the stack.
+  // True if a break/continue/return/exit -- or an interactive C-c -- is
+  // unwinding the stack.  Honoring g_sigint_received here makes every run()
+  // short-circuit, so a runaway command aborts back to the REPL prompt.
   bool unwinding() const {
-    return sh_.break_count || sh_.continue_count || sh_.returning || sh_.exiting;
+    return sh_.break_count || sh_.continue_count || sh_.returning ||
+           sh_.exiting || g_sigint_received;
   }
 };
 

@@ -10,18 +10,24 @@
 // simplified to C/ASCII ordering; wide-character matching is a later addition.
 
 #include <cctype>
+#include <csignal>
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
 
 #include "strmatch.h"
 
+// Set from the shell's SIGINT handler (async-signal-safe: a single sig_atomic_t
+// store) so a long-running match bails out promptly with FNM_NOMATCH.  File
+// scope with C linkage so the setter is reachable from the shell core.
+static volatile std::sig_atomic_t interrupt_state = 0;
+static volatile std::sig_atomic_t terminating_signal = 0;
+
+extern "C" void strmatch_set_interrupt(int state) { interrupt_state = state ? 1 : 0; }
+
 namespace {
 
 using UC = unsigned char;
-
-int interrupt_state = 0;
-int terminating_signal = 0;
 
 struct SmEnds {
   UC *pattern;
