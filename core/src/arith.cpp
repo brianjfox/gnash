@@ -13,6 +13,7 @@
 // `for ((;;))' condition/update every iteration) skips lexing and parsing.
 
 #include <cctype>
+#include <climits>
 #include <cstdlib>
 #include <cstring>
 #include <map>
@@ -361,13 +362,23 @@ long long eval_node(const Node *n, Ctx &ctx) {
     case K::PostInc: { long long v = ref_get(n, ctx); ref_set(n, v + 1, ctx); return v; }
     case K::PostDec: { long long v = ref_get(n, ctx); ref_set(n, v - 1, ctx); return v; }
     case K::Mul: { long long l = A(); return l * eval_node(n->b.get(), ctx); }
-    case K::Div: { long long l = A(), r = eval_node(n->b.get(), ctx); if (r == 0) { ctx.ok = false; return 0; } return l / r; }
-    case K::Mod: { long long l = A(), r = eval_node(n->b.get(), ctx); if (r == 0) { ctx.ok = false; return 0; } return l % r; }
-    case K::Pow: { long long base = A(), e = eval_node(n->b.get(), ctx), r = 1; for (long long k = 0; k < e; k++) r *= base; return r; }
+    case K::Div: { long long l = A(), r = eval_node(n->b.get(), ctx); if (r == 0) { ctx.ok = false; return 0; } if (l == LLONG_MIN && r == -1) return LLONG_MIN; return l / r; }
+    case K::Mod: { long long l = A(), r = eval_node(n->b.get(), ctx); if (r == 0) { ctx.ok = false; return 0; } if (l == LLONG_MIN && r == -1) return 0; return l % r; }
+    // Exponentiation by squaring (like bash's ipow), so the cost is O(log e)
+    // rather than O(e); a huge exponent no longer spins.  bash rejects a
+    // negative exponent ("exponent less than 0") and defines e==0 as 1.
+    case K::Pow: {
+      long long base = A(), e = eval_node(n->b.get(), ctx), r = 1;
+      if (e < 0) { ctx.ok = false; return 0; }
+      while (e) { if (e & 1) r *= base; e >>= 1; if (e) base *= base; }
+      return r;
+    }
     case K::Add: { long long l = A(); return l + eval_node(n->b.get(), ctx); }
     case K::Sub: { long long l = A(); return l - eval_node(n->b.get(), ctx); }
-    case K::Shl: { long long l = A(); return l << eval_node(n->b.get(), ctx); }
-    case K::Shr: { long long l = A(); return l >> eval_node(n->b.get(), ctx); }
+    // Mask the shift count to [0,63] so the result is defined for out-of-range
+    // or negative counts; this reproduces bash (e.g. 1<<64 == 1, 1<<-1 == 1<<63).
+    case K::Shl: { long long l = A(); return l << (eval_node(n->b.get(), ctx) & 63); }
+    case K::Shr: { long long l = A(); return l >> (eval_node(n->b.get(), ctx) & 63); }
     case K::Lt: { long long l = A(); return l < eval_node(n->b.get(), ctx) ? 1 : 0; }
     case K::Le: { long long l = A(); return l <= eval_node(n->b.get(), ctx) ? 1 : 0; }
     case K::Gt: { long long l = A(); return l > eval_node(n->b.get(), ctx) ? 1 : 0; }
@@ -390,10 +401,10 @@ long long eval_node(const Node *n, Ctx &ctx) {
         if (o == "+=") res = cur + rhs;
         else if (o == "-=") res = cur - rhs;
         else if (o == "*=") res = cur * rhs;
-        else if (o == "/=") { if (rhs == 0) { ctx.ok = false; res = 0; } else res = cur / rhs; }
-        else if (o == "%=") { if (rhs == 0) { ctx.ok = false; res = 0; } else res = cur % rhs; }
-        else if (o == "<<=") res = cur << rhs;
-        else if (o == ">>=") res = cur >> rhs;
+        else if (o == "/=") { if (rhs == 0) { ctx.ok = false; res = 0; } else if (cur == LLONG_MIN && rhs == -1) res = LLONG_MIN; else res = cur / rhs; }
+        else if (o == "%=") { if (rhs == 0) { ctx.ok = false; res = 0; } else if (cur == LLONG_MIN && rhs == -1) res = 0; else res = cur % rhs; }
+        else if (o == "<<=") res = cur << (rhs & 63);
+        else if (o == ">>=") res = cur >> (rhs & 63);
         else if (o == "&=") res = cur & rhs;
         else if (o == "^=") res = cur ^ rhs;
         else if (o == "|=") res = cur | rhs;
