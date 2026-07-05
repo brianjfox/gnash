@@ -40,6 +40,7 @@ FILE *rl_outstream = nullptr;
 int rl_numeric_arg = 1;
 int rl_explicit_arg = 0;
 int rl_eof_found = 0;
+rl_command_func_t *rl_last_func = nullptr;  // the command dispatched last
 rl_hook_func_t *rl_event_hook = nullptr;
 // Optional syntax-highlighting hook: fills colors[len] with a color id per
 // character (0=none, 1=green, 2=red, 3=yellow, 4=cyan).  NULL disables it.
@@ -141,6 +142,7 @@ int dispatch(int key, Keymap map) {
       if (e.function) {
         int count = rl_explicit_arg ? rl_numeric_arg : 1;
         int r = e.function(count, key);
+        rl_last_func = e.function;  // so a command can tell it ran twice in a row
         rl_numeric_arg = 1;
         rl_explicit_arg = 0;
         arg_sign = 1;
@@ -315,6 +317,7 @@ extern "C" char *readline(const char *prompt) {
   using_history();
   saved_line.clear();
 
+  rl_last_func = nullptr;  // a new line: nothing was dispatched before it
   // Start each read in the base keymap for the active editing mode.
   rl_set_keymap(rl_editing_mode == 0 ? vi_insertion_keymap
                                      : rl_get_keymap_by_name("emacs"));

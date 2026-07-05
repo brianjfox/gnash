@@ -39,6 +39,10 @@ extern int rl_explicit_arg;
 /* Nonzero after readline() returned because of end-of-file on an empty line. */
 extern int rl_eof_found;
 
+/* The command function dispatched most recently (NULL at the start of a line),
+   so a command can detect it was invoked twice in a row. */
+extern rl_command_func_t *rl_last_func;
+
 /* Nonzero after readline() returned because SIGINT (C-c) aborted the line. The
    returned string is empty; the caller should discard any pending input and
    reprompt. */

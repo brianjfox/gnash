@@ -41,6 +41,26 @@ static char **attempt(const char *text, int /*start*/, int /*end*/) {
   return rl_completion_matches(text, word_generator);
 }
 
+// A deliberately out-of-order, mixed-case word list, to check that menu
+// completion lists/cycles them in case-insensitive alphabetical order.
+static const char *kSortWords[] = {"Delta", "alpha", "Charlie", "bravo", nullptr};
+
+static char *sort_generator(const char *text, int state) {
+  static int idx;
+  if (state == 0) idx = 0;
+  size_t tl = std::strlen(text);
+  while (kSortWords[idx]) {
+    const char *w = kSortWords[idx++];
+    if (std::strncmp(w, text, tl) == 0) return strdup(w);
+  }
+  return nullptr;
+}
+
+static char **sort_attempt(const char *text, int /*start*/, int /*end*/) {
+  rl_attempted_completion_over = 1;
+  return rl_completion_matches(text, sort_generator);
+}
+
 // Feed INPUT to readline(); return the produced line.
 static char *run(const std::string &input) {
   FILE *f = std::tmpfile();
@@ -86,14 +106,27 @@ int main() {
   // Unique: "fi" -> "fizz" + append space.
   expect("fi\t\n", "fizz ");
 
-  // zsh-style menu completion: TAB cycles through the candidates in turn,
-  // wrapping around.  (foobar/foobaz are the two matches for "foob".)
+  // zsh-style menu completion: the first TAB only lists the candidates (the
+  // line is unchanged); each subsequent TAB inserts the next one, cycling and
+  // wrapping.  (foobar/foobaz are the two matches for "foob".)
   rl_bind_key('\t', rl_menu_complete);
-  expect("foob\t\n", "foobar");      // first candidate
-  expect("foob\t\t\n", "foobaz");    // second candidate
-  expect("foob\t\t\t\n", "foobar");  // wraps back to the first
-  rl_bind_key('\t', rl_complete);    // restore the default TAB completion
+  expect("foob\t\n", "foob");          // first TAB lists; line unchanged
+  expect("foob\t\t\n", "foobar");      // second TAB inserts the first candidate
+  expect("foob\t\t\t\n", "foobaz");    // next candidate
+  expect("foob\t\t\t\t\n", "foobar");  // wraps back to the first
+  rl_bind_key('\t', rl_complete);      // restore the default TAB completion
 
+  rl_attempted_completion_function = nullptr;
+
+  // Candidates are cycled in case-insensitive alphabetical order regardless of
+  // the order the generator produced them (Delta, alpha, Charlie, bravo).
+  rl_attempted_completion_function = sort_attempt;
+  rl_bind_key('\t', rl_menu_complete);
+  expect("\t\t\n", "alpha");          // 1st TAB lists, 2nd inserts sorted[0]
+  expect("\t\t\t\n", "bravo");        // sorted[1]
+  expect("\t\t\t\t\n", "Charlie");    // sorted[2]
+  expect("\t\t\t\t\t\n", "Delta");    // sorted[3]
+  rl_bind_key('\t', rl_complete);
   rl_attempted_completion_function = nullptr;
 
   // -- filename completion in a temp directory -----------------------------

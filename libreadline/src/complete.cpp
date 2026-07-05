@@ -11,11 +11,13 @@
 // purely through rl_attempted_completion_function / rl_completion_entry_function
 // and the rl_completer_* tunables -- libreadline has no shell knowledge.
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <dirent.h>
 #include <pwd.h>
 #include <string>
+#include <strings.h>
 #include <sys/stat.h>
 #include <vector>
 
@@ -220,23 +222,33 @@ int completion_grid(const std::vector<std::string> &items, bool print) {
 }
 
 // ---- zsh-style menu completion --------------------------------------------
-// Repeated TAB cycles through the candidate completions, inserting each in
-// turn (Shift-TAB cycles backward).  State persists between calls and is
-// treated as a continuation only when the buffer is exactly what the previous
-// step left -- same text and point -- so any edit restarts a fresh completion.
+// The first TAB lists the candidates (sorted, case-insensitive) but does not
+// change the line.  Each subsequent TAB inserts the next candidate in turn
+// (Shift-TAB goes backward), cycling through the sorted list.  State persists
+// between calls and is treated as a continuation only when the buffer is exactly
+// what the previous step left -- same text and point -- so any edit restarts a
+// fresh completion.
 std::vector<std::string> menu_items;
-size_t menu_idx = 0;
+int menu_idx = -1;  // -1 = list shown but nothing inserted yet
 int menu_start = 0;
-int menu_end = -1;      // rl_point after the last menu insertion; -1 = inactive
-std::string menu_snap;  // buffer contents after the last menu insertion
+
+// Alphabetical order, ignoring case; ties broken by the case-sensitive order so
+// the result is deterministic.
+bool menu_less(const std::string &a, const std::string &b) {
+  int c = strcasecmp(a.c_str(), b.c_str());
+  return c < 0 || (c == 0 && a < b);
+}
 
 int menu_step(int dir) {
-  bool cont = menu_end >= 0 && rl_point == menu_end && menu_items.size() > 1 &&
-              std::string(rl_line_buffer, static_cast<size_t>(rl_end)) == menu_snap;
+  // A continuation only if the previous command was also a menu step -- i.e. TAB
+  // (or Shift-TAB) pressed again with no editing in between.  Any other action
+  // starts a fresh completion, so stale state never leaks across lines.
+  bool cont = (rl_last_func == rl_menu_complete ||
+               rl_last_func == rl_backward_menu_complete) &&
+              menu_items.size() > 1;
   if (!cont) {
     menu_items.clear();
-    menu_idx = 0;
-    menu_end = -1;
+    menu_idx = -1;
     const char *brk = word_break_chars();
     int start = rl_point;
     while (start > 0 && std::strchr(brk, rl_line_buffer[start - 1]) == nullptr) start--;
@@ -253,12 +265,12 @@ int menu_step(int dir) {
     }
     for (int i = 1; matches[i]; i++) menu_items.emplace_back(matches[i]);
     free_matches(matches);
+    std::sort(menu_items.begin(), menu_items.end(), menu_less);
     menu_start = start;
-    menu_idx = (dir < 0) ? menu_items.size() - 1 : 0;
 
-    // On a fresh menu, list the candidates so they can be chosen from.  A small
-    // set is shown outright; a large one (> rl_completion_query_items) first
-    // asks, like zsh.  Either way, tab cycling then proceeds as normal.
+    // The first TAB only lists the candidates; it does not touch the line.  A
+    // small set is shown outright; a large one (> rl_completion_query_items)
+    // first asks, like zsh.
     FILE *o = rl_outstream ? rl_outstream : stdout;
     bool show = true;
     if (rl_completion_query_items > 0 &&
@@ -272,15 +284,18 @@ int menu_step(int dir) {
       if (!show) std::fputc('\n', o);  // leave the query line; drop to a new one
     }
     if (show) completion_grid(menu_items, /*print=*/true);
-  } else {
-    size_t n = menu_items.size();
-    menu_idx = (menu_idx + (dir < 0 ? n - 1 : 1)) % n;
+    return 0;  // the first TAB only lists; the line is left untouched
   }
+
+  // Continuation: advance to the next candidate and put it on the line.
+  int n = static_cast<int>(menu_items.size());
+  if (menu_idx < 0)
+    menu_idx = (dir < 0) ? n - 1 : 0;
+  else
+    menu_idx = (menu_idx + (dir < 0 ? n - 1 : 1)) % n;
   rl_delete_text(menu_start, rl_point);
   rl_point = menu_start;
-  rl_insert_text(menu_items[menu_idx].c_str());
-  menu_end = rl_point;
-  menu_snap.assign(rl_line_buffer, static_cast<size_t>(rl_end));
+  rl_insert_text(menu_items[static_cast<size_t>(menu_idx)].c_str());
   return 0;
 }
 
