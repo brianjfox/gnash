@@ -21,6 +21,7 @@
 #include "gnash/core/parser.hpp"
 #include "gnash/core/shell.hpp"
 #include "readline/history.h"
+#include "readline/keymaps.h"
 #include "readline/readline.h"
 
 namespace gnash::core {
@@ -131,6 +132,37 @@ extern "C" char **gnash_attempted_completion(const char *text, int start, int en
   }
   return nullptr;  // let readline fall back to its default (filename) completion
 }
+
+// display-shell-version (bound to C-x C-v, as in bash): print a line describing
+// this shell -- gnash's own version and architecture, plus the personality it is
+// emulating and that shell's version -- then redraw the prompt and input line.
+extern "C" int gnash_display_shell_version(int /*count*/, int /*key*/) {
+  FILE *o = rl_outstream ? rl_outstream : stdout;
+  std::string line = "gnash, version 0.1";
+  if (g_notify_shell) {
+    Shell &sh = *g_notify_shell;
+    std::string mach = sh.get("MACHTYPE");
+    std::string pname = sh.get("GNASH_PERSONALITY");
+    std::string pver;
+    switch (sh.persona) {
+      case Shell::Persona::Zsh: pver = sh.get("ZSH_VERSION"); break;
+      case Shell::Persona::Ksh: pver = sh.get("KSH_VERSION"); break;
+      case Shell::Persona::Csh: pver = sh.get("version"); break;
+      case Shell::Persona::Ash: break;  // ash advertises no version
+      default: pver = sh.get("BASH_VERSION"); break;  // Bash / gnash
+    }
+    line = "gnash, version 0.1 (" + mach + ")";
+    if (!pname.empty()) {
+      line += ", personality " + pname;
+      if (!pver.empty()) line += " " + pver;
+    }
+  }
+  std::fputs("\r\n", o);
+  std::fprintf(o, "%s\n", line.c_str());
+  std::fflush(o);
+  rl_redisplay();  // repaint the prompt and current input below the version line
+  return 0;
+}
 }  // namespace
 
 int run_interactive(Shell &sh) {
@@ -154,6 +186,13 @@ int run_interactive(Shell &sh) {
   rl_attempted_completion_function = gnash_attempted_completion;
   // zsh persona: highlight the command line as it is typed.
   if (sh.is_zsh()) rl_highlight_function = gnash_zsh_highlight;
+
+  // Bind C-x C-v to display-shell-version, as bash does by default.  Build the
+  // keymaps first (idempotent) and target the emacs keymap so the sequence
+  // descends into the existing C-x prefix map.
+  rl_initialize();
+  rl_set_keymap(rl_get_keymap_by_name("emacs"));
+  rl_bind_keyseq("\\C-x\\C-v", gnash_display_shell_version);
 
   while (!sh.exiting) {
     sh.reap_jobs(true);      // report any finished background jobs
