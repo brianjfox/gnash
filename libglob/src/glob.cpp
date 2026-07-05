@@ -28,6 +28,15 @@ bool is_dir(const std::string &path) {
   return stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
 }
 
+// Like is_dir, but does NOT follow symlinks: a symlink to a directory is not a
+// directory here.  Used by the globstar descent so `**' never recurses through
+// a symlinked directory -- matching bash, and avoiding infinite recursion on a
+// self-referential or cyclic symlink.
+bool is_dir_nofollow(const std::string &path) {
+  struct stat st;
+  return lstat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
+}
+
 bool path_exists(const std::string &path) {
   struct stat st;
   return lstat(path.c_str(), &st) == 0;
@@ -76,7 +85,7 @@ void collect_dirs(const std::string &base, std::vector<std::string> &out, bool m
     if (nm == "." || nm == "..") continue;
     if (nm[0] == '.' && !matchdot) continue;
     std::string full = base + nm;
-    if (is_dir(full)) subs.push_back(full + "/");
+    if (is_dir_nofollow(full)) subs.push_back(full + "/");  // don't descend symlinks
   }
   closedir(d);
   std::sort(subs.begin(), subs.end());
