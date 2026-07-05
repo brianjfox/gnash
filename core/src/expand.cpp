@@ -1024,6 +1024,12 @@ std::string Expander::expand_heredoc(const std::string &text) {
 
 // ---- brace expansion ------------------------------------------------------
 
+// Upper bound on the number of fields a single brace expansion may produce.
+// Far above any real use ({1..1000000} still expands exactly as in bash), but
+// low enough that a pathological range or combinatorial product cannot exhaust
+// memory and abort the shell.
+constexpr std::size_t kMaxBraceItems = 1000000;
+
 std::vector<std::string> brace_expand(const std::string &text) {
   // Find the first top-level {...} containing a comma or a ..range.
   size_t open = std::string::npos;
@@ -1070,8 +1076,18 @@ std::vector<std::string> brace_expand(const std::string &text) {
               char *ea = nullptr, *eb = nullptr;
               long va = std::strtol(a.c_str(), &ea, 10), vb = std::strtol(b.c_str(), &eb, 10);
               if (ea && *ea == '\0' && eb && *eb == '\0' && !a.empty() && !b.empty()) {
-                if (va <= vb) for (long v = va; v <= vb; v++) items.push_back(std::to_string(v));
-                else for (long v = va; v >= vb; v--) items.push_back(std::to_string(v));
+                // Cap the range length: an enormous {a..b} would otherwise build
+                // billions of strings and abort the shell on bad_alloc.  Beyond
+                // the cap, leave the word unexpanded rather than crash.  (span is
+                // the element count minus one; computed via unsigned to avoid
+                // signed overflow on a huge span.)
+                unsigned long long span =
+                    (va <= vb) ? static_cast<unsigned long long>(vb) - static_cast<unsigned long long>(va)
+                               : static_cast<unsigned long long>(va) - static_cast<unsigned long long>(vb);
+                if (span < kMaxBraceItems) {
+                  if (va <= vb) for (long v = va; v <= vb; v++) items.push_back(std::to_string(v));
+                  else for (long v = va; v >= vb; v--) items.push_back(std::to_string(v));
+                }
               } else if (a.size() == 1 && b.size() == 1 &&
                          std::isalpha(static_cast<unsigned char>(a[0])) &&
                          std::isalpha(static_cast<unsigned char>(b[0]))) {
@@ -1086,8 +1102,13 @@ std::vector<std::string> brace_expand(const std::string &text) {
             std::string post = text.substr(i + 1);
             std::vector<std::string> out;
             for (const std::string &it : items)
-              for (const std::string &tail : brace_expand(it + post))
+              for (const std::string &tail : brace_expand(it + post)) {
+                // Cap the combinatorial product ({a,b}{a,b}... grows as 2^n);
+                // beyond the cap, leave the word unexpanded rather than exhaust
+                // memory and abort.
+                if (out.size() >= kMaxBraceItems) return {text};
                 out.push_back(pre + tail);
+              }
             return out;
           }
           open = std::string::npos;
