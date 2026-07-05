@@ -198,13 +198,23 @@ std::string shell_quote(const std::string &s) {
 }
 
 // Format one numeric/string conversion with width/precision via snprintf.
+// Returns false if the conversion cannot be produced -- either the field width
+// is too large to represent (snprintf reports < 0) or the output buffer cannot
+// be allocated -- so the caller can report an error instead of letting a
+// pathological width (e.g. printf '%2000000000d') abort the shell on bad_alloc.
 template <typename T>
-void append_formatted(std::string &out, const std::string &spec, T value) {
+bool append_formatted(std::string &out, const std::string &spec, T value) {
   int need = std::snprintf(nullptr, 0, spec.c_str(), value);
-  if (need < 0) return;
-  std::vector<char> buf(static_cast<size_t>(need) + 1);
+  if (need < 0) return false;
+  std::vector<char> buf;
+  try {
+    buf.resize(static_cast<size_t>(need) + 1);
+  } catch (const std::bad_alloc &) {
+    return false;
+  }
   std::snprintf(buf.data(), buf.size(), spec.c_str(), value);
   out.append(buf.data(), static_cast<size_t>(need));
+  return true;
 }
 
 int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
@@ -226,6 +236,7 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
   std::string fmt = argv[ai++];
   size_t argi = ai;
   std::string out;
+  bool oversize = false;  // a field width too large to represent/allocate
   auto next = [&]() -> std::string {
     return argi < argv.size() ? argv[argi++] : std::string();
   };
@@ -254,7 +265,7 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
           consumed_any = true;
           if (stop) { argi = argv.size(); i = fmt.size(); break; }
         } else if (conv == 's') {
-          append_formatted(out, spec, next().c_str());
+          if (!append_formatted(out, spec, next().c_str())) oversize = true;
           consumed_any = true;
         } else if (conv == 'c') {
           std::string a = next();
@@ -264,11 +275,11 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
                    conv == 'o' || conv == 'u') {
           std::string sp = spec;
           sp.insert(sp.size() - 1, "l");  // promote to long
-          append_formatted(out, sp, std::strtol(next().c_str(), nullptr, 0));
+          if (!append_formatted(out, sp, std::strtol(next().c_str(), nullptr, 0))) oversize = true;
           consumed_any = true;
         } else if (conv == 'f' || conv == 'F' || conv == 'g' || conv == 'G' ||
                    conv == 'e' || conv == 'E') {
-          append_formatted(out, spec, std::strtod(next().c_str(), nullptr));
+          if (!append_formatted(out, spec, std::strtod(next().c_str(), nullptr))) oversize = true;
           consumed_any = true;
         } else {
           out += spec;
@@ -279,6 +290,12 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
       }
     }
   } while (argi < argv.size() && consumed_any);
+
+  if (oversize) {
+    std::fprintf(stderr, "%sprintf: Value too large to be stored in data type\n",
+                 sh.err_prefix().c_str());
+    return 1;
+  }
 
   if (to_var) {
     auto lb = vname.find('[');
