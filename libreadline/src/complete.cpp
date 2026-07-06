@@ -63,8 +63,10 @@ const char *word_break_chars() {
 // ---- filename quoting -----------------------------------------------------
 // Shell metacharacters (and whitespace) that must be backslash-escaped so a
 // completed filename is read as a single word.  Path/word-safe characters
-// (`/', `.', `-', `_', `:', `@', `,', `+', `%') are deliberately left alone.
-const char *filename_specials() { return " \t\n\\'\"`$&;|<>()[]{}*?!~#="; }
+// (`/', `.', `-', `_', `:', `@', `,', `+', `%') are deliberately left alone --
+// and so is `~', which is only special at the very start of a word (tilde
+// expansion), not within a completed filename.
+const char *filename_specials() { return " \t\n\\'\"`$&;|<>()[]{}*?!#="; }
 
 // Backslash-escape those characters in a filename completion before inserting.
 std::string quote_filename(const std::string &s) {
