@@ -628,6 +628,10 @@ void Shell::set_personality(const std::string &name) {
           "/usr/local/lib/bash:/usr/lib/bash:/opt/local/lib/bash:"
           "/usr/pkg/lib/bash:/opt/pkg/lib/bash:.");
   }
+
+  // Let an interactive REPL re-apply persona-dependent readline hooks when the
+  // personality is switched at runtime (`personality'/`emulate').
+  if (on_personality_change) on_personality_change();
 }
 
 int Shell::run_string(const std::string &script) {

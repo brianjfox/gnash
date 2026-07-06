@@ -7,6 +7,7 @@
 #define GNASH_CORE_SHELL_HPP
 
 #include <csignal>
+#include <functional>
 #include <map>
 #include <optional>
 #include <set>
@@ -176,6 +177,10 @@ class Shell {
   // ...).  Used both at startup and by the `personality'/`emulate' builtin to
   // switch personality while the shell is running.
   void set_personality(const std::string &name);
+  // Invoked at the end of set_personality (once set), so an interactive REPL can
+  // re-apply persona-dependent readline hooks (highlighting, TAB completion
+  // style, ...) when the personality changes at runtime.  Null until registered.
+  std::function<void()> on_personality_change;
   // Per-function-call saved personality for `personality -L' / `emulate -L':
   // each function call pushes an empty slot; a -L switch records the personality
   // to restore into the current slot; the slot is restored on function return.
