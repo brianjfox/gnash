@@ -1589,7 +1589,9 @@ static const UlimitRes kUlimits[] = {
 #endif
 };
 
-static void ulimit_print_one(const UlimitRes &r, bool hard) {
+// Print one resource limit.  When `labeled' is false (a single resource being
+// reported), bash prints just the value; otherwise the aligned descriptive line.
+static void ulimit_print_one(const UlimitRes &r, bool hard, bool labeled) {
   std::string val;
   if (r.res < 0) {
     val = "1";  // pipe size
@@ -1600,6 +1602,7 @@ static void ulimit_print_one(const UlimitRes &r, bool hard) {
     if (v == RLIM_INFINITY) val = "unlimited";
     else val = std::to_string(static_cast<unsigned long long>(v) / static_cast<unsigned long long>(r.factor));
   }
+  if (!labeled) { std::printf("%s\n", val.c_str()); return; }
   char unitstr[32];
   if (r.unit) std::snprintf(unitstr, sizeof unitstr, "(%s, -%c) ", r.unit, r.opt);
   else std::snprintf(unitstr, sizeof unitstr, "(-%c) ", r.opt);
@@ -1608,9 +1611,8 @@ static void ulimit_print_one(const UlimitRes &r, bool hard) {
 
 int bi_ulimit(Shell &sh, const std::vector<std::string> &argv) {
   bool hard = false, soft = false, all = false;
-  char opt = 'f';  // default resource
+  std::vector<char> reqs;  // requested resources, in order
   std::string value;
-  bool have_opt = false;
   size_t i = 1;
   for (; i < argv.size(); i++) {
     const std::string &a = argv[i];
@@ -1621,39 +1623,48 @@ int bi_ulimit(Shell &sh, const std::vector<std::string> &argv) {
       if (o == 'H') hard = true;
       else if (o == 'S') soft = true;
       else if (o == 'a') all = true;
-      else { opt = o; have_opt = true; }
+      else reqs.push_back(o);
     }
   }
   if (i < argv.size()) value = argv[i];
   if (!hard && !soft) soft = true;  // default acts on the soft limit
 
   if (all) {
-    for (const auto &r : kUlimits) ulimit_print_one(r, hard);
+    for (const auto &r : kUlimits) ulimit_print_one(r, hard, true);
     return 0;
   }
+  if (reqs.empty()) reqs.push_back('f');  // default resource
 
-  const UlimitRes *r = nullptr;
-  for (const auto &e : kUlimits) if (e.opt == opt) { r = &e; break; }
-  if (!r) { std::fprintf(stderr, "%sulimit: -%c: invalid option\n", sh.err_prefix().c_str(), opt); return 2; }
-  (void)have_opt;
+  // Resolve every requested resource up front (reject an unknown one).
+  std::vector<const UlimitRes *> rs;
+  for (char o : reqs) {
+    const UlimitRes *r = nullptr;
+    for (const auto &e : kUlimits) if (e.opt == o) { r = &e; break; }
+    if (!r) { std::fprintf(stderr, "%sulimit: -%c: invalid option\n", sh.err_prefix().c_str(), o); return 2; }
+    rs.push_back(r);
+  }
 
-  if (value.empty()) {  // report
-    ulimit_print_one(*r, hard);
+  if (value.empty()) {  // report: value-only for a single resource, labeled for several
+    bool labeled = rs.size() > 1;
+    for (const UlimitRes *r : rs) ulimit_print_one(*r, hard, labeled);
     return 0;
   }
-  if (r->res < 0) return 0;  // pipe size is not settable
-  struct rlimit rl;
-  getrlimit(r->res, &rl);
-  rlim_t nv;
-  if (value == "unlimited") nv = RLIM_INFINITY;
-  else if (value == "hard") nv = rl.rlim_max;
-  else if (value == "soft") nv = rl.rlim_cur;
-  else nv = static_cast<rlim_t>(std::strtoull(value.c_str(), nullptr, 10) * static_cast<unsigned long long>(r->factor));
-  if (hard) rl.rlim_max = nv;
-  if (soft) rl.rlim_cur = nv;
-  if (setrlimit(r->res, &rl) != 0) {
-    std::fprintf(stderr, "%sulimit: %s\n", sh.err_prefix().c_str(), std::strerror(errno));
-    return 1;
+  // Set the given value on each requested resource.
+  for (const UlimitRes *r : rs) {
+    if (r->res < 0) continue;  // pipe size is not settable
+    struct rlimit rl;
+    getrlimit(r->res, &rl);
+    rlim_t nv;
+    if (value == "unlimited") nv = RLIM_INFINITY;
+    else if (value == "hard") nv = rl.rlim_max;
+    else if (value == "soft") nv = rl.rlim_cur;
+    else nv = static_cast<rlim_t>(std::strtoull(value.c_str(), nullptr, 10) * static_cast<unsigned long long>(r->factor));
+    if (hard) rl.rlim_max = nv;
+    if (soft) rl.rlim_cur = nv;
+    if (setrlimit(r->res, &rl) != 0) {
+      std::fprintf(stderr, "%sulimit: %s\n", sh.err_prefix().c_str(), std::strerror(errno));
+      return 1;
+    }
   }
   return 0;
 }
