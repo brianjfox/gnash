@@ -372,6 +372,20 @@ bool Shell::is_array(const std::string &n_in) const {
          (it->second.kind == VarKind::Indexed || it->second.kind == VarKind::Assoc);
 }
 
+std::string Shell::zsh_subscript(const std::string &name, const std::string &sub) const {
+  if (!is_zsh()) return sub;
+  std::string n = deref(name);
+  auto it = vars.find(n);
+  // Associative arrays are keyed by string, not position -- never translate.
+  if (it != vars.end() && it->second.kind == VarKind::Assoc) return sub;
+  bool ok = true;
+  long long k = eval_arith(const_cast<Shell &>(*this), sub, &ok);
+  if (!ok) return sub;              // non-numeric: leave as-is
+  if (k > 0) return std::to_string(k - 1);            // 1-based -> 0-based
+  if (k < 0) return std::to_string(k + array_count(name));  // -1 == last
+  return "-1";                     // zsh has no element 0: force a miss
+}
+
 int Shell::array_count(const std::string &n_in) const {
   {
     std::vector<std::pair<std::string, std::string>> vp;

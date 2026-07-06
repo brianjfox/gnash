@@ -350,7 +350,7 @@ long long eval_string(Shell &sh, const std::string &str, int depth, bool *ok) {
 // recursively -- like bash, where `a=b+1; b=3; echo $((a))' yields 4.
 long long ref_get(const Node *n, Ctx &ctx) {
   std::string v;
-  if (n->has_sub) v = ctx.sh.array_get(n->name, n->sub);
+  if (n->has_sub) v = ctx.sh.array_get(n->name, ctx.sh.zsh_subscript(n->name, n->sub));
   else { v = ctx.sh.get(n->name); if (v.empty()) { std::string dv; if (ctx.sh.dynamic_var(n->name, dv)) v = dv; } }
   if (v.empty()) return 0;
   if (ctx.depth > 100) return 0;
@@ -359,7 +359,8 @@ long long ref_get(const Node *n, Ctx &ctx) {
   return o ? r : 0;
 }
 void ref_set(const Node *n, long long val, Ctx &ctx) {
-  if (n->has_sub) ctx.sh.array_set(n->name, n->sub, std::to_string(val));
+  if (n->has_sub)
+    ctx.sh.array_set(n->name, ctx.sh.zsh_subscript(n->name, n->sub), std::to_string(val));
   else ctx.sh.set(n->name, std::to_string(val));
 }
 

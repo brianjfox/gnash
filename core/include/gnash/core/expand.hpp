@@ -57,6 +57,14 @@ class Expander {
   void expand_dollar(const std::string &text, size_t &i, bool dq, std::string &out,
                      std::string &mask);
 
+  // zsh array subscript on NAME with the raw text SUB (between the brackets):
+  // a single 1-based/negative index, or a `lo,hi' range.  Emits the selected
+  // element(s) into out/mask -- a range yields one word per element (unquoted)
+  // or an IFS-joined word (double-quoted).  Used for `$name[..]' and
+  // `${name[lo,hi]}' under the zsh personality.
+  void emit_zsh_subscript(const std::string &name, const std::string &sub, bool dq,
+                          std::string &out, std::string &mask);
+
   // Split into fields on IFS; each field carries its per-character quote mask
   // so pathname expansion can tell quoted metacharacters from unquoted ones.
   std::vector<std::pair<std::string, std::string>> split_ifs(const std::string &s,

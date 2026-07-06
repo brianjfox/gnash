@@ -225,6 +225,46 @@ static bool slice_ref(const std::string &body, std::string &name, char &sel,
   return true;
 }
 
+void Expander::emit_zsh_subscript(const std::string &name, const std::string &sub, bool dq,
+                                  std::string &out, std::string &mask) {
+  // A top-level comma makes this a zsh range `lo,hi' (both 1-based, inclusive,
+  // negatives counting from the end).  Otherwise it is a single index.
+  size_t comma = std::string::npos;
+  for (size_t k = 0; k < sub.size(); k++) {
+    if (sub[k] == '[') { int d = 1; while (++k < sub.size() && d) d += (sub[k]=='[') - (sub[k]==']'); }
+    else if (sub[k] == ',') { comma = k; break; }
+  }
+  if (comma != std::string::npos) {
+    std::vector<std::string> all = sh_.array_values(name);
+    long long n = static_cast<long long>(all.size());
+    bool ok = true;
+    long long lo = eval_arith(sh_, expand_no_split(sub.substr(0, comma)), &ok);
+    long long hi = eval_arith(sh_, expand_no_split(sub.substr(comma + 1)), &ok);
+    if (lo < 0) lo += n + 1;  // -1 == last element (position n)
+    if (hi < 0) hi += n + 1;
+    std::vector<std::string> items;
+    for (long long k = lo; k <= hi; k++)
+      if (k >= 1 && k <= n) items.push_back(all[static_cast<size_t>(k - 1)]);
+    if (dq) {
+      std::string is = sh_.ifs();
+      std::string joiner = is.empty() ? std::string() : std::string(1, is[0]);
+      for (size_t k = 0; k < items.size(); k++) {
+        if (k) for (char c : joiner) { out += c; mask += '1'; }
+        for (char c : items[k]) { out += c; mask += '1'; }
+      }
+    } else {
+      for (size_t k = 0; k < items.size(); k++) {
+        if (k) { out += FIELD_SEP; mask += '0'; }
+        for (char c : items[k]) { out += c; mask += '0'; }
+      }
+    }
+    return;
+  }
+  std::string val = sh_.array_get(name, sh_.zsh_subscript(name, expand_no_split(sub)));
+  char qm = dq ? '1' : '0';
+  for (char c : val) { out += c; mask += qm; }
+}
+
 void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::string &out,
                              std::string &mask) {
   char qm = dq ? '1' : '0';
@@ -308,6 +348,24 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
     size_t end = scan_balanced(t, i + 1, '{', '}');
     if (end != std::string::npos) {
       std::string body = t.substr(i + 2, end - (i + 2));
+      // zsh: `${a[lo,hi]}' is a 1-based inclusive range.  (A single `${a[i]}'
+      // is handled -- 1-based -- in expand_brace_body.)  Only intercept a bare
+      // name[..] with no trailing operator so ${a[i]:-x} etc. still work.
+      if (sh_.is_zsh() && !body.empty() && body.back() == ']') {
+        size_t lb = body.find('[');
+        if (lb != std::string::npos && lb > 0) {
+          std::string zn = body.substr(0, lb);
+          bool ident = std::isalpha(static_cast<unsigned char>(zn[0])) || zn[0] == '_';
+          for (size_t k = 1; ident && k < zn.size(); k++)
+            ident = std::isalnum(static_cast<unsigned char>(zn[k])) || zn[k] == '_';
+          std::string zsub = body.substr(lb + 1, body.size() - lb - 2);
+          if (ident && sh_.is_array(zn) && zsub.find(',') != std::string::npos) {
+            emit_zsh_subscript(zn, zsub, dq, out, mask);
+            i = end + 1;
+            return;
+          }
+        }
+      }
       char lead, sel;
       std::string aname;
       if (array_ref(body, lead, aname, sel)) {
@@ -445,6 +503,17 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
     }
     i += 2;
     return;
+  } else if (n1 == '#' && sh_.is_zsh() && i + 2 < t.size() &&
+             (std::isalpha(static_cast<unsigned char>(t[i + 2])) || t[i + 2] == '_')) {
+    // zsh `$#name': element count for an array, string length for a scalar.
+    size_t j = i + 2;
+    while (j < t.size() && (std::isalnum(static_cast<unsigned char>(t[j])) || t[j] == '_')) j++;
+    std::string nm = t.substr(i + 2, j - (i + 2));
+    std::string cnt = sh_.is_array(nm) ? std::to_string(sh_.array_count(nm))
+                                       : std::to_string(sh_.get(nm).size());
+    for (char c : cnt) { out += c; mask += qm; }
+    i = j;
+    return;
   } else if (n1 == '?' || n1 == '$' || n1 == '!' || n1 == '#' || n1 == '-') {
     name = std::string(1, n1);
     i += 2;
@@ -455,6 +524,20 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
     out += '$';
     mask += qm;
     i += 1;
+    return;
+  }
+  // zsh brace-free subscript: `$name[i]' / `$name[lo,hi]' (1-based).  Only for
+  // arrays -- a scalar keeps its bare value (character indexing is not modeled).
+  if (sh_.is_zsh() && !name.empty() &&
+      (std::isalpha(static_cast<unsigned char>(name[0])) || name[0] == '_') &&
+      i < t.size() && t[i] == '[' && sh_.is_array(name)) {
+    size_t s = i + 1, p = i + 1;
+    int d = 1;
+    while (p < t.size() && d) { if (t[p] == '[') d++; else if (t[p] == ']') d--; if (d) p++; }
+    std::string zsub = t.substr(s, p - s);
+    if (p < t.size() && t[p] == ']') p++;
+    emit_zsh_subscript(name, zsub, dq, out, mask);
+    i = p;
     return;
   }
   // zsh: a bare `$array' expands to every element, not just element 0.  Unquoted
@@ -576,10 +659,16 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
     if (p < b.size() && b[p] == ']') p++;
   }
 
+  // zsh: `${#a}' on an array is the element count (bash gives the length of
+  // element 0); `${#a[i]}' keeps its meaning (length of that element).
+  if (length && !have_sub && sh.is_zsh() && sh.is_array(name))
+    return std::to_string(sh.array_count(name));
+
   bool set = false;
   std::string val;
   if (have_sub) {
-    val = sh.array_get(name, ex.expand_no_split(sub));
+    // zsh subscripts are 1-based; translate before the (0-based) array read.
+    val = sh.array_get(name, sh.zsh_subscript(name, ex.expand_no_split(sub)));
     set = sh.is_set(name);
   } else {
     val = ex.param_value(name, set);

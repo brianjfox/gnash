@@ -217,7 +217,9 @@ parse_array_elems(Expander &ex, const std::string &parenval) {
 
 void apply_array_assign(Shell &sh, Expander &ex, const Assign &a) {
   if (a.sub) {
-    std::string sub = ex.expand_no_split(*a.sub);
+    // zsh array subscripts are 1-based; translate to the internal 0-based index
+    // (a no-op under other personalities / for associative arrays).
+    std::string sub = sh.zsh_subscript(a.name, ex.expand_no_split(*a.sub));
     std::string val = ex.expand_assignment(a.value);
     if (a.append) val = sh.array_get(a.name, sub) + val;
     sh.array_set(a.name, sub, val);

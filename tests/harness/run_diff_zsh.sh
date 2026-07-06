@@ -63,6 +63,26 @@ scripts=(
   'v=hello; echo ${v/l/L}; echo ${#v}'
   # positional parameters keep their (bash-compatible) behavior
   'set -- p1 p2 p3; printf "[%s]" $@; echo; printf "[%s]" "$*"; echo'
+  # 1-based array indexing
+  'a=(alpha beta gamma delta); echo ${a[1]} ${a[2]}'
+  'a=(alpha beta gamma delta); echo "[${a[0]}]"'
+  # brace-free subscripts
+  'a=(alpha beta gamma delta); echo $a[1] $a[3]'
+  # negative indices count from the end
+  'a=(alpha beta gamma delta); echo $a[-1] $a[-2]'
+  # inclusive ranges, including negative bounds
+  'a=(alpha beta gamma delta); printf "<%s>" $a[2,3]; echo'
+  'a=(alpha beta gamma delta); printf "<%s>" $a[2,-1]; echo'
+  'a=(alpha beta gamma delta); printf "<%s>" $a[-2,-1]; echo'
+  # element count (${#a} and $#a) and scalar length
+  'a=(alpha beta gamma delta); echo ${#a} $#a'
+  'n=hello; echo $#n ${#n}'
+  # 1-based writes
+  'a=(alpha beta gamma delta); a[2]=BETA; printf "<%s>" $a; echo'
+  # 1-based subscripts inside arithmetic
+  'nums=(10 20 30); echo $((nums[1] + nums[3]))'
+  # associative arrays are keyed by string, not translated
+  'typeset -A h; h[key]=val; h[two]=2; echo ${h[key]} ${h[two]}'
 )
 
 fails=0
