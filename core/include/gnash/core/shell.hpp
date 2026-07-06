@@ -69,6 +69,11 @@ class Shell {
   // True when NAME holds an indexed or associative array (not a scalar); used
   // by the zsh personality, where a bare `$array' expands to all its elements.
   bool is_array(const std::string &n) const;
+  // zsh uses 1-based array subscripts (and negative indices counting from the
+  // end).  Under the zsh personality, translate such a subscript on an indexed
+  // array to gnash's internal 0-based index; for scalars, associative arrays,
+  // or any other personality the subscript is returned unchanged.
+  std::string zsh_subscript(const std::string &name, const std::string &sub) const;
   // Assign name=(elements...); each element is (optional explicit subscript, value).
   void array_assign(const std::string &n,
                     const std::vector<std::pair<std::optional<std::string>, std::string>> &elems,
