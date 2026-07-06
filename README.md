@@ -12,6 +12,8 @@ I had multiple goals in mind when creating gnash:
 1. Create a replacement shell that makes the reasons for having different shells go away. When running scripts, `gnash` should behave *identically* to the personality it is invoked as: **bash**, **ash**, **ksh**, **zsh**, or even **csh**/**tcsh** -- the same stdout/stderr, exit status, side effects, and error semantics.
 2. I wanted to connect people to the fact that the relationship of humans to software is changing drastically.  Humans still need to be the motivating factor behind the existance of the software, and often, we have architectural goals that are larger than a single, or even a suite, of software.  But writing clean and efficient code is no longer the purview of meat-people.  gnash was conceived of, designed, and written in approximately 6 hours of human attention coupled with 10 hours of computational coding.
 
+**zsh** has an *emulate* builtin, but that builtin specifically does not emulate bash, nor are the emulations feature-complete.  Because of the modular nature of the gnash shell, we are able to attempt to faithfully emulate other shells, including tcsh and zsh.
+
 ## How to Install It
 
 If you don't want to build from source yourself, install a released version.
@@ -40,7 +42,7 @@ It needs a C++20 compiler and CMake ≥ 3.16 — install them first if needed
 (`sudo apt install build-essential cmake`, `sudo dnf install gcc-c++ cmake`,
 `sudo pacman -S base-devel cmake`, or `brew install cmake`). By default it
 installs to `/usr/local/bin`, falling back to `~/.local/bin`; override with
-`PREFIX=~/somewhere`, or pin a version with `GNASH_REF=gnash-1.2.2`.
+`PREFIX=~/somewhere`, or pin a version with `GNASH_REF=gnash-1.3.0`.
 
 Prefer to look before you leap? The script is [`install.sh`](install.sh) — read
 it, then run `bash install.sh`.
