@@ -60,6 +60,51 @@ const char *word_break_chars() {
                                             : rl_basic_word_break_characters;
 }
 
+// ---- filename quoting -----------------------------------------------------
+// Shell metacharacters (and whitespace) that must be backslash-escaped so a
+// completed filename is read as a single word.  Path/word-safe characters
+// (`/', `.', `-', `_', `:', `@', `,', `+', `%') are deliberately left alone.
+const char *filename_specials() { return " \t\n\\'\"`$&;|<>()[]{}*?!~#="; }
+
+// Backslash-escape those characters in a filename completion before inserting.
+std::string quote_filename(const std::string &s) {
+  const char *sp = filename_specials();
+  std::string out;
+  for (char c : s) {
+    if (c != '\0' && std::strchr(sp, c)) out += '\\';
+    out += c;
+  }
+  return out;
+}
+
+// Remove backslash escapes, so a partially-typed `my\ re' matches the real
+// on-disk name `my report.txt' when generating completions.
+std::string dequote_filename(const std::string &s) {
+  std::string out;
+  for (size_t i = 0; i < s.size(); i++) {
+    if (s[i] == '\\' && i + 1 < s.size()) { out += s[++i]; continue; }
+    out += s[i];
+  }
+  return out;
+}
+
+// Start of the word under the cursor for completion, treating a backslash-
+// escaped break character (e.g. `\ ') as part of the word, not a boundary.
+int completion_word_start(const char *brk) {
+  int start = rl_point;
+  while (start > 0) {
+    char c = rl_line_buffer[start - 1];
+    if (c == '\\') { start--; continue; }  // backslash: part of an escape
+    if (std::strchr(brk, c) != nullptr) {
+      int bs = 0;
+      for (int j = start - 2; j >= 0 && rl_line_buffer[j] == '\\'; j--) bs++;
+      if (bs % 2 == 0) break;  // unescaped break char -> real word boundary
+    }
+    start--;
+  }
+  return start;
+}
+
 // Longest common prefix of two strings.
 std::string common_prefix(const std::string &a, const std::string &b) {
   size_t n = 0;
@@ -135,11 +180,14 @@ bool completion_is_dir(const std::string &path) {
 
 int complete_internal(int what_to_do) {
   const char *brk = word_break_chars();
-  int start = rl_point;
-  while (start > 0 && std::strchr(brk, rl_line_buffer[start - 1]) == nullptr) start--;
+  int start = completion_word_start(brk);
 
-  std::string text(rl_line_buffer + start, static_cast<size_t>(rl_point - start));
+  // The word may carry backslash escapes (`my\ re'); strip them for matching.
+  std::string word(rl_line_buffer + start, static_cast<size_t>(rl_point - start));
+  std::string text = dequote_filename(word);
+  rl_filename_completion_desired = 0;  // set by the generator iff completing filenames
   char **matches = gather_matches(text.c_str(), start, rl_point);
+  bool fn = rl_filename_completion_desired != 0;
 
   if (matches == nullptr || matches[0] == nullptr) {
     free_matches(matches);
@@ -156,15 +204,16 @@ int complete_internal(int what_to_do) {
     return 0;
   }
 
-  // Replace the word with the longest common prefix.
+  // Replace the word with the longest common prefix, escaping shell-special
+  // characters for a filename so the result stays a single word.
   rl_delete_text(start, rl_point);
   rl_point = start;
-  rl_insert_text(matches[0]);
+  rl_insert_text((fn ? quote_filename(matches[0]) : std::string(matches[0])).c_str());
 
   if (unique) {
     // For a filename completion that is a directory, append `/' rather than the
     // usual space so the next path component can be typed straight away.
-    if (rl_filename_completion_desired && completion_is_dir(matches[0])) {
+    if (fn && completion_is_dir(matches[0])) {
       if (rl_point == 0 || rl_line_buffer[rl_point - 1] != '/') rl_insert_text("/");
     } else if (rl_completion_append_character && rl_completion_suppress_append == 0) {
       char a[2] = {static_cast<char>(rl_completion_append_character), '\0'};
@@ -249,9 +298,9 @@ int menu_step(int dir) {
     menu_items.clear();
     menu_idx = -1;
     const char *brk = word_break_chars();
-    int start = rl_point;
-    while (start > 0 && std::strchr(brk, rl_line_buffer[start - 1]) == nullptr) start--;
-    std::string text(rl_line_buffer + start, static_cast<size_t>(rl_point - start));
+    int start = completion_word_start(brk);
+    std::string word(rl_line_buffer + start, static_cast<size_t>(rl_point - start));
+    std::string text = dequote_filename(word);  // strip escapes for matching
     rl_filename_completion_desired = 0;  // set by the generator iff completing filenames
     char **matches = gather_matches(text.c_str(), start, rl_point);
     menu_filenames = rl_filename_completion_desired != 0;
@@ -297,7 +346,8 @@ int menu_step(int dir) {
   rl_delete_text(menu_start, rl_point);
   rl_point = menu_start;
   const std::string &pick = menu_items[static_cast<size_t>(menu_idx)];
-  rl_insert_text(pick.c_str());
+  // Escape shell-special characters when the candidate is a filename.
+  rl_insert_text((menu_filenames ? quote_filename(pick) : pick).c_str());
   // zsh appends `/' when the chosen completion is a directory.
   if (menu_filenames && completion_is_dir(pick)) rl_insert_text("/");
   return 0;
