@@ -583,6 +583,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
             absorb_qnull();
             for (size_t k = 0; k < items.size(); k++) {
               if (k) { out += FIELD_SEP; mask += '0'; }
+              out += QNULL; mask += '1';  // keep an empty element as a field
               for (char c : items[k]) { out += c; mask += '1'; }
             }
           } else if (sel == '*' && dq) {
@@ -620,6 +621,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
           if (asel == '@' && dq) absorb_qnull();
           for (size_t k = 0; k < items.size(); k++) {
             if (k) { out += FIELD_SEP; mask += '0'; }
+            if (asel == '@' && dq) { out += QNULL; mask += '1'; }  // keep empty element
             for (char c : items[k]) { out += c; mask += m; }
           }
         }
@@ -664,6 +666,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
           if (ssel == '@' && dq) absorb_qnull();
           for (size_t k = 0; k < slice.size(); k++) {
             if (k) { out += FIELD_SEP; mask += '0'; }
+            if (ssel == '@' && dq) { out += QNULL; mask += '1'; }  // keep empty element
             for (char c : slice[k]) { out += c; mask += m; }
           }
         }
@@ -690,6 +693,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
       absorb_qnull();
       for (size_t k = 0; k < pos.size(); k++) {
         if (k) { out += FIELD_SEP; mask += '0'; }
+        out += QNULL; mask += '1';  // keep an empty positional as a field
         for (char c : pos[k]) { out += c; mask += '1'; }
       }
     } else if (n1 == '*' && dq) {
