@@ -2401,29 +2401,101 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
       st = sh.run_string(join(argv, 1));
     }
   } else if (cmd == "exec") {
-    if (argv.size() > 1) {
+    // Options: -a NAME (argv[0] for the command), -c (empty environment),
+    // -l (login: prefix argv[0] with '-').
+    size_t i = 1;
+    std::string a_name;
+    bool have_a = false, clear_env = false, login = false, bad_opt = false;
+    for (; i < argv.size(); i++) {
+      const std::string &o = argv[i];
+      if (o == "--") { i++; break; }
+      if (o.size() < 2 || o[0] != '-') break;
+      bool consumed_next = false;
+      for (size_t k = 1; k < o.size(); k++) {
+        if (o[k] == 'c') clear_env = true;
+        else if (o[k] == 'l') login = true;
+        else if (o[k] == 'a') {
+          have_a = true;
+          if (k + 1 < o.size()) { a_name = o.substr(k + 1); }
+          else if (i + 1 < argv.size()) { a_name = argv[i + 1]; consumed_next = true; }
+          k = o.size();
+        } else { bad_opt = true; break; }
+      }
+      if (bad_opt) break;
+      if (consumed_next) i++;
+    }
+    if (bad_opt) {
+      std::fprintf(stderr, "%sexec: %s: invalid option\n", sh.err_prefix().c_str(),
+                   argv[i].c_str());
+      st = 2;
+    } else if (i >= argv.size()) {
+      // No command word: `exec' with only options/redirections is a no-op here
+      // (redirections are applied by the caller and made permanent).
+      st = 0;
+    } else {
+      const std::string &target = argv[i];
+      // Resolve through the shell's $PATH (what `type'/normal execution use), so
+      // exec finds exactly what the rest of the shell would run.
+      std::string full;
+      bool found = false;
+      if (target.find('/') != std::string::npos) {
+        full = target;
+        found = true;  // let execve report ENOENT/EACCES for an explicit path
+      } else {
+        std::vector<std::string> m = find_all_in_path(sh, target);
+        if (!m.empty()) { full = m[0]; found = true; }
+        else {
+          // No executable match: if a file by that name merely exists on $PATH,
+          // use it so execve reports the real error (e.g. EACCES), as bash does.
+          std::string path = sh.get("PATH");
+          size_t p = 0;
+          while (p <= path.size()) {
+            size_t q = path.find(':', p);
+            std::string dir = path.substr(p, q == std::string::npos ? std::string::npos : q - p);
+            if (dir.empty()) dir = ".";
+            std::string cand = dir + "/" + target;
+            if (access(cand.c_str(), F_OK) == 0) { full = cand; found = true; break; }
+            if (q == std::string::npos) break;
+            p = q + 1;
+          }
+        }
+      }
+      // argv[0] for the command: -a NAME, else the name as typed; -l adds '-'.
+      std::string a0 = have_a ? a_name : target;
+      if (login) a0 = "-" + a0;
       std::vector<char *> cargv;
-      for (size_t i = 1; i < argv.size(); i++) cargv.push_back(const_cast<char *>(argv[i].c_str()));
+      cargv.push_back(const_cast<char *>(a0.c_str()));
+      for (size_t j = i + 1; j < argv.size(); j++)
+        cargv.push_back(const_cast<char *>(argv[j].c_str()));
       cargv.push_back(nullptr);
-      std::fflush(nullptr);
-      execvp(cargv[0], cargv.data());
-      // exec failed to run the command.  Report it, then behave like bash: an
-      // interactive shell (or one with `shopt -s execfail') stays alive and
-      // returns failure; a non-interactive shell exits.
-      int code = (errno == EACCES) ? 126 : 127;
-      if (errno == ENOENT && argv[1].find('/') == std::string::npos)
-        std::fprintf(stderr, "%sexec: %s: not found\n", sh.err_prefix().c_str(), argv[1].c_str());
-      else
-        std::fprintf(stderr, "%sexec: %s: %s\n", sh.err_prefix().c_str(), argv[1].c_str(),
+      // Pass the shell's current environment (empty under -c) explicitly via
+      // execve, so the live shell's `environ' is never disturbed on failure.
+      std::vector<std::string> envs;
+      if (!clear_env) envs = sh.environ_block();
+      std::vector<char *> envp;
+      for (auto &e : envs) envp.push_back(const_cast<char *>(e.c_str()));
+      envp.push_back(nullptr);
+
+      int code = 127;
+      if (found) {
+        std::fflush(nullptr);
+        execve(full.c_str(), cargv.data(), envp.data());
+        // execve returned: it failed.  bash reports this as "<path>: <error>"
+        // (no "exec:" prefix), using the resolved path.
+        code = (errno == EACCES) ? 126 : 127;
+        std::fprintf(stderr, "%s%s: %s\n", sh.err_prefix().c_str(), full.c_str(),
                      std::strerror(errno));
+      } else {
+        std::fprintf(stderr, "%sexec: %s: not found\n", sh.err_prefix().c_str(), target.c_str());
+      }
+      // bash: an interactive shell (or `shopt -s execfail') stays alive and
+      // returns failure; a non-interactive shell exits.
       auto ef = sh.shopt_opts.find("execfail");
       bool execfail = ef != sh.shopt_opts.end() && ef->second;
       if (sh.interactive || execfail)
         st = code;
       else
         _exit(code);
-    } else {
-      st = 0;
     }
   } else {
     return false;
