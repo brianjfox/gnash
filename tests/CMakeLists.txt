@@ -89,6 +89,17 @@ if(BASH_EXECUTABLE AND TCSH_EXECUTABLE)
             $<TARGET_FILE:gnash> ${TCSH_EXECUTABLE})
 endif()
 
+# Differential execution check for the zsh personality vs a reference zsh,
+# covering the expansion behaviors (word splitting, bare-array expansion) where
+# zsh diverges from bash.
+find_program(ZSH_EXECUTABLE zsh)
+if(BASH_EXECUTABLE AND ZSH_EXECUTABLE)
+  add_test(
+    NAME run_diff_zsh
+    COMMAND ${BASH_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/harness/run_diff_zsh.sh
+            $<TARGET_FILE:gnash> ${ZSH_EXECUTABLE})
+endif()
+
 # ---------------------------------------------------------------------------
 # Conformance harness self-check.
 #

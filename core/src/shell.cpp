@@ -365,6 +365,13 @@ void Shell::array_set(const std::string &n_in, const std::string &sub, const std
   if (k == 0) v.value = val;
 }
 
+bool Shell::is_array(const std::string &n_in) const {
+  std::string n = deref(n_in);
+  auto it = vars.find(n);
+  return it != vars.end() &&
+         (it->second.kind == VarKind::Indexed || it->second.kind == VarKind::Assoc);
+}
+
 int Shell::array_count(const std::string &n_in) const {
   {
     std::vector<std::pair<std::string, std::string>> vp;
