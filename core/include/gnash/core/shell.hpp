@@ -85,6 +85,8 @@ class Shell {
   std::map<std::string, bool> shopt_opts;     // `shopt' option states
   std::set<std::string> disabled_builtins;    // `enable -n': builtins turned off
   std::map<std::string, std::string> aliases;  // `alias': name -> expansion
+  std::map<std::string, std::string> global_aliases;  // zsh `alias -g': expand anywhere
+  std::map<std::string, std::string> suffix_aliases;  // zsh `alias -s ext=cmd'
   std::map<std::string, std::string> completions;  // `complete': name -> spec string
   struct CallFrame { int line; std::string func; std::string source; };
   std::vector<CallFrame> call_stack;          // `caller': active function calls
