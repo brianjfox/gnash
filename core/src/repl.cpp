@@ -225,6 +225,27 @@ extern "C" int gnash_display_shell_version(int /*count*/, int /*key*/) {
   rl_redisplay();  // repaint the prompt and current input below the version line
   return 0;
 }
+
+// (Re)apply the persona-dependent readline configuration.  The zsh persona gets
+// live command-line highlighting, TAB menu-completion (Shift-TAB backward), and
+// dotfile hiding; the other personas use readline's defaults -- no highlighting,
+// TAB inserts the common prefix then lists.  Called at startup and again
+// whenever the personality changes at runtime, so `personality zsh' / `emulate'
+// take effect immediately.  Completion keys live in the emacs keymap (as the
+// rest of the setup does); the read loop selects the mode's keymap per line.
+void apply_persona_readline(Shell &sh) {
+  bool zsh = sh.is_zsh();
+  rl_highlight_function = zsh ? gnash_zsh_highlight : nullptr;
+  rl_match_hidden_files = zsh ? 0 : 1;
+  rl_set_keymap(rl_get_keymap_by_name("emacs"));
+  if (zsh) {
+    rl_bind_key('\t', rl_menu_complete);
+    rl_bind_keyseq("\\e[Z", rl_backward_menu_complete);
+  } else {
+    rl_bind_key('\t', rl_complete);
+    rl_bind_keyseq("\\e[Z", rl_complete);
+  }
+}
 }  // namespace
 
 int run_interactive(Shell &sh) {
@@ -246,8 +267,6 @@ int run_interactive(Shell &sh) {
   rl_event_hook = gnash_job_notify_hook;
   // Complete variable names after `$'.
   rl_attempted_completion_function = gnash_attempted_completion;
-  // zsh persona: highlight the command line as it is typed.
-  if (sh.is_zsh()) rl_highlight_function = gnash_zsh_highlight;
 
   // Bind C-x C-v to display-shell-version, as bash does by default.  Build the
   // keymaps first (idempotent) and target the emacs keymap so the sequence
@@ -256,15 +275,11 @@ int run_interactive(Shell &sh) {
   rl_set_keymap(rl_get_keymap_by_name("emacs"));
   rl_bind_keyseq("\\C-x\\C-v", gnash_display_shell_version);
 
-  // zsh persona: TAB cycles through completions (menu completion), Shift-TAB
-  // cycles backward -- the characteristic zsh feel, versus bash's insert-common-
-  // prefix-then-list.  Also hide dotfiles unless the word begins with `.', as
-  // zsh does (bash-family personas keep readline's default of matching them).
-  if (sh.is_zsh()) {
-    rl_bind_key('\t', rl_menu_complete);
-    rl_bind_keyseq("\\e[Z", rl_backward_menu_complete);
-    rl_match_hidden_files = 0;
-  }
+  // Persona-dependent readline hooks (highlighting, TAB completion style, dotfile
+  // hiding).  Applied now, and re-applied whenever the personality is switched at
+  // runtime via `personality'/`emulate'.
+  apply_persona_readline(sh);
+  sh.on_personality_change = [&sh]() { apply_persona_readline(sh); };
 
   while (!sh.exiting) {
     // Catch SIGINT during command execution so C-c aborts the running command
