@@ -24,10 +24,23 @@ Homebrew runs on both macOS and Linux, and the same tap works on either:
 
 ```sh
 brew tap brianjfox/tools
+brew trust brianjfox/tools
 brew install gnash
 ```
 
-Later, `brew upgrade gnash` picks up new releases.
+`brew trust` is needed because gnash comes from a third-party tap: recent
+Homebrew won't load formulae from an untrusted tap. Later, `brew upgrade gnash`
+picks up new releases.
+
+On macOS Apple Silicon a prebuilt **bottle** is poured (no compiler needed). On
+other platforms — or if you'd rather compile it yourself — build from source:
+
+```sh
+brew install --build-from-source gnash
+```
+
+That needs a C++20 compiler and CMake (`brew install cmake`); Homebrew fetches
+the release source tarball and runs the same CMake build.
 
 ### Linux or macOS — install script
 
