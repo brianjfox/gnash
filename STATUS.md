@@ -87,7 +87,7 @@ land.
     `jobs/fg/bg/disown/kill/suspend`, `pushd/popd/dirs`, `mapfile/readarray`, `alias/unalias`,
     `history/fc`, `hash`, `shopt`, `ulimit`, `enable`, `caller`, `bind`, `compgen/complete/
     compopt`, `help`, and `builtin`; `printf` supports `-v`/`%q`/`%b`, `type` all its flags.
-    Verified by a **differential execution harness** (`run_diff.sh`): **167 scripts** produce
+    Verified by a **differential execution harness** (`run_diff.sh`): **172 scripts** produce
     identical stdout and exit status to bash 5.3.
   - **Job control** — each pipeline / background command runs in its own process group; the
     shell hands the controlling terminal to a foreground job and reclaims it, reaps children,

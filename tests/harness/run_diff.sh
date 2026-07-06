@@ -12,6 +12,27 @@ set -u
 gnash=${1:?usage: run_diff.sh GNASH BASH}
 bash=${2:?usage: run_diff.sh GNASH BASH}
 
+# The oracle must be a REAL bash.  On a dev box a gnash symlink often shadows
+# `bash' on $PATH (so CMake's find_program hands us gnash, not bash); a
+# differential against gnash itself is meaningless.  If the given oracle reports
+# itself as gnash, look for a real bash: $GNASH_BASH, then a Homebrew Cellar
+# bash, then the usual locations.  If none is found, skip rather than fail.
+is_real_bash() { "$1" --version 2>/dev/null | head -1 | grep -qi 'GNU bash'; }
+if ! is_real_bash "$bash"; then
+  set +u  # GNASH_BASH may be unset
+  found=""
+  for cand in "$GNASH_BASH" /opt/homebrew/Cellar/bash/*/bin/bash \
+              /usr/local/bin/bash /opt/local/bin/bash /bin/bash; do
+    if [ -n "$cand" ] && [ -x "$cand" ] && is_real_bash "$cand"; then found=$cand; break; fi
+  done
+  set -u
+  if [ -z "$found" ]; then
+    echo "run_diff: no real bash oracle found (got '$bash'); skipping" >&2
+    exit 0
+  fi
+  bash=$found
+fi
+
 scripts=(
   'echo hello world'
   'echo -n no-newline'
@@ -182,12 +203,23 @@ scripts=(
   'set -o pipefail; (exit 3) | true | (exit 5); echo $?'
   'false | true; echo $?'
   'set -o pipefail; set +o pipefail; false | true; echo $?'
+  # exec resolves the command through the shell $PATH, and its flags
+  'd=/tmp/gnash_exec_rd; rm -rf "$d"; mkdir -p "$d"; printf "#!/bin/sh\necho exec-ok\n" > "$d/xp"; chmod +x "$d/xp"; PATH="$d:$PATH"; exec xp'
+  'exec -a ZEROTH /bin/sh -c "echo argv0=\$0"'
+  # quoted "$@" / "${a[@]}" keep empty elements
+  'set -- "" x ""; printf "<%s>" "$@"; echo'
+  'a=(p "" q); for e in "${a[@]}"; do echo "[$e]"; done'
+  # ulimit reports a single resource as a bare value
+  'ulimit -n; ulimit -c'
 )
 
 fails=0
 for s in "${scripts[@]}"; do
-  g_out=$(printf '%s' "$s" | "$gnash" </dev/null 2>/dev/null); g_rc=$?
-  b_out=$(printf '%s' "$s" | "$bash"  </dev/null 2>/dev/null); b_rc=$?
+  # Run the script via -c (stdin left as /dev/null so a stray `read' can't
+  # hang).  NOTE: the script must be passed as an argument, not piped to stdin;
+  # piping while redirecting stdin from /dev/null makes the shell read nothing.
+  g_out=$("$gnash" -c "$s" </dev/null 2>/dev/null); g_rc=$?
+  b_out=$("$bash"  -c "$s" </dev/null 2>/dev/null); b_rc=$?
   if [ "$g_out" != "$b_out" ] || [ "$g_rc" != "$b_rc" ]; then
     echo "MISMATCH: $s" >&2
     echo "  gnash (rc=$g_rc): $g_out" >&2
