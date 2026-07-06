@@ -952,7 +952,7 @@ static const char *const kBuiltinNames[] = {
     "source", ".", "local", "declare", "typeset", "readonly", "let", "type", "trap",
     "umask", "getopts", "exec", "command", "times", "wait", "jobs", "fg", "bg",
     "disown", "kill", "suspend", "dirs", "pushd", "popd", "mapfile", "readarray",
-    "help", "builtin", "logout", "hash", "shopt", "ulimit", "enable", "caller", "alias", "unalias", "history", "fc", "compgen", "complete", "compopt", "bind", nullptr};
+    "help", "builtin", "logout", "hash", "shopt", "ulimit", "enable", "caller", "alias", "unalias", "history", "fc", "compgen", "complete", "compopt", "bind", "personality", nullptr};
 
 bool is_builtin_name(const std::string &n) {
   for (int i = 0; kBuiltinNames[i]; i++)
@@ -1336,6 +1336,7 @@ static const BuiltinHelp kBuiltinHelp[] = {
     {"enable", "enable [-a] [-dnps] [-f filename] [name ...]", "Enable and disable shell builtins."},
     {"caller", "caller [expr]", "Return the context of the current subroutine call."},
     {"alias", "alias [-p] [name[=value] ... ]", "Define or display aliases."},
+    {"personality", "personality [-lLR] [{bash|zsh|sh|ksh|csh} [-c command]]", "Switch the shell's personality at runtime (zsh `emulate' syntax)."},
     {"unalias", "unalias [-a] name [name ...]", "Remove each NAME from the list of defined aliases."},
     {"history", "history [-c] [-d offset] [n] or history -anrw [filename] or history -ps arg [arg...]", "Display or manipulate the history list."},
     {"fc", "fc [-e ename] [-lnr] [first] [last] or fc -s [pat=rep] [command]", "Display or execute commands from the history list."},
@@ -2128,6 +2129,68 @@ bool command_is_valid(Shell &sh, const std::string &name) {
   return !find_in_path(sh, name).empty();
 }
 
+// personality [ -lLR ] [ NAME [ -c command ] ]   (alias: emulate)
+//
+// Switch the shell's personality at runtime, with syntax identical to zsh's
+// `emulate' builtin.  With no NAME, print the current personality.  `-c command'
+// runs command under NAME then restores the previous personality; `-L' makes
+// the switch local to the enclosing function (restored on return); `-R'/`-l'
+// are accepted (a personality switch is already a full reconfiguration).
+int bi_personality(Shell &sh, const std::vector<std::string> &argv) {
+  static const std::set<std::string> kNames = {
+      "bash", "zsh",   "sh",    "dash",  "ash",  "ksh",
+      "ksh93", "mksh", "pdksh", "rksh",  "csh",  "tcsh"};
+  bool opt_l = false, opt_L = false, opt_R = false;
+  size_t i = 1;
+  for (; i < argv.size(); i++) {
+    const std::string &a = argv[i];
+    if (a == "--") { i++; break; }
+    if (a.size() < 2 || a[0] != '-') break;
+    bool ok = true;
+    for (size_t k = 1; k < a.size(); k++) {
+      if (a[k] == 'l') opt_l = true;
+      else if (a[k] == 'L') opt_L = true;
+      else if (a[k] == 'R') opt_R = true;
+      else { ok = false; break; }
+    }
+    if (!ok) {
+      std::fprintf(stderr, "%s: bad option: %s\n", argv[0].c_str(), a.c_str());
+      return 1;
+    }
+  }
+  (void)opt_R;
+
+  if (i >= argv.size()) {  // no mode -> report the current personality
+    std::printf("%s\n", sh.personality_name.c_str());
+    return 0;
+  }
+
+  std::string mode = argv[i++];
+  if (!kNames.count(mode)) {
+    std::fprintf(stderr, "%s: unknown personality: %s\n", argv[0].c_str(), mode.c_str());
+    return 1;
+  }
+  // Trailing `-c command' (and any other option-flags, which we accept quietly).
+  std::string cmd;
+  bool have_c = false;
+  for (; i < argv.size(); i++) {
+    if (argv[i] == "-c" && i + 1 < argv.size()) { cmd = argv[++i]; have_c = true; }
+  }
+
+  if (have_c) {  // run under MODE, then restore
+    std::string saved = sh.personality_name;
+    sh.set_personality(mode);
+    int st = sh.run_string(cmd);
+    sh.set_personality(saved);
+    return st;
+  }
+  if (opt_L && !sh.persona_restore.empty() && !sh.persona_restore.back())
+    sh.persona_restore.back() = sh.personality_name;  // restore when the function returns
+  sh.set_personality(mode);
+  (void)opt_l;
+  return 0;
+}
+
 bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
   if (argv.empty()) return false;
   const std::string &cmd = argv[0];
@@ -2143,7 +2206,7 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
     static const std::set<std::string> kZshNoops = {
         "setopt", "unsetopt", "bindkey", "zstyle", "autoload", "zle", "zmodload",
         "compdef", "compinit", "bashcompinit", "disable", "limit", "unlimit",
-        "ttyctl", "sched", "zcompile", "emulate", "add-zsh-hook", "zrecompile"};
+        "ttyctl", "sched", "zcompile", "add-zsh-hook", "zrecompile"};
     if (kZshNoops.count(cmd)) { if (status) *status = 0; return true; }
   }
 
@@ -2160,6 +2223,9 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
   else if (cmd == "export") st = bi_export(sh, argv);
   else if (cmd == "unset") st = bi_unset(sh, argv);
   else if (cmd == "set") st = bi_set(sh, argv);
+  // `personality' is always available; `emulate' is its zsh-mode alias.
+  else if (cmd == "personality" || (cmd == "emulate" && sh.is_zsh()))
+    st = bi_personality(sh, argv);
   else if (cmd == "read") st = bi_read(sh, argv);
   else if (cmd == "test") st = bi_test(sh, argv, false);
   else if (cmd == "[") st = bi_test(sh, argv, true);
