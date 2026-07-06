@@ -128,6 +128,7 @@ land.
     expansion, the core parses/executes. Prompt expansion (a `\u@\h:\w\$ ` default), multi-line
     continuation, arrow-key recall, `!!`/`^old^new^`, a persistent history file
     (`$HISTFILE`/`~/.gnash_history`), interactive job control, `EXIT`/signal traps, and
-    completion — filenames (a trailing `/` for directories), `$`-variable names (incl. the
-    dynamic specials), and per-persona syntax highlighting. Verified by driving gnash through a
-    pseudo-terminal.
+    completion — command names in command position (keywords, aliases, functions, builtins,
+    and `$PATH` executables), filenames elsewhere (a trailing `/` for directories),
+    `$`-variable names (incl. the dynamic specials), and per-persona syntax highlighting.
+    Verified by driving gnash through a pseudo-terminal.
