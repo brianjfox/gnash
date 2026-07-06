@@ -421,6 +421,18 @@ void Shell::array_assign(
   v.kind = (assoc || v.kind == VarKind::Assoc) ? VarKind::Assoc : VarKind::Indexed;
   long long next = 0;
   if (v.kind == VarKind::Indexed && !v.idx.empty()) next = v.idx.rbegin()->first + 1;
+  // An associative array can be assigned from a flat key/value list
+  // (`declare -A h; h=(k1 v1 k2 v2)'), as bash 5.x and zsh both do, in addition
+  // to explicit `([k]=v)' pairs (which keep their subscript below).
+  if (v.kind == VarKind::Assoc) {
+    for (size_t x = 0; x < elems.size(); x++) {
+      if (elems[x].first) { v.assoc[*elems[x].first] = elems[x].second; continue; }
+      const std::string &key = elems[x].second;
+      v.assoc[key] = (x + 1 < elems.size()) ? elems[x + 1].second : std::string();
+      x++;  // consumed the paired value
+    }
+    return;
+  }
   for (const auto &e : elems) {
     if (v.kind == VarKind::Assoc) {
       if (e.first) v.assoc[*e.first] = e.second;

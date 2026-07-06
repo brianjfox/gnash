@@ -65,6 +65,12 @@ class Expander {
   void emit_zsh_subscript(const std::string &name, const std::string &sub, bool dq,
                           std::string &out, std::string &mask);
 
+  // zsh `${(flags)name}' expansion flags (join/split/sort/unique/case/keys).
+  // Returns true and emits into out/mask when BODY begins with a `(flags)'
+  // group; false (leaving out/mask untouched) otherwise, so the caller can
+  // fall through to ordinary ${...} handling.
+  bool emit_zsh_flags(const std::string &body, bool dq, std::string &out, std::string &mask);
+
   // Split into fields on IFS; each field carries its per-character quote mask
   // so pathname expansion can tell quoted metacharacters from unquoted ones.
   std::vector<std::pair<std::string, std::string>> split_ifs(const std::string &s,
