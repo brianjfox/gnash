@@ -348,6 +348,10 @@ extern "C" char *readline(const char *prompt) {
 
   while (!rl_done) {
     int c = rl_read_key();
+    // Erase a completion listing left below the line by a prior TAB (the cursor
+    // is still on the input line at this point), before anything else reacts to
+    // the key -- including a C-c/EOF that ends the line.
+    rl_clear_menu_below();
     if (gnash::readline::rl_sigint_flag) {  // C-c: abort this line, reprompt
       gnash::readline::rl_sigint_flag = 0;
       rl_pending_sigint = 1;
