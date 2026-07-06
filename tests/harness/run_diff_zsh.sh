@@ -83,6 +83,28 @@ scripts=(
   'nums=(10 20 30); echo $((nums[1] + nums[3]))'
   # associative arrays are keyed by string, not translated
   'typeset -A h; h[key]=val; h[two]=2; echo ${h[key]} ${h[two]}'
+  # zsh flat key/value associative assignment
+  'typeset -A h; h=(one 1 two 2 three 3); echo ${h[two]} ${#h}'
+  # ${(flags)...} expansion flags: join / split / newline
+  'a=(foo bar baz); echo "${(j:-:)a}"'
+  's="1:2:3"; printf "<%s>" ${(s.:.)s}; echo'
+  'a=(foo bar baz); printf "<%s>" "${(F)a}"; echo'
+  'l=$(printf "x\ny\nz"); printf "<%s>" ${(f)l}; echo'
+  # sort (o/O), numeric (n), unique (u), and combinations
+  'a=(foo bar baz); printf "<%s>" ${(o)a}; echo; printf "<%s>" ${(O)a}; echo'
+  'n=(3 1 22 4); printf "<%s>" ${(no)n}; echo; printf "<%s>" ${(o)n}; echo'
+  'd=(b a b c a); printf "<%s>" ${(u)d}; echo; printf "<%s>" ${(ou)d}; echo'
+  # case flags L / U / C
+  'v="Hello World"; echo ${(L)v}; echo ${(U)v}; echo ${(C)v}'
+  # associative keys / values, sorted
+  'typeset -A h; h=(one 1 two 2 three 3); printf "<%s>" ${(ok)h}; echo; printf "<%s>" ${(okv)h}; echo'
+  # split flag on a command substitution
+  's=$(echo "x+y+z"); printf "<%s>" ${(s:+:)s}; echo'
+  # ${=name}: force word splitting, even inside double quotes
+  'w="a b c"; printf "<%s>" ${=w}; echo; printf "<%s>" "${=w}"; echo'
+  # scalar character indexing and substrings (1-based, negatives from the end)
+  'str=hello; echo $str[1] $str[-1] ${str[3]}'
+  'str=hello; echo $str[2,4] ${str[2,-1]}'
 )
 
 fails=0

@@ -9,6 +9,7 @@
 
 #include "gnash/core/expand.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
@@ -225,6 +226,151 @@ static bool slice_ref(const std::string &body, std::string &name, char &sel,
   return true;
 }
 
+bool Expander::emit_zsh_flags(const std::string &body, bool dq, std::string &out,
+                              std::string &mask) {
+  if (body.empty() || body[0] != '(') return false;
+  size_t rp = body.find(')');
+  if (rp == std::string::npos) return false;
+  std::string flags = body.substr(1, rp - 1);
+  std::string rest = body.substr(rp + 1);
+  if (rest.empty()) return false;
+
+  bool f_join = false, f_split = false, f_sort = false, f_rev = false, f_num = false;
+  bool f_ci = false, f_uniq = false, f_keys = false, f_vals = false;
+  int f_case = 0;  // 1=L 2=U 3=C
+  std::string jsep, ssep;
+  for (size_t p = 0; p < flags.size(); p++) {
+    char c = flags[p];
+    if ((c == 'j' || c == 's') && p + 1 < flags.size()) {
+      char d = flags[p + 1];
+      size_t q = p + 2;
+      std::string sep;
+      while (q < flags.size() && flags[q] != d) sep += flags[q++];
+      if (c == 'j') { jsep = sep; f_join = true; } else { ssep = sep; f_split = true; }
+      p = q;  // at the closing delimiter; loop ++ steps past it
+      continue;
+    }
+    switch (c) {
+      case 'F': jsep = "\n"; f_join = true; break;
+      case 'f': ssep = "\n"; f_split = true; break;
+      case 'o': f_sort = true; break;
+      case 'O': f_sort = true; f_rev = true; break;
+      case 'n': f_num = true; break;
+      case 'i': f_ci = true; break;
+      case 'u': f_uniq = true; break;
+      case 'L': f_case = 1; break;
+      case 'U': f_case = 2; break;
+      case 'C': f_case = 3; break;
+      case 'k': f_keys = true; break;
+      case 'v': f_vals = true; break;
+      default: break;  // unrecognized flags are ignored
+    }
+  }
+
+  // Resolve the base parameter (name, name[sub], or @/*) to a list of values.
+  size_t q = 0;
+  std::string nm;
+  if (rest[0] == '@' || rest[0] == '*') { nm = rest.substr(0, 1); q = 1; }
+  else { while (q < rest.size() && (std::isalnum((unsigned char)rest[q]) || rest[q] == '_')) q++;
+         nm = rest.substr(0, q); }
+  std::string sub;
+  bool have_sub = false;
+  if (q < rest.size() && rest[q] == '[') {
+    size_t s = q + 1, p2 = q + 1;
+    int d = 1;
+    while (p2 < rest.size() && d) { if (rest[p2] == '[') d++; else if (rest[p2] == ']') d--; if (d) p2++; }
+    sub = rest.substr(s, p2 - s);
+    have_sub = true;
+  }
+
+  std::vector<std::string> items;
+  if (nm.empty()) {
+    // The operand is a nested expansion, e.g. ${(s:+:)$(cmd)} or ${(f)${x}};
+    // expand it to a scalar and let the split/transform flags act on it.
+    items.push_back(expand_no_split(rest));
+  } else if (nm == "@" || nm == "*") {
+    items = sh_.positional;
+  } else if (f_keys && f_vals) {
+    std::vector<std::string> k = sh_.array_keys(nm), v = sh_.array_values(nm);
+    for (size_t x = 0; x < k.size() && x < v.size(); x++) { items.push_back(k[x]); items.push_back(v[x]); }
+  } else if (f_keys) {
+    items = sh_.array_keys(nm);
+  } else if (have_sub && sub != "@" && sub != "*") {
+    items.push_back(sh_.array_get(nm, sh_.zsh_subscript(nm, expand_no_split(sub))));
+  } else if (sh_.is_array(nm)) {
+    items = sh_.array_values(nm);
+  } else {
+    items.push_back(sh_.get(nm));
+  }
+
+  // split (s/f): split each element on the separator.
+  if (f_split) {
+    std::vector<std::string> out2;
+    for (const std::string &it : items) {
+      if (ssep.empty()) { out2.push_back(it); continue; }
+      size_t pos = 0, nx;
+      while ((nx = it.find(ssep, pos)) != std::string::npos) { out2.push_back(it.substr(pos, nx - pos)); pos = nx + ssep.size(); }
+      out2.push_back(it.substr(pos));
+    }
+    items.swap(out2);
+  }
+  // case (L/U/C).
+  if (f_case) {
+    for (std::string &it : items) {
+      if (f_case == 1) for (char &c : it) c = std::tolower((unsigned char)c);
+      else if (f_case == 2) for (char &c : it) c = std::toupper((unsigned char)c);
+      else {  // C: capitalize the first letter of each word
+        bool start = true;
+        for (char &c : it) {
+          if (std::isalnum((unsigned char)c)) { c = start ? std::toupper((unsigned char)c) : std::tolower((unsigned char)c); start = false; }
+          else start = true;
+        }
+      }
+    }
+  }
+  // unique (u): drop later duplicates, keep first-seen order.
+  if (f_uniq) {
+    std::vector<std::string> out2;
+    for (const std::string &it : items)
+      if (std::find(out2.begin(), out2.end(), it) == out2.end()) out2.push_back(it);
+    items.swap(out2);
+  }
+  // sort (o/O), optionally numeric (n) / case-insensitive (i).
+  if (f_sort) {
+    auto lower = [](std::string s) { for (char &c : s) c = std::tolower((unsigned char)c); return s; };
+    std::stable_sort(items.begin(), items.end(), [&](const std::string &a, const std::string &b) {
+      if (f_num) { long long x = std::atoll(a.c_str()), y = std::atoll(b.c_str()); if (x != y) return x < y; }
+      if (f_ci) return lower(a) < lower(b);
+      return a < b;
+    });
+    if (f_rev) std::reverse(items.begin(), items.end());
+  }
+  // join (j/F): collapse to a single scalar.
+  if (f_join) {
+    std::string joined;
+    for (size_t x = 0; x < items.size(); x++) { if (x) joined += jsep; joined += items[x]; }
+    items.assign(1, joined);
+    char qm = dq ? '1' : '0';
+    for (char c : joined) { out += c; mask += qm; }
+    return true;
+  }
+  // Emit the list: one word per element (unquoted) or IFS-joined (double-quoted).
+  if (dq) {
+    std::string is = sh_.ifs();
+    std::string joiner = is.empty() ? std::string() : std::string(1, is[0]);
+    for (size_t x = 0; x < items.size(); x++) {
+      if (x) for (char c : joiner) { out += c; mask += '1'; }
+      for (char c : items[x]) { out += c; mask += '1'; }
+    }
+  } else {
+    for (size_t x = 0; x < items.size(); x++) {
+      if (x) { out += FIELD_SEP; mask += '0'; }
+      for (char c : items[x]) { out += c; mask += '0'; }
+    }
+  }
+  return true;
+}
+
 void Expander::emit_zsh_subscript(const std::string &name, const std::string &sub, bool dq,
                                   std::string &out, std::string &mask) {
   // A top-level comma makes this a zsh range `lo,hi' (both 1-based, inclusive,
@@ -233,6 +379,27 @@ void Expander::emit_zsh_subscript(const std::string &name, const std::string &su
   for (size_t k = 0; k < sub.size(); k++) {
     if (sub[k] == '[') { int d = 1; while (++k < sub.size() && d) d += (sub[k]=='[') - (sub[k]==']'); }
     else if (sub[k] == ',') { comma = k; break; }
+  }
+  char qm = dq ? '1' : '0';
+  // Scalar subscripting is character (single) / substring (range) selection,
+  // 1-based, negatives counting from the end -- e.g. s=hello, $s[1]=h, $s[2,4]=ell.
+  if (!sh_.is_array(name)) {
+    std::string val = sh_.get(name);
+    long long n = static_cast<long long>(val.size());
+    bool ok = true;
+    long long lo, hi;
+    if (comma != std::string::npos) {
+      lo = eval_arith(sh_, expand_no_split(sub.substr(0, comma)), &ok);
+      hi = eval_arith(sh_, expand_no_split(sub.substr(comma + 1)), &ok);
+    } else {
+      lo = hi = eval_arith(sh_, expand_no_split(sub), &ok);
+    }
+    if (lo < 0) lo += n + 1;
+    if (hi < 0) hi += n + 1;
+    if (lo < 1) lo = 1;
+    for (long long k = lo; k <= hi && k <= n; k++)
+      if (k >= 1) { out += val[static_cast<size_t>(k - 1)]; mask += qm; }
+    return;
   }
   if (comma != std::string::npos) {
     std::vector<std::string> all = sh_.array_values(name);
@@ -261,7 +428,6 @@ void Expander::emit_zsh_subscript(const std::string &name, const std::string &su
     return;
   }
   std::string val = sh_.array_get(name, sh_.zsh_subscript(name, expand_no_split(sub)));
-  char qm = dq ? '1' : '0';
   for (char c : val) { out += c; mask += qm; }
 }
 
@@ -348,9 +514,44 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
     size_t end = scan_balanced(t, i + 1, '{', '}');
     if (end != std::string::npos) {
       std::string body = t.substr(i + 2, end - (i + 2));
-      // zsh: `${a[lo,hi]}' is a 1-based inclusive range.  (A single `${a[i]}'
-      // is handled -- 1-based -- in expand_brace_body.)  Only intercept a bare
-      // name[..] with no trailing operator so ${a[i]:-x} etc. still work.
+      // zsh `${(flags)name}' expansion flags (join/split/sort/unique/case/...).
+      if (sh_.is_zsh() && !body.empty() && body[0] == '(' &&
+          emit_zsh_flags(body, dq, out, mask)) {
+        i = end + 1;
+        return;
+      }
+      // zsh `${=name}': force IFS word-splitting of the value, even in quotes.
+      if (sh_.is_zsh() && body.size() > 1 && body[0] == '=') {
+        std::string val = expand_brace_body(*this, sh_, body.substr(1));
+        std::string ifs = sh_.ifs();
+        auto is_ifs = [&](char c) { return ifs.find(c) != std::string::npos; };
+        auto is_ws = [&](char c) { return c == ' ' || c == '\t' || c == '\n'; };
+        bool first = true;
+        std::string cur;
+        bool have = false;
+        auto flush = [&]() {
+          if (!have) return;
+          if (!first) { out += FIELD_SEP; mask += '0'; }
+          for (char c : cur) { out += c; mask += '0'; }
+          first = false; cur.clear(); have = false;
+        };
+        for (size_t p = 0; p < val.size();) {
+          char c = val[p];
+          if (is_ifs(c)) {
+            if (is_ws(c)) { flush(); while (p < val.size() && is_ifs(val[p]) && is_ws(val[p])) p++; }
+            else { flush(); p++; }
+            continue;
+          }
+          cur += c; have = true; p++;
+        }
+        flush();
+        i = end + 1;
+        return;
+      }
+      // zsh `${a[lo,hi]}' array range, and scalar `${s[i]}' / `${s[i,j]}'
+      // character/substring selection.  A single array `${a[i]}' stays in
+      // expand_brace_body (1-based) so operators like ${a[i]:-x} still work; we
+      // only intercept a bare name[..] with no trailing operator.
       if (sh_.is_zsh() && !body.empty() && body.back() == ']') {
         size_t lb = body.find('[');
         if (lb != std::string::npos && lb > 0) {
@@ -359,7 +560,10 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
           for (size_t k = 1; ident && k < zn.size(); k++)
             ident = std::isalnum(static_cast<unsigned char>(zn[k])) || zn[k] == '_';
           std::string zsub = body.substr(lb + 1, body.size() - lb - 2);
-          if (ident && sh_.is_array(zn) && zsub.find(',') != std::string::npos) {
+          bool arr = sh_.is_array(zn);
+          bool range = zsub.find(',') != std::string::npos;
+          // array range, or any scalar subscript (single char or substring)
+          if (ident && ((arr && range) || (!arr && sh_.is_set(zn)))) {
             emit_zsh_subscript(zn, zsub, dq, out, mask);
             i = end + 1;
             return;
@@ -526,11 +730,11 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
     i += 1;
     return;
   }
-  // zsh brace-free subscript: `$name[i]' / `$name[lo,hi]' (1-based).  Only for
-  // arrays -- a scalar keeps its bare value (character indexing is not modeled).
+  // zsh brace-free subscript: `$name[i]' / `$name[lo,hi]' (1-based).  On an
+  // array this indexes elements; on a scalar it indexes characters (substring).
   if (sh_.is_zsh() && !name.empty() &&
       (std::isalpha(static_cast<unsigned char>(name[0])) || name[0] == '_') &&
-      i < t.size() && t[i] == '[' && sh_.is_array(name)) {
+      i < t.size() && t[i] == '[' && (sh_.is_array(name) || sh_.is_set(name))) {
     size_t s = i + 1, p = i + 1;
     int d = 1;
     while (p < t.size() && d) { if (t[p] == '[') d++; else if (t[p] == ']') d--; if (d) p++; }
