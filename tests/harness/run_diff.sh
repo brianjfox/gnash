@@ -211,6 +211,12 @@ scripts=(
   'a=(p "" q); for e in "${a[@]}"; do echo "[$e]"; done'
   # ulimit reports a single resource as a bare value
   'ulimit -n; ulimit -c'
+  # set -u: defaulting operators handle an unset variable (no nounset error)
+  'set -u; echo "${UNSET:-def}" "${UNSET-d2}" "${UNSET:+a}" "${OTHER:=x}"; echo "$OTHER"'
+  'set -u; v=hi; echo "${v:-nope}${v:+yes}"'
+  # set -u: a genuine unbound reference (and ${x?}) is fatal with status 127
+  'set -u; echo pre; echo "$UNSET"; echo post'
+  'echo pre; echo "${UNSET?boom}"; echo post'
 )
 
 fails=0
