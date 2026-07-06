@@ -20,6 +20,7 @@
 #include <cstring>
 #include <fcntl.h>
 #include <memory>
+#include <pwd.h>
 #include <string>
 #include <vector>
 #include <sys/stat.h>
@@ -319,11 +320,35 @@ struct Interp {
     return var_ptr(n) != nullptr || std::getenv(n.c_str()) != nullptr;
   }
 
+  // Expand a word-initial, unquoted tilde: ~, ~/path, ~user, ~user/path.
+  // ~ / ~/... use the csh `home` variable ($HOME, then the passwd entry as a
+  // fallback); ~user/... uses that user's home from the passwd database.  A
+  // word not beginning with ~, or a ~ we cannot resolve, is returned verbatim.
+  std::string tilde_expand(const std::string &w) {
+    if (w.empty() || w[0] != '~') return w;
+    size_t slash = w.find('/');
+    std::string name = w.substr(1, (slash == std::string::npos ? w.size() : slash) - 1);
+    std::string home;
+    if (name.empty()) {
+      home = var_str("home");
+      if (home.empty()) { const char *h = std::getenv("HOME"); if (h) home = h; }
+      if (home.empty()) { struct passwd *pw = getpwuid(getuid()); if (pw) home = pw->pw_dir; }
+    } else {
+      struct passwd *pw = getpwnam(name.c_str());
+      if (pw) home = pw->pw_dir;
+    }
+    if (home.empty()) return w;  // unknown user: leave untouched, as csh does
+    return home + (slash == std::string::npos ? std::string() : w.substr(slash));
+  }
+
   // -- expansion --
   // Expand one raw word into zero or more fields.  When do_glob is false the
   // fields are returned verbatim (used for switch/case patterns, which are
   // globbing patterns to match against, not filenames to expand).
-  void expand_word(const std::string &w, std::vector<std::string> &out, bool do_glob = true) {
+  void expand_word(const std::string &raw, std::vector<std::string> &out, bool do_glob = true) {
+    // A word-initial unquoted tilde expands to a home directory before any
+    // other substitution; a quoted or non-initial ~ is left alone.
+    const std::string &w = (!raw.empty() && raw[0] == '~') ? tilde_expand(raw) : raw;
     std::string cur;
     bool have = false;
     std::vector<std::string> fields;
