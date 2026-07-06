@@ -190,6 +190,15 @@ int main() {
     unlink((std::string(dir) + "/subfile").c_str());
     rmdir((std::string(dir) + "/subdir").c_str());
 
+    // Filename completion backslash-escapes shell-special characters in the
+    // result (space, `$', `(', `)', ...) so it stays a single word; and a word
+    // already carrying those escapes (`zz\ s') still matches the real name.
+    fclose(fopen((std::string(dir) + "/zz s$(x).txt").c_str(), "w"));
+    rl_attempted_completion_function = nullptr;
+    expect("cat zz\t\n", "cat zz\\ s\\$\\(x\\).txt ");   // escaped + trailing space
+    expect("cat zz\\ s\t\n", "cat zz\\ s\\$\\(x\\).txt ");  // re-complete an escaped word
+    unlink((std::string(dir) + "/zz s$(x).txt").c_str());
+
     if (cwd) {
       chdir(cwd);
       std::free(cwd);
