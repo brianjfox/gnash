@@ -410,15 +410,20 @@ int Executor::run_pipeline(const Connection *c) {
   if (prev_read != -1) close(prev_read);
 
   if (sh_.job_control) tcsetpgrp(sh_.job_terminal, static_cast<pid_t>(pgid));
-  int st = 0;
+  int last_st = 0, pipefail_st = 0;
   bool any_stopped = false;
   for (size_t i = 0; i < pids.size(); i++) {
     int wst = 0;
     waitpid(pids[i], &wst, WUNTRACED);
-    if (WIFSTOPPED(wst)) any_stopped = true;
-    else if (i == pids.size() - 1)
-      st = WIFEXITED(wst) ? WEXITSTATUS(wst) : (128 + WTERMSIG(wst));
+    if (WIFSTOPPED(wst)) { any_stopped = true; continue; }
+    int s = WIFEXITED(wst) ? WEXITSTATUS(wst) : (128 + WTERMSIG(wst));
+    if (i == pids.size() - 1) last_st = s;
+    if (s != 0) pipefail_st = s;  // track the last (rightmost) non-zero stage
   }
+  // Normally the pipeline's status is the last stage's; under `set -o pipefail'
+  // it is the last stage to exit non-zero (0 if all succeeded), so an upstream
+  // failure is not masked by a later success.
+  int st = sh_.opt_pipefail ? pipefail_st : last_st;
   if (sh_.job_control) tcsetpgrp(sh_.job_terminal, static_cast<pid_t>(sh_.shell_pgid));
 
   if (any_stopped) {
