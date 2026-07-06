@@ -30,6 +30,15 @@ int main() {
   eq("1 << 8", 256);
   eq("255 & 0x0f", 15);
   eq("0x10 + 010", 24);   // hex + octal
+  eq("10#42", 42);        // bash base#digits notation
+  eq("16#ff", 255);
+  eq("2#101", 5);
+  eq("8#17", 15);
+  eq("36#z", 35);         // base <= 36: letters case-insensitive
+  eq("64#Z", 61);         // base > 36: uppercase is 36-61
+  eq("64#_", 63);         // ... then @ (62) and _ (63)
+  eq("16#1f + 1", 32);    // base#digits inside an expression
+  eq("10#00042", 42);     // leading zeros are decimal, not octal
   eq("5 > 3", 1);
   eq("3 >= 4", 0);
   eq("5 == 5", 1);
