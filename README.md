@@ -127,11 +127,11 @@ Options: `-DGNASH_SANITIZE=ON` (ASan/UBSan), `-DGNASH_BUILD_TESTS=OFF`.
 
 ## Conformance
 
-Four harnesses:
+Six harnesses:
 
 - **Differential** (`tests/harness/run_diff.sh`, gated in ctest) — runs a growing corpus
   of scripts under both gnash and bash 5.3 and requires identical stdout + exit status.
-  Currently **152 scripts** covering expansion, arithmetic, control flow, arrays, functions,
+  Currently **161 scripts** covering expansion, arithmetic, control flow, arrays, functions,
   redirection, process substitution, the special variables, the full builtin set, and job
   control — all matching.
 - **csh differential** (`tests/harness/run_diff_csh.sh`, gated in ctest when `tcsh` is
@@ -139,6 +139,17 @@ Four harnesses:
   reference **tcsh 6.21**, requiring identical stdout + exit status. Currently **36 scripts**
   covering `set`/`@` arithmetic, list variables and indexing, `:` modifiers, backquotes,
   `if`/`foreach`/`while`/`switch`, pipelines and redirection — all matching.
+- **zsh differential** (`tests/harness/run_diff_zsh.sh`, gated in ctest when `zsh` is
+  installed) — runs a corpus under gnash's zsh personality and under a reference **zsh**,
+  requiring identical stdout + exit status. Currently **43 scripts** exercising where zsh
+  diverges from bash: word splitting, bare-array expansion, 1-based array indexing and
+  ranges, the `${(flags)…}` expansion flags, `${=name}` splitting, scalar indexing, and
+  associative arrays — all matching.
+- **ksh differential** (`tests/harness/run_diff_ksh.sh`, gated in ctest when `ksh` is
+  installed) — runs a corpus under gnash's ksh personality and under a reference **ksh93**,
+  requiring identical stdout + exit status. Currently **37 scripts** covering arithmetic,
+  parameter expansion, arrays, `typeset` attributes, `((…))`/`let`, control flow, `[[ ]]`,
+  and the common ksh/POSIX builtins — all matching.
 - **Error format** (`tests/harness/errfmt.sh`, gated in ctest) — diffs stderr for a set of
   error cases against bash, normalizing the leading program name. gnash now emits bash's
   exact `name: line N: context: message` format; the only difference is the program name

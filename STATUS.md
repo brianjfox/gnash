@@ -120,8 +120,9 @@ land.
 
     Persona fidelity is checked by differential harnesses that run the same scripts under gnash
     and a reference shell, requiring identical stdout + exit status: **csh** vs tcsh 6.21
-    (`run_diff_csh.sh`, 36 scripts) and **zsh** vs a reference zsh (`run_diff_zsh.sh`, 43
-    scripts), plus a `personality_test.sh` covering the runtime switch.
+    (`run_diff_csh.sh`, 36 scripts), **zsh** vs a reference zsh (`run_diff_zsh.sh`, 43 scripts),
+    and **ksh** vs ksh93 (`run_diff_ksh.sh`, 37 scripts), plus a `personality_test.sh` covering
+    the runtime switch.
   - **Interactive REPL** — `gnash` with a terminal starts a full read-eval-print loop that ties
     the whole project together: **libreadline** edits, **libhistory** does history + `!`-
     expansion, the core parses/executes. Prompt expansion (a `\u@\h:\w\$ ` default), multi-line

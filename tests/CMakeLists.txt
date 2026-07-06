@@ -100,6 +100,16 @@ if(BASH_EXECUTABLE AND ZSH_EXECUTABLE)
             $<TARGET_FILE:gnash> ${ZSH_EXECUTABLE})
 endif()
 
+# Differential execution check for the ksh personality vs a reference ksh93,
+# over common ksh/POSIX constructs on the shared Bourne engine.
+find_program(KSH_EXECUTABLE ksh)
+if(BASH_EXECUTABLE AND KSH_EXECUTABLE)
+  add_test(
+    NAME run_diff_ksh
+    COMMAND ${BASH_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/harness/run_diff_ksh.sh
+            $<TARGET_FILE:gnash> ${KSH_EXECUTABLE})
+endif()
+
 # Behavioral check for the runtime personality/emulate builtin.
 if(BASH_EXECUTABLE)
   add_test(
