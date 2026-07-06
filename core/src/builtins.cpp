@@ -2296,11 +2296,26 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
       std::vector<char *> cargv;
       for (size_t i = 1; i < argv.size(); i++) cargv.push_back(const_cast<char *>(argv[i].c_str()));
       cargv.push_back(nullptr);
+      std::fflush(nullptr);
       execvp(cargv[0], cargv.data());
-      std::fprintf(stderr, "gnash: exec: %s: not found\n", argv[1].c_str());
-      _exit(127);
+      // exec failed to run the command.  Report it, then behave like bash: an
+      // interactive shell (or one with `shopt -s execfail') stays alive and
+      // returns failure; a non-interactive shell exits.
+      int code = (errno == EACCES) ? 126 : 127;
+      if (errno == ENOENT && argv[1].find('/') == std::string::npos)
+        std::fprintf(stderr, "%sexec: %s: not found\n", sh.err_prefix().c_str(), argv[1].c_str());
+      else
+        std::fprintf(stderr, "%sexec: %s: %s\n", sh.err_prefix().c_str(), argv[1].c_str(),
+                     std::strerror(errno));
+      auto ef = sh.shopt_opts.find("execfail");
+      bool execfail = ef != sh.shopt_opts.end() && ef->second;
+      if (sh.interactive || execfail)
+        st = code;
+      else
+        _exit(code);
+    } else {
+      st = 0;
     }
-    st = 0;
   } else {
     return false;
   }
