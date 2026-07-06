@@ -743,7 +743,7 @@ std::vector<std::pair<std::string, bool>> set_option_states(Shell &sh) {
   bool i = sh.interactive;
   return {
       {"allexport", false},   {"braceexpand", true},
-      {"emacs", i},           {"errexit", sh.opt_errexit},
+      {"emacs", rl_editing_mode == 1}, {"errexit", sh.opt_errexit},
       {"errtrace", sh.opt_functrace}, {"functrace", sh.opt_functrace},
       {"hashall", true},      {"histexpand", i},
       {"history", i},         {"ignoreeof", false},
@@ -754,7 +754,7 @@ std::vector<std::pair<std::string, bool>> set_option_states(Shell &sh) {
       {"nounset", sh.opt_nounset}, {"onecmd", false},
       {"physical", false},    {"pipefail", false},
       {"posix", false},       {"privileged", false},
-      {"verbose", sh.opt_verbose}, {"vi", false},
+      {"verbose", sh.opt_verbose}, {"vi", rl_editing_mode == 0},
       {"xtrace", sh.opt_xtrace}};
 }
 
@@ -801,6 +801,10 @@ int bi_set(Shell &sh, const std::vector<std::string> &argv) {
               else if (o == "noglob") sh.opt_noglob = on;
               else if (o == "verbose") sh.opt_verbose = on;
               else if (o == "functrace" || o == "errtrace") sh.opt_functrace = on;
+              // `set -o vi'/`set -o emacs' switch the readline editing mode
+              // (they are mutually exclusive); `+o' flips to the other.
+              else if (o == "vi") { if (on) rl_vi_editing_mode(0, 0); else rl_emacs_editing_mode(0, 0); }
+              else if (o == "emacs") { if (on) rl_emacs_editing_mode(0, 0); else rl_vi_editing_mode(0, 0); }
             }
             k = a.size();  // -o consumes the rest of the word
             break;
