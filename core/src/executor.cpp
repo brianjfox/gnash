@@ -584,7 +584,12 @@ int Executor::run_simple(const SimpleCommand *c) {
       sh_.argframes.emplace_back(argv.begin() + 1, argv.end());
     }
     sh_.push_scope();
+    sh_.persona_restore.push_back(std::nullopt);  // for `personality -L' / `emulate -L'
     status = run(fit->second);
+    if (!sh_.persona_restore.empty()) {
+      if (sh_.persona_restore.back()) sh_.set_personality(*sh_.persona_restore.back());
+      sh_.persona_restore.pop_back();
+    }
     sh_.pop_scope();
     if (pushed_argframe && !sh_.argframes.empty()) sh_.argframes.pop_back();
     sh_.pop_src_frame();

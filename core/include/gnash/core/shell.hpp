@@ -170,6 +170,16 @@ class Shell {
   bool is_ash() const { return persona == Persona::Ash; }
   bool is_ksh() const { return persona == Persona::Ksh; }
   bool is_csh() const { return persona == Persona::Csh; }
+  // Select the active personality by name (zsh/sh/dash/ash/ksh.../csh/tcsh/bash,
+  // same mapping as at startup): sets `persona', $GNASH_PERSONALITY, and the
+  // per-shell identity variables ($ZSH_VERSION / $KSH_VERSION / $BASH_VERSION,
+  // ...).  Used both at startup and by the `personality'/`emulate' builtin to
+  // switch personality while the shell is running.
+  void set_personality(const std::string &name);
+  // Per-function-call saved personality for `personality -L' / `emulate -L':
+  // each function call pushes an empty slot; a -L switch records the personality
+  // to restore into the current slot; the slot is restored on function return.
+  std::vector<std::optional<std::string>> persona_restore;
   // csh keeps word-list shell variables in their own namespace (separate from
   // the Bourne `vars'); used only by the csh interpreter (csh.cpp).
   std::map<std::string, std::vector<std::string>> csh_vars;

@@ -210,17 +210,7 @@ void apply_set_o(Shell &sh, const std::string &name, bool set) {
 // Configure the shell's personality (which other shell it behaves as) and the
 // identity variables that differ between shells.
 void configure_persona(Shell &sh, const std::string &personality, const std::string &exec_path) {
-  sh.personality_name = personality;
-  if (personality == "zsh") sh.persona = Shell::Persona::Zsh;
-  else if (personality == "ash" || personality == "dash" || personality == "sh")
-    sh.persona = Shell::Persona::Ash;
-  else if (personality == "ksh" || personality == "ksh93" || personality == "mksh" ||
-           personality == "pdksh" || personality == "rksh")
-    sh.persona = Shell::Persona::Ksh;
-  else if (personality == "csh" || personality == "tcsh")
-    sh.persona = Shell::Persona::Csh;
-  else sh.persona = Shell::Persona::Bash;
-  sh.set("GNASH_PERSONALITY", personality);
+  (void)exec_path;  // read back from $SHELL inside Shell::set_personality
   sh.set("GNASH_VERSION", GNASH_VERSION);  // gnash's own version, regardless of persona
 
   std::string mach = "unknown";
@@ -233,31 +223,9 @@ void configure_persona(Shell &sh, const std::string &personality, const std::str
   }
   sh.set("MACHTYPE", mach);
 
-  if (sh.persona == Shell::Persona::Zsh) {
-    sh.set("ZSH_VERSION", "5.9");
-    sh.set("ZSH_NAME", "zsh");
-  } else if (sh.persona == Shell::Persona::Ksh) {
-    sh.set("KSH_VERSION", "Version AJM 93u+ 2012-08-01");
-  } else if (sh.persona == Shell::Persona::Ash) {
-    // ash is minimal: it advertises no BASH_/ZSH_ identity variables.
-  } else if (sh.persona == Shell::Persona::Csh) {
-    // csh identity ($shell, $version) is set up by the csh interpreter; the
-    // language is different enough that the Bourne BASH_* vars don't apply.
-    sh.set("shell", exec_path);
-  } else {
-    sh.set("BASH", exec_path);
-    sh.set("BASH_VERSION", "5.3.0(1)-release");
-    std::vector<std::pair<std::optional<std::string>, std::string>> vi = {
-        {std::nullopt, "5"}, {std::nullopt, "3"},       {std::nullopt, "0"},
-        {std::nullopt, "1"}, {std::nullopt, "release"}, {std::nullopt, mach}};
-    sh.array_assign("BASH_VERSINFO", vi, false, false);
-    sh.vars["BASH_VERSINFO"].readonly = true;
-    // Default search path for `enable -f' dynamically-loadable builtins.
-    if (!sh.is_set("BASH_LOADABLES_PATH"))
-      sh.set("BASH_LOADABLES_PATH",
-             "/usr/local/lib/bash:/usr/lib/bash:/opt/local/lib/bash:"
-             "/usr/pkg/lib/bash:/opt/pkg/lib/bash:.");
-  }
+  // The persona enum + per-shell identity variables; shared with the runtime
+  // `personality'/`emulate' builtin.
+  sh.set_personality(personality);
 }
 
 }  // namespace

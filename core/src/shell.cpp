@@ -590,6 +590,46 @@ std::vector<std::string> Shell::environ_block() const {
   return out;
 }
 
+void Shell::set_personality(const std::string &name) {
+  personality_name = name;
+  if (name == "zsh") persona = Persona::Zsh;
+  else if (name == "ash" || name == "dash" || name == "sh") persona = Persona::Ash;
+  else if (name == "ksh" || name == "ksh93" || name == "mksh" || name == "pdksh" ||
+           name == "rksh")
+    persona = Persona::Ksh;
+  else if (name == "csh" || name == "tcsh") persona = Persona::Csh;
+  else persona = Persona::Bash;
+  set("GNASH_PERSONALITY", name);
+
+  // Per-shell identity variables.  These are additive (as zsh's emulate is):
+  // switching does not unset another shell's version variable.
+  std::string exec_path = get("SHELL");
+  std::string mach = get("MACHTYPE");
+  if (persona == Persona::Zsh) {
+    set("ZSH_VERSION", "5.9");
+    set("ZSH_NAME", "zsh");
+  } else if (persona == Persona::Ksh) {
+    set("KSH_VERSION", "Version AJM 93u+ 2012-08-01");
+  } else if (persona == Persona::Ash) {
+    // ash is minimal: it advertises no BASH_/ZSH_ identity variables.
+  } else if (persona == Persona::Csh) {
+    set("shell", exec_path);
+  } else {
+    set("BASH", exec_path);
+    set("BASH_VERSION", "5.3.0(1)-release");
+    std::vector<std::pair<std::optional<std::string>, std::string>> vi = {
+        {std::nullopt, "5"}, {std::nullopt, "3"},       {std::nullopt, "0"},
+        {std::nullopt, "1"}, {std::nullopt, "release"}, {std::nullopt, mach}};
+    if (vars.count("BASH_VERSINFO")) vars["BASH_VERSINFO"].readonly = false;
+    array_assign("BASH_VERSINFO", vi, false, false);
+    vars["BASH_VERSINFO"].readonly = true;
+    if (!is_set("BASH_LOADABLES_PATH"))
+      set("BASH_LOADABLES_PATH",
+          "/usr/local/lib/bash:/usr/lib/bash:/opt/local/lib/bash:"
+          "/usr/pkg/lib/bash:/opt/pkg/lib/bash:.");
+  }
+}
+
 int Shell::run_string(const std::string &script) {
   if (is_csh()) return run_csh(*this, script);  // csh is a different language
   // Aliases are expanded only when interactive or `shopt -s expand_aliases'.

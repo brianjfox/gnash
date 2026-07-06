@@ -100,6 +100,14 @@ if(BASH_EXECUTABLE AND ZSH_EXECUTABLE)
             $<TARGET_FILE:gnash> ${ZSH_EXECUTABLE})
 endif()
 
+# Behavioral check for the runtime personality/emulate builtin.
+if(BASH_EXECUTABLE)
+  add_test(
+    NAME personality_test
+    COMMAND ${BASH_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/harness/personality_test.sh
+            $<TARGET_FILE:gnash>)
+endif()
+
 # ---------------------------------------------------------------------------
 # Conformance harness self-check.
 #
