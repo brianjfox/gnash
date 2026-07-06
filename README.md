@@ -10,7 +10,7 @@ Sometimes, people were confused by licensing, and chose software based on how le
 I had multiple goals in mind when creating gnash:
 
 1. Create a replacement shell that makes the reasons for having different shells go away. When running scripts, `gnash` should behave *identically* to the personality it is invoked as: **bash**, **ash**, **ksh**, **zsh**, or even **csh**/**tcsh** -- the same stdout/stderr, exit status, side effects, and error semantics.
-2. I wanted to connect people to the fact that the relationship of humans to software is changing drastically.  Humans still need to be the motivating factor behind the existance of the software, and often, we have architectural goals that are larger than a single, or even a suite, of software.  But writing clean and efficient code is no longer the purview of meat-people.  gnash was conceived of, designed, and written in approximately 3 hours of human attention coupled with 5 hours of computational coding.
+2. I wanted to connect people to the fact that the relationship of humans to software is changing drastically.  Humans still need to be the motivating factor behind the existance of the software, and often, we have architectural goals that are larger than a single, or even a suite, of software.  But writing clean and efficient code is no longer the purview of meat-people.  gnash was conceived of, designed, and written in approximately 6 hours of human attention coupled with 10 hours of computational coding.
 
 ## How to Install It
 
@@ -25,8 +25,7 @@ brew tap brianjfox/tools
 brew install gnash
 ```
 
-Later, `brew upgrade gnash` picks up new releases. (Homebrew builds gnash from
-source, so there are no macOS code-signing or Gatekeeper prompts.)
+Later, `brew upgrade gnash` picks up new releases.
 
 ### Linux or macOS — install script
 
@@ -41,7 +40,7 @@ It needs a C++20 compiler and CMake ≥ 3.16 — install them first if needed
 (`sudo apt install build-essential cmake`, `sudo dnf install gcc-c++ cmake`,
 `sudo pacman -S base-devel cmake`, or `brew install cmake`). By default it
 installs to `/usr/local/bin`, falling back to `~/.local/bin`; override with
-`PREFIX=~/somewhere`, or pin a version with `GNASH_REF=gnash-1.0.2`.
+`PREFIX=~/somewhere`, or pin a version with `GNASH_REF=gnash-1.2.0`.
 
 Prefer to look before you leap? The script is [`install.sh`](install.sh) — read
 it, then run `bash install.sh`.
@@ -73,11 +72,11 @@ cmake --build build -j
 ```
 
 ## How to Run It
-**gnash** can be run under many different personalities.  The name of the binary (or the value of the `--personality=XXX` option) control which startup files are read, whether syntax highlighting on the command line exists, and other behaviors.  Currently, **gnash** supports running as:
+**gnash** can be run under many different personalities.  The name of the binary (or the value of the `--personality=XXX` option) controls which startup files are read, whether syntax highlighting on the command line exists, and other behaviors.  Currently, **gnash** supports running as:
 
 * **bash** -- reads `~/.bash_profile`, `~/.bashrc`, behaves like **bash-5.3**
 * **gnash** -- reads `~/.gnash_profile`, `~/.gnashrc`, behaves like **bash-5.3**
-* **zsh** -- reads `~/.zshenv`, `~/.zprofile`, `~/.zshrc`, `~/.zlogin`, uses `%`-style prompts and highlights the command line as you type, behaves like **zsh-5.1**
+* **zsh** -- reads `~/.zshenv`, `~/.zprofile`, `~/.zshrc`, `~/.zlogin`, uses `%`-style prompts and highlights the command line as you type, zsh-style tab completion, behaves like **zsh-5.1**
 * **ash** (also **dash**, **sh**) -- reads `/etc/profile`, `~/.profile`, and `$ENV`, uses a plain POSIX `$ ` prompt, behaves like **bash-5.3**
 * **ksh** (also **ksh93**, **mksh**, **pdksh**) -- reads `/etc/profile`, `~/.profile`, and `$ENV`, uses a `$ ` prompt in which `!` expands to the history number, behaves like **bash-5.3**
 * **csh** (also **tcsh**) -- reads `/etc/csh.cshrc`, `~/.cshrc` (or `~/.tcshrc`), and `~/.login`, and runs the **C shell language** itself: `set`/`@`/`setenv`, `$var[n]` (1-indexed), `$#var`, `$?var`, `` `cmd` ``, `:h`/`:t`/`:r`/`:e` modifiers, `if/then/else/endif`, `foreach`, `while`, and `switch/case/endsw`. Unlike the other personalities (which are surface behavior over the shared Bourne engine), csh is a genuinely different language, so it has its own lexer, parser, and evaluator. Verified against **tcsh 6.21**.
