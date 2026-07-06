@@ -50,6 +50,27 @@ struct Node {
 
 NodeP mk(K k) { auto n = std::make_unique<Node>(); n->k = k; return n; }
 
+// Digit value of C in the given BASE for bash's `base#digits' notation, or -1 if
+// C is not a digit in that base.  Digits run 0-9, then a-z (10-35); for a base
+// above 36, A-Z are 36-61 and `@'/`_' are 62/63, while for base <= 36 upper- and
+// lowercase letters are interchangeable (10-35), matching bash.
+int base_digit(char c, long long base) {
+  int d;
+  if (c >= '0' && c <= '9') d = c - '0';
+  else if (base <= 36) {
+    if (c >= 'a' && c <= 'z') d = c - 'a' + 10;
+    else if (c >= 'A' && c <= 'Z') d = c - 'A' + 10;
+    else return -1;
+  } else {
+    if (c >= 'a' && c <= 'z') d = c - 'a' + 10;
+    else if (c >= 'A' && c <= 'Z') d = c - 'A' + 36;
+    else if (c == '@') d = 62;
+    else if (c == '_') d = 63;
+    else return -1;
+  }
+  return d < base ? d : -1;
+}
+
 // ---- parser: string -> AST (no shell access; pure) ------------------------
 
 struct Parser {
@@ -284,6 +305,27 @@ struct Parser {
       return v;
     }
     if (pos < s.size() && std::isdigit(static_cast<unsigned char>(s[pos]))) {
+      // bash `base#digits': a decimal base (2..64) followed by '#' and digits in
+      // that base.  Detected by looking past the leading run of decimal digits.
+      size_t p = pos;
+      while (p < s.size() && std::isdigit(static_cast<unsigned char>(s[p]))) p++;
+      if (p < s.size() && s[p] == '#') {
+        long long base = std::strtoll(s.substr(pos, p - pos).c_str(), nullptr, 10);
+        size_t q = p + 1;
+        long long v = 0;
+        bool any = false;
+        for (; q < s.size(); q++) {
+          int d = base_digit(s[q], base);
+          if (d < 0) break;
+          v = v * base + d;
+          any = true;
+        }
+        if (base >= 2 && base <= 64 && any) {
+          pos = q;
+          auto n = mk(K::Num); n->num = v; return n;
+        }
+        // malformed base spec: fall through to the ordinary integer parse
+      }
       char *end = nullptr;
       long long v = std::strtoll(s.c_str() + pos, &end, 0);  // 0x/0 prefixes honored
       pos = static_cast<size_t>(end - s.c_str());
