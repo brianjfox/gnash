@@ -563,8 +563,10 @@ int Shell::run_string(const std::string &script) {
   bool expand_al = interactive;
   auto eit = shopt_opts.find("expand_aliases");
   if (eit != shopt_opts.end() && eit->second) expand_al = true;
-  ParseResult r = (expand_al && !aliases.empty()) ? parse_with_aliases(script, aliases)
-                                                  : parse(script);
+  bool have_aliases = !aliases.empty() || !global_aliases.empty() || !suffix_aliases.empty();
+  ParseResult r = (expand_al && have_aliases)
+                      ? parse_with_aliases(script, aliases, global_aliases, suffix_aliases)
+                      : parse(script);
   if (!r.ok) {
     std::fprintf(stderr, "gnash: syntax error: %s\n", r.error.c_str());
     last_status = 2;

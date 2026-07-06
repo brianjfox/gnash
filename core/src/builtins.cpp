@@ -1720,10 +1720,25 @@ static std::string alias_quote(const std::string &v) {
 
 int bi_alias(Shell &sh, const std::vector<std::string> &argv) {
   size_t i = 1;
-  if (i < argv.size() && (argv[i] == "-p")) i++;
+  char kind = 0;  // 0 = regular; 'g' = global, 's' = suffix (zsh `alias -g'/`-s')
+  while (i < argv.size() && argv[i].size() >= 2 && argv[i][0] == '-' && argv[i] != "--") {
+    if (argv[i] == "-p") { i++; continue; }
+    if (sh.is_zsh() && argv[i] == "-g") { kind = 'g'; i++; continue; }
+    if (sh.is_zsh() && argv[i] == "-s") { kind = 's'; i++; continue; }
+    break;
+  }
+  if (i < argv.size() && argv[i] == "--") i++;
+  auto &table = (kind == 'g') ? sh.global_aliases : (kind == 's') ? sh.suffix_aliases : sh.aliases;
+  // Regular aliases list bash-style (`alias name=value'); zsh's global/suffix
+  // list as `name=value'.
+  auto show = [&](const std::string &n, const std::string &v) {
+    if (kind == 0)
+      std::printf("alias %s=%s\n", n.c_str(), alias_quote(v).c_str());
+    else
+      std::printf("%s=%s\n", n.c_str(), alias_quote(v).c_str());
+  };
   if (i >= argv.size()) {
-    for (const auto &kv : sh.aliases)
-      std::printf("alias %s=%s\n", kv.first.c_str(), alias_quote(kv.second).c_str());
+    for (const auto &kv : table) show(kv.first, kv.second);
     return 0;
   }
   int st = 0;
@@ -1731,26 +1746,49 @@ int bi_alias(Shell &sh, const std::vector<std::string> &argv) {
     const std::string &a = argv[i];
     auto eq = a.find('=');
     if (eq == std::string::npos) {
-      auto it = sh.aliases.find(a);
-      if (it != sh.aliases.end())
-        std::printf("alias %s=%s\n", it->first.c_str(), alias_quote(it->second).c_str());
+      auto it = table.find(a);
+      if (it != table.end())
+        show(it->first, it->second);
       else {
         std::fflush(stdout);
         std::fprintf(stderr, "%salias: %s: not found\n", sh.err_prefix().c_str(), a.c_str());
         st = 1;
       }
     } else {
-      sh.aliases[a.substr(0, eq)] = a.substr(eq + 1);
+      table[a.substr(0, eq)] = a.substr(eq + 1);
     }
   }
   return st;
 }
 
 int bi_unalias(Shell &sh, const std::vector<std::string> &argv) {
-  if (argv.size() > 1 && argv[1] == "-a") { sh.aliases.clear(); return 0; }
+  // zsh's unalias has `-a' (all) and `-s' (suffix aliases), but NOT `-g': a
+  // global alias is removed by plain `unalias name' (regular and global share
+  // the name lookup).
+  size_t i = 1;
+  bool all = false, suffix = false;
+  while (i < argv.size() && argv[i].size() >= 2 && argv[i][0] == '-' && argv[i] != "--") {
+    if (argv[i] == "-a") { all = true; i++; continue; }
+    if (sh.is_zsh() && argv[i] == "-s") { suffix = true; i++; continue; }
+    break;
+  }
+  if (all) {
+    sh.aliases.clear();
+    sh.global_aliases.clear();
+    sh.suffix_aliases.clear();
+    return 0;
+  }
   int st = 0;
-  for (size_t i = 1; i < argv.size(); i++) {
-    if (sh.aliases.erase(argv[i]) == 0) {
+  for (; i < argv.size(); i++) {
+    bool removed;
+    if (suffix) {
+      removed = sh.suffix_aliases.erase(argv[i]) > 0;
+    } else {
+      bool r = sh.aliases.erase(argv[i]) > 0;         // remove from both regular
+      bool g = sh.global_aliases.erase(argv[i]) > 0;  // and global (they may coexist)
+      removed = r || g;
+    }
+    if (!removed) {
       std::fprintf(stderr, "%sunalias: %s: not found\n", sh.err_prefix().c_str(), argv[i].c_str());
       st = 1;
     }

@@ -880,8 +880,10 @@ struct Parser {
 // alias body's tokens; a body ending in blank makes the following word eligible
 // too, and a word is not re-expanded within its own expansion.
 static void expand_alias_tokens(std::vector<Token> &toks,
-                                const std::map<std::string, std::string> &aliases) {
-  if (aliases.empty()) return;
+                                const std::map<std::string, std::string> &aliases,
+                                const std::map<std::string, std::string> &global_aliases,
+                                const std::map<std::string, std::string> &suffix_aliases) {
+  if (aliases.empty() && global_aliases.empty() && suffix_aliases.empty()) return;
   static const std::set<std::string> kw = {
       "if", "then", "else", "elif", "do", "done", "{", "}", "while", "until",
       "for", "case", "select", "fi", "esac", "!", "time", "function"};
@@ -898,6 +900,32 @@ static void expand_alias_tokens(std::vector<Token> &toks,
     const std::string text = toks[i].text;
     bool quoted = toks[i].quoted;
     if (!quoted && kw.count(text)) { cmd_pos = true; next_also = false; i++; continue; }
+    // zsh global aliases (`alias -g') expand in ANY word position.
+    if (!quoted && global_aliases.count(text) && !active.count(text)) {
+      active.insert(text);
+      guard++;
+      std::vector<Token> rep = tokenize(global_aliases.at(text));
+      if (!rep.empty() && rep.back().type == Tok::Eof) rep.pop_back();
+      toks.erase(toks.begin() + static_cast<long>(i));
+      toks.insert(toks.begin() + static_cast<long>(i), rep.begin(), rep.end());
+      continue;  // reprocess from i: the body may contain operators (| > ...)
+    }
+    // zsh suffix aliases (`alias -s ext=cmd'): a bare `file.ext' in command
+    // position, whose `ext' has a suffix alias and which is not itself an alias,
+    // runs `cmd file.ext'.
+    if ((cmd_pos || next_also) && !quoted && !suffix_aliases.empty() && !aliases.count(text)) {
+      size_t dot = text.rfind('.');
+      if (dot != std::string::npos && dot + 1 < text.size()) {
+        auto sit = suffix_aliases.find(text.substr(dot + 1));
+        if (sit != suffix_aliases.end()) {
+          guard++;
+          std::vector<Token> cmd = tokenize(sit->second);
+          if (!cmd.empty() && cmd.back().type == Tok::Eof) cmd.pop_back();
+          toks.insert(toks.begin() + static_cast<long>(i), cmd.begin(), cmd.end());
+          continue;  // reprocess from i: the inserted command is now cmd_pos
+        }
+      }
+    }
     if ((cmd_pos || next_also) && !quoted && aliases.count(text) && !active.count(text)) {
       const std::string &val = aliases.at(text);
       active.insert(text);
@@ -935,9 +963,11 @@ ParseResult parse(const std::string &input) {
 }
 
 ParseResult parse_with_aliases(const std::string &input,
-                               const std::map<std::string, std::string> &aliases) {
+                               const std::map<std::string, std::string> &aliases,
+                               const std::map<std::string, std::string> &global_aliases,
+                               const std::map<std::string, std::string> &suffix_aliases) {
   std::vector<Token> toks = tokenize(input);
-  expand_alias_tokens(toks, aliases);
+  expand_alias_tokens(toks, aliases, global_aliases, suffix_aliases);
   Parser p(std::move(toks));
   return p.run();
 }

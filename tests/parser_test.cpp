@@ -28,6 +28,26 @@ static void ok(const std::string &in, const char *want) {
   }
 }
 
+// Parse `in` with the given regular/global/suffix alias tables; assert the
+// expanded result renders to `want`.
+static void alias_ok(const std::string &in,
+                     const std::map<std::string, std::string> &reg,
+                     const std::map<std::string, std::string> &glob,
+                     const std::map<std::string, std::string> &suf, const char *want) {
+  core::ParseResult r = core::parse_with_aliases(in, reg, glob, suf);
+  if (!r.ok) {
+    std::fprintf(stderr, "FAIL alias parse(%s): error: %s\n", in.c_str(), r.error.c_str());
+    failures++;
+    return;
+  }
+  std::string got = core::to_string(r.command.get());
+  if (got != want) {
+    std::fprintf(stderr, "FAIL alias parse(%s): got \"%s\", wanted \"%s\"\n", in.c_str(),
+                 got.c_str(), want);
+    failures++;
+  }
+}
+
 // Assert that `in` is a syntax error.
 static void bad(const std::string &in) {
   core::ParseResult r = core::parse(in);
@@ -110,6 +130,15 @@ int main() {
   bad("( a");                  // unclosed subshell
   bad("case x in a) b;;");     // missing esac
   bad("for; do x; done");      // missing variable
+
+  // -- alias expansion: regular (command position), zsh global (any position),
+  //    zsh suffix (file.ext -> cmd file.ext) --
+  alias_ok("ll -a", {{"ll", "ls -l"}}, {}, {}, "ls -l -a");            // regular
+  alias_ok("echo a P b", {}, {{"P", "| wc"}}, {}, "echo a | wc b");     // global, mid-command
+  alias_ok("cmd G", {}, {{"G", "| grep x"}}, {}, "cmd | grep x");       // global at end
+  alias_ok("echo P", {}, {}, {}, "echo P");                            // no tables: unchanged
+  alias_ok("readme.md", {}, {}, {{"md", "less"}}, "less readme.md");    // suffix
+  alias_ok("a.txt b.txt", {}, {}, {{"txt", "cat"}}, "cat a.txt b.txt"); // suffix only in cmd pos
 
   if (failures == 0) {
     std::printf("all parser tests passed\n");

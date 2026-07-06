@@ -27,9 +27,13 @@ struct ParseResult {
 // Parse a complete program.
 ParseResult parse(const std::string &input);
 
-// Parse with alias expansion applied to command-position words first.
+// Parse with alias expansion applied first: regular aliases in command position,
+// zsh global aliases (`alias -g') anywhere, and zsh suffix aliases (`alias -s').
+// The global/suffix maps are empty outside the zsh personality.
 ParseResult parse_with_aliases(const std::string &input,
-                               const std::map<std::string, std::string> &aliases);
+                               const std::map<std::string, std::string> &aliases,
+                               const std::map<std::string, std::string> &global_aliases = {},
+                               const std::map<std::string, std::string> &suffix_aliases = {});
 
 }  // namespace gnash::core
 
