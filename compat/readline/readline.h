@@ -70,6 +70,10 @@ extern int rl_get_screen_width (void);
    caller can print a message where the prompt was, then rl_redisplay(). */
 extern void rl_clear_current_line (void);
 
+/* Erase a zsh-style completion listing shown below the input line, if any (a
+   no-op otherwise).  Called before each keystroke is dispatched. */
+extern void rl_clear_menu_below (void);
+
 /* Called while readline is idle waiting for input (used for asynchronous
    notifications such as background-job completion).  NULL by default. */
 extern rl_hook_func_t *rl_event_hook;

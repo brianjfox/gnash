@@ -281,6 +281,9 @@ std::vector<std::string> menu_items;
 int menu_idx = -1;  // -1 = list shown but nothing inserted yet
 int menu_start = 0;
 bool menu_filenames = false;  // candidates are filenames (so append `/' for dirs)
+// Non-zero while a zsh menu listing is displayed below the input line, so the
+// next key can erase it (see rl_clear_menu_below).
+int menu_below = 0;
 
 // Alphabetical order, ignoring case; ties broken by the case-sensitive order so
 // the result is deterministic.
@@ -324,7 +327,7 @@ int menu_step(int dir) {
     // small set is shown outright; a large one (> rl_completion_query_items)
     // first asks, like zsh.
     FILE *o = rl_outstream ? rl_outstream : stdout;
-    bool show = true;
+    bool show = true, queried = false;
     if (rl_completion_query_items > 0 &&
         static_cast<int>(menu_items.size()) > rl_completion_query_items) {
       int rows = completion_grid(menu_items, /*print=*/false);
@@ -333,9 +336,22 @@ int menu_step(int dir) {
       std::fflush(o);
       int c = rl_read_key();
       show = (c == 'y' || c == 'Y');
+      queried = true;
       if (!show) std::fputc('\n', o);  // leave the query line; drop to a new one
     }
-    if (show) completion_grid(menu_items, /*print=*/true);
+    if (show) {
+      int rows = completion_grid(menu_items, /*print=*/true);
+      // zsh keeps the input line in place with the listing below it: move the
+      // cursor back up onto the input line so the pending redisplay repaints it
+      // there (not on a fresh line beneath the listing), and remember to erase
+      // the listing on the next keystroke.  Skipped after the "see all?" query,
+      // whose extra line breaks the simple row arithmetic.
+      if (!queried && rows > 0) {
+        std::fprintf(o, "\033[%dA\r", rows + 1);
+        std::fflush(o);
+        menu_below = 1;
+      }
+    }
     return 0;  // the first TAB only lists; the line is left untouched
   }
 
@@ -466,5 +482,16 @@ extern "C" int rl_possible_completions(int /*count*/, int /*key*/) {
 extern "C" int rl_insert_completions(int /*count*/, int /*key*/) {
   return complete_internal('*');
 }
+// Erase a zsh completion listing shown below the input line (see menu_step).
+// The cursor is on the input line; drop below it, clear to the end of the
+// screen, and return, so the pending redisplay repaints the line in place.
+extern "C" void rl_clear_menu_below(void) {
+  if (menu_below <= 0) return;
+  menu_below = 0;
+  FILE *o = rl_outstream ? rl_outstream : stdout;
+  std::fputs("\r\n\033[J\033[A", o);
+  std::fflush(o);
+}
+
 extern "C" int rl_menu_complete(int /*count*/, int /*key*/) { return menu_step(+1); }
 extern "C" int rl_backward_menu_complete(int /*count*/, int /*key*/) { return menu_step(-1); }
