@@ -752,7 +752,7 @@ std::vector<std::pair<std::string, bool>> set_option_states(Shell &sh) {
       {"noexec", false},      {"noglob", sh.opt_noglob},
       {"nolog", false},       {"notify", false},
       {"nounset", sh.opt_nounset}, {"onecmd", false},
-      {"physical", false},    {"pipefail", false},
+      {"physical", false},    {"pipefail", sh.opt_pipefail},
       {"posix", false},       {"privileged", false},
       {"verbose", sh.opt_verbose}, {"vi", rl_editing_mode == 0},
       {"xtrace", sh.opt_xtrace}};
@@ -801,6 +801,7 @@ int bi_set(Shell &sh, const std::vector<std::string> &argv) {
               else if (o == "noglob") sh.opt_noglob = on;
               else if (o == "verbose") sh.opt_verbose = on;
               else if (o == "functrace" || o == "errtrace") sh.opt_functrace = on;
+              else if (o == "pipefail") sh.opt_pipefail = on;
               // `set -o vi'/`set -o emacs' switch the readline editing mode
               // (they are mutually exclusive); `+o' flips to the other.
               else if (o == "vi") { if (on) rl_vi_editing_mode(0, 0); else rl_emacs_editing_mode(0, 0); }

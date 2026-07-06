@@ -175,6 +175,13 @@ scripts=(
   'echo "$BASHOPTS" | tr : "\n" | sort'
   'shopt -s extglob nullglob; echo "$BASHOPTS" | tr : "\n" | grep -E "extglob|nullglob"'
   'echo "${BASH_VERSINFO[3]} ${BASH_VERSINFO[4]}"'
+  # pipefail: pipeline status is the last non-zero stage (0 if all succeed)
+  'set -o pipefail; false | true; echo $?'
+  'set -o pipefail; true | false; echo $?'
+  'set -o pipefail; true | true; echo $?'
+  'set -o pipefail; (exit 3) | true | (exit 5); echo $?'
+  'false | true; echo $?'
+  'set -o pipefail; set +o pipefail; false | true; echo $?'
 )
 
 fails=0
