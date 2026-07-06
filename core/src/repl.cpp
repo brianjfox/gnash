@@ -138,9 +138,46 @@ extern "C" void gnash_zsh_highlight(const char *line, int len, int *colors) {
   }
 }
 
-// readline's attempted-completion hook: when the word being completed is
-// introduced by `$' (or `${'), complete over defined shell variables instead
-// of filenames.
+// True when the word starting at `start' is in command position: the first word
+// of a simple command.  That is the start of the line, or just after a command
+// separator (`;' `|' `&' `(' `{' backtick newline), skipping any leading
+// `VAR=val' assignment prefixes (which keep the next word in command position).
+static bool at_command_position(int start) {
+  int p = start - 1;
+  for (;;) {
+    while (p >= 0 && (rl_line_buffer[p] == ' ' || rl_line_buffer[p] == '\t')) p--;
+    if (p < 0) return true;
+    char c = rl_line_buffer[p];
+    if (c == ';' || c == '|' || c == '&' || c == '(' || c == '{' || c == '`' || c == '\n')
+      return true;
+    int e = p;  // end of the preceding token
+    while (p >= 0 && rl_line_buffer[p] != ' ' && rl_line_buffer[p] != '\t' &&
+           std::strchr(";|&(){}`\n", rl_line_buffer[p]) == nullptr)
+      p--;
+    std::string tok(rl_line_buffer + p + 1, static_cast<size_t>(e - p));
+    if (!is_assignment_word(tok)) return false;  // a real command word precedes us
+    // else: an assignment prefix -- keep scanning, we are still in command position
+  }
+}
+
+// readline generator: successive command names matching `text' (built once when
+// state == 0), for command-position completion.
+extern "C" char *gnash_command_completion(const char *text, int state) {
+  static std::vector<std::string> matches;
+  static size_t idx;
+  if (state == 0) {
+    matches = g_notify_shell ? command_completions(*g_notify_shell, text)
+                             : std::vector<std::string>();
+    idx = 0;
+  }
+  if (idx < matches.size()) return strdup(matches[idx++].c_str());
+  return nullptr;
+}
+
+// readline's attempted-completion hook.  A word introduced by `$'/`${' completes
+// over shell variables; a word in command position (with no `/') completes over
+// all command names (keywords/aliases/functions/builtins/$PATH); otherwise fall
+// back to readline's default filename completion.
 extern "C" char **gnash_attempted_completion(const char *text, int start, int end) {
   (void)end;
   bool dollar = start > 0 && rl_line_buffer[start - 1] == '$';
@@ -148,6 +185,12 @@ extern "C" char **gnash_attempted_completion(const char *text, int start, int en
   if (dollar || braced) {
     rl_attempted_completion_over = 1;  // don't fall back to filename completion
     return rl_completion_matches(text, gnash_var_completion);
+  }
+  // Command position: complete command names, unless the word is a path (has a
+  // `/'), in which case a filename completion of the executable is wanted.
+  if (std::strchr(text, '/') == nullptr && at_command_position(start)) {
+    rl_attempted_completion_over = 1;
+    return rl_completion_matches(text, gnash_command_completion);
   }
   return nullptr;  // let readline fall back to its default (filename) completion
 }

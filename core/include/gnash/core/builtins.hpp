@@ -20,6 +20,11 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status);
 // interactive syntax highlighting.
 bool command_is_valid(Shell &sh, const std::string &name);
 
+// Every command name beginning with PREFIX -- shell keywords, aliases,
+// functions, builtins, and executables on $PATH -- sorted and de-duplicated.
+// Used for command-position tab completion.
+std::vector<std::string> command_completions(Shell &sh, const std::string &prefix);
+
 // Populate sh.shopt_opts with the default shopt option states (idempotent).
 // Called at startup so $BASHOPTS reflects the defaults before any `shopt' runs.
 void shopt_seed(Shell &sh);

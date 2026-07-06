@@ -2141,6 +2141,45 @@ bool command_is_valid(Shell &sh, const std::string &name) {
   return !find_in_path(sh, name).empty();
 }
 
+std::vector<std::string> command_completions(Shell &sh, const std::string &prefix) {
+  std::set<std::string> out;
+  auto consider = [&](const std::string &n) {
+    if (n.size() >= prefix.size() && n.compare(0, prefix.size(), prefix) == 0) out.insert(n);
+  };
+  // Shell keywords, aliases, functions, and builtins (skipping any `enable -n'd).
+  static const char *kw[] = {"if",   "then",     "else",   "elif", "fi",     "for",
+                             "while", "until",   "do",     "done", "case",   "esac",
+                             "in",   "function", "select", "time", "coproc", nullptr};
+  for (int i = 0; kw[i]; i++) consider(kw[i]);
+  for (const auto &kv : sh.aliases) consider(kv.first);
+  for (const auto &kv : sh.functions) consider(kv.first);
+  for (const auto &b : builtin_names_sorted())
+    if (!sh.disabled_builtins.count(b)) consider(b);
+  // Executable regular files on $PATH, matched by basename.
+  std::string path = sh.get("PATH");
+  size_t i = 0;
+  while (i <= path.size()) {
+    size_t j = path.find(':', i);
+    std::string dir = path.substr(i, j == std::string::npos ? std::string::npos : j - i);
+    if (dir.empty()) dir = ".";
+    if (DIR *d = opendir(dir.c_str())) {
+      while (struct dirent *e = readdir(d)) {
+        const char *nm = e->d_name;
+        if (std::strncmp(nm, prefix.c_str(), prefix.size()) != 0) continue;
+        std::string full = dir + "/" + nm;
+        struct stat st;
+        if (access(full.c_str(), X_OK) == 0 && stat(full.c_str(), &st) == 0 &&
+            S_ISREG(st.st_mode))
+          out.insert(nm);
+      }
+      closedir(d);
+    }
+    if (j == std::string::npos) break;
+    i = j + 1;
+  }
+  return std::vector<std::string>(out.begin(), out.end());
+}
+
 // personality [ -lLR ] [ NAME [ -c command ] ]   (alias: emulate)
 //
 // Switch the shell's personality at runtime, with syntax identical to zsh's
