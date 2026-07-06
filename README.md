@@ -42,7 +42,7 @@ It needs a C++20 compiler and CMake ≥ 3.16 — install them first if needed
 (`sudo apt install build-essential cmake`, `sudo dnf install gcc-c++ cmake`,
 `sudo pacman -S base-devel cmake`, or `brew install cmake`). By default it
 installs to `/usr/local/bin`, falling back to `~/.local/bin`; override with
-`PREFIX=~/somewhere`, or pin a version with `GNASH_REF=gnash-1.3.0`.
+`PREFIX=~/somewhere`, or pin a version with `GNASH_REF=gnash-1.3.1`.
 
 Prefer to look before you leap? The script is [`install.sh`](install.sh) — read
 it, then run `bash install.sh`.
