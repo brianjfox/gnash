@@ -121,6 +121,13 @@ extern "C" void gnash_zsh_highlight(const char *line, int len, int *colors) {
     }
     int start = i;
     while (i < len && std::strchr(" \t;|&(){}<>'\"\n#", line[i]) == nullptr) i++;
+    if (i == start) {
+      // A break character the cases above don't consume (`)', `}', `<', `>').
+      // Skip it so the scan always advances -- otherwise a line containing one
+      // (e.g. completing `Movie (2005)') spins here forever, hanging redisplay.
+      i++;
+      continue;
+    }
     std::string word(line + start, static_cast<size_t>(i - start));
     if (cmd_pos) {
       if (is_assignment_word(word)) continue;  // VAR=val prefix: stays in cmd pos
