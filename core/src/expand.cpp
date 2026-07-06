@@ -277,7 +277,10 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
       std::string res = sh_.run_and_capture(inner, &st);
       sh_.last_status = st;
       sh_.note_cmdsub(st);
-      for (char c : res) { out += c; mask += qm; }
+      // '4' marks command-substitution output, which zsh word-splits (unlike
+      // parameter expansion); double-quoted, it is not split.
+      char cm = dq ? '1' : '4';
+      for (char c : res) { out += c; mask += cm; }
       i = end + 1;
       return;
     }
@@ -294,7 +297,8 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
       std::string res = sh_.run_and_capture_inproc(inner, &st);
       sh_.last_status = st;
       sh_.note_cmdsub(st);
-      for (char c : res) { out += c; mask += qm; }
+      char cm = dq ? '1' : '4';  // command output: zsh-splittable (see $(...) above)
+      for (char c : res) { out += c; mask += cm; }
       i = end + 1;
       return;
     }
@@ -451,6 +455,26 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
     out += '$';
     mask += qm;
     i += 1;
+    return;
+  }
+  // zsh: a bare `$array' expands to every element, not just element 0.  Unquoted
+  // it yields one word per element (like `${array[@]}'); double-quoted it joins
+  // the elements with the first IFS character (like `"${array[*]}"').
+  if (sh_.is_zsh() && sh_.is_array(name)) {
+    std::vector<std::string> items = sh_.array_values(name);
+    if (dq) {
+      std::string is = sh_.ifs();
+      std::string joiner = is.empty() ? std::string() : std::string(1, is[0]);
+      for (size_t k = 0; k < items.size(); k++) {
+        if (k) for (char c : joiner) { out += c; mask += '1'; }
+        for (char c : items[k]) { out += c; mask += '1'; }
+      }
+    } else {
+      for (size_t k = 0; k < items.size(); k++) {
+        if (k) { out += FIELD_SEP; mask += '0'; }
+        for (char c : items[k]) { out += c; mask += '0'; }
+      }
+    }
     return;
   }
   bool set = false;
@@ -837,7 +861,7 @@ void Expander::process(const std::string &text, std::string &out, std::string &m
       int st = 0;
       std::string res = sh_.run_and_capture(inner, &st);
       sh_.note_cmdsub(st);
-      for (char ch : res) { out += ch; mask += '0'; }
+      for (char ch : res) { out += ch; mask += '4'; }  // command output: zsh-splittable
       i = (j < text.size()) ? j + 1 : j;
     } else {
       // Literal (unquoted, not from expansion): mask '2' -- glob-active like an
@@ -853,6 +877,17 @@ void Expander::process(const std::string &text, std::string &out, std::string &m
 std::vector<std::pair<std::string, std::string>> Expander::split_ifs(const std::string &s,
                                                                      const std::string &mask) {
   std::string ifs = sh_.ifs();
+  // Mask legend for IFS splitting:
+  //   '0' parameter/array/positional expansion output -- IFS-split in bash, but
+  //       NOT in zsh (zsh leaves `$var' and array elements un-split);
+  //   '4' command-substitution output ($(...)/`...`) -- IFS-split in both bash
+  //       and zsh (zsh word-splits command substitution even with the default
+  //       SH_WORD_SPLIT off);
+  //   '1' quoted, '2' literal -- never IFS-split.
+  // FIELD_SEP (array/`$@' element boundary) is always a hard split for any
+  // unquoted expansion output, in either shell.
+  bool zsh = sh_.is_zsh();
+  auto splittable = [&](char m) { return m == '4' || (m == '0' && !zsh); };
   std::vector<std::pair<std::string, std::string>> fields;
   std::string cur, curm;
   bool have = false;
@@ -862,18 +897,18 @@ std::vector<std::pair<std::string, std::string>> Expander::split_ifs(const std::
   size_t i = 0;
   while (i < s.size()) {
     char c = s[i];
-    // Only expansion output (mask '0') is IFS-split; quoted ('1') and literal
-    // ('2') text is never split, even when it contains IFS characters.
-    bool q = mask[i] != '0';
+    // Quoted ('1') and literal ('2') text is never split, even when it contains
+    // IFS characters; '0'/'4' expansion output is (subject to the rule above).
+    bool q = mask[i] == '1' || mask[i] == '2';
     if (!q && c == FIELD_SEP) {
       flush();
       i++;
       continue;
     }
-    if (!q && is_ifs(c)) {
+    if (splittable(mask[i]) && is_ifs(c)) {
       if (is_ws(c)) {
         if (have) flush();
-        while (i < s.size() && mask[i] == '0' && is_ifs(s[i]) && is_ws(s[i])) i++;
+        while (i < s.size() && splittable(mask[i]) && is_ifs(s[i]) && is_ws(s[i])) i++;
       } else {
         flush();
         i++;

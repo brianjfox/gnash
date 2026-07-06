@@ -66,6 +66,9 @@ class Shell {
                      std::vector<std::pair<std::string, std::string>> &pairs) const;
   void array_set(const std::string &n, const std::string &sub, const std::string &v);
   int array_count(const std::string &n) const;
+  // True when NAME holds an indexed or associative array (not a scalar); used
+  // by the zsh personality, where a bare `$array' expands to all its elements.
+  bool is_array(const std::string &n) const;
   // Assign name=(elements...); each element is (optional explicit subscript, value).
   void array_assign(const std::string &n,
                     const std::vector<std::pair<std::optional<std::string>, std::string>> &elems,
