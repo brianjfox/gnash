@@ -39,7 +39,9 @@ class Expander {
   std::string expand_heredoc(const std::string &text);
 
   // Value of a parameter (including specials); `set` reports whether it was set.
-  std::string param_value(const std::string &name, bool &set);
+  // `defaulting_op' is set by ${x-…}/${x:-…}/${x=…}/${x+…}/${x?…} callers, where
+  // an unset variable is handled by the operator and must NOT trip `set -u'.
+  std::string param_value(const std::string &name, bool &set, bool defaulting_op = false);
 
   // Replace any <(cmd) / >(cmd) in WORD with a /dev/fd/N path, forking the inner
   // command and recording it on the shell for later cleanup.

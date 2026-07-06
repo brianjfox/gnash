@@ -119,7 +119,7 @@ static std::string tilde_assign(Shell &sh, const std::string &text) {
   return out;
 }
 
-std::string Expander::param_value(const std::string &name, bool &set) {
+std::string Expander::param_value(const std::string &name, bool &set, bool defaulting_op) {
   set = true;
   if (name == "?") return std::to_string(sh_.last_status);
   if (name == "$") return sh_.get("$");
@@ -146,10 +146,10 @@ std::string Expander::param_value(const std::string &name, bool &set) {
   if (sh_.get_if_set(name, v)) return v;
   if (sh_.dynamic_var(name, v)) return v;  // RANDOM/SECONDS/LINENO/BASHPID/EPOCH*
   set = false;
-  if (sh_.opt_nounset) {
+  if (sh_.opt_nounset && !defaulting_op) {
     std::fprintf(stderr, "%s%s: unbound variable\n", sh_.err_prefix().c_str(), name.c_str());
     sh_.exiting = true;
-    sh_.exit_status = 1;
+    sh_.exit_status = 127;  // bash exits a non-interactive shell with 127 here
   }
   return std::string();
 }
@@ -872,6 +872,19 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
   if (length && !have_sub && sh.is_zsh() && sh.is_array(name))
     return std::to_string(sh.array_count(name));
 
+  // A defaulting/alternative/error operator (`-` `:-` `=` `:=` `+` `:+` `?` `:?`)
+  // handles an unset variable itself, so it must not trip `set -u' in
+  // param_value.  A bare `:' here begins a substring, not such an operator.
+  std::string rest = length ? std::string() : b.substr(p);
+  bool defaulting_op = false;
+  if (!rest.empty()) {
+    char c0 = rest[0];
+    if (c0 == '-' || c0 == '=' || c0 == '+' || c0 == '?') defaulting_op = true;
+    else if (c0 == ':' && rest.size() > 1 &&
+             (rest[1] == '-' || rest[1] == '=' || rest[1] == '+' || rest[1] == '?'))
+      defaulting_op = true;
+  }
+
   bool set = false;
   std::string val;
   if (have_sub) {
@@ -879,10 +892,9 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
     val = sh.array_get(name, sh.zsh_subscript(name, ex.expand_no_split(sub)));
     set = sh.is_set(name);
   } else {
-    val = ex.param_value(name, set);
+    val = ex.param_value(name, set, defaulting_op);
   }
   if (length) return std::to_string(val.size());
-  std::string rest = b.substr(p);
   return apply_param_op(ex, sh, name, val, set, rest);
 }
 
@@ -924,7 +936,14 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
       return val;
     }
     if (op == '?') {
-      if (empty) return std::string();  // (error message elided)
+      if (empty) {
+        std::string msg = expand_word(word);
+        if (msg.empty()) msg = colon ? "parameter null or not set" : "parameter not set";
+        std::fprintf(stderr, "%s%s: %s\n", sh.err_prefix().c_str(), name.c_str(), msg.c_str());
+        sh.exiting = true;
+        sh.exit_status = 127;  // bash: a fatal ${x?} / set -u error exits with 127
+        return std::string();
+      }
       return val;
     }
   }
