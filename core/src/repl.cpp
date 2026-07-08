@@ -231,20 +231,23 @@ extern "C" int gnash_display_shell_version(int /*count*/, int /*key*/) {
 // dotfile hiding; the other personas use readline's defaults -- no highlighting,
 // TAB inserts the common prefix then lists.  Called at startup and again
 // whenever the personality changes at runtime, so `personality zsh' / `emulate'
-// take effect immediately.  Completion keys live in the emacs keymap (as the
-// rest of the setup does); the read loop selects the mode's keymap per line.
+// take effect immediately.  The completion keys are bound in both the emacs and
+// the vi-insert keymaps, so the persona's style applies in either editing mode;
+// the read loop selects the mode's keymap per line.
 void apply_persona_readline(Shell &sh) {
   bool zsh = sh.is_zsh();
   rl_highlight_function = zsh ? gnash_zsh_highlight : nullptr;
   rl_match_hidden_files = zsh ? 0 : 1;
-  rl_set_keymap(rl_get_keymap_by_name("emacs"));
-  if (zsh) {
-    rl_bind_key('\t', rl_menu_complete);
-    rl_bind_keyseq("\\e[Z", rl_backward_menu_complete);
-  } else {
-    rl_bind_key('\t', rl_complete);
-    rl_bind_keyseq("\\e[Z", rl_complete);
+  rl_command_func_t *tab = zsh ? rl_menu_complete : rl_complete;
+  rl_command_func_t *shift_tab = zsh ? rl_backward_menu_complete : rl_complete;
+  Keymap saved = rl_get_keymap();
+  for (Keymap km : {rl_get_keymap_by_name("emacs"), vi_insertion_keymap}) {
+    if (!km) continue;
+    rl_set_keymap(km);
+    rl_bind_key('\t', tab);
+    rl_bind_keyseq("\\e[Z", shift_tab);
   }
+  rl_set_keymap(saved);
 }
 }  // namespace
 
