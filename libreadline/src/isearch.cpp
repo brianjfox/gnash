@@ -31,6 +31,9 @@ void show(int dir, const std::string &ss) {
   FILE *o = rl_outstream ? rl_outstream : stdout;
   const char *pfx = (dir < 0) ? "(reverse-i-search)`" : "(i-search)`";
   std::fprintf(o, "\r%s%s': %s\033[K", pfx, ss.c_str(), rl_line_buffer);
+  // Leave the cursor at the match (rl_point) within the shown line, not at its
+  // end, by backing up over the trailing characters.
+  for (int i = rl_end; i > rl_point; i--) std::fputc('\b', o);
   std::fflush(o);
 }
 
@@ -79,7 +82,12 @@ int isearch(int dir) {
       matchpos = f;
       HIST_ENTRY *e = history_get(history_base + f);
       rl_replace_line(e->line, 1);
-      rl_point = rl_end;
+      // Put the cursor at the start of the match, not the end of the line: the
+      // last occurrence for a reverse search, the first for a forward one (bash).
+      std::string line = e->line;
+      std::string::size_type pos =
+          ss.empty() ? std::string::npos : (dir < 0 ? line.rfind(ss) : line.find(ss));
+      rl_point = (pos != std::string::npos) ? static_cast<int>(pos) : rl_end;
     } else if (!ss.empty()) {
       rl_ding();
     }
