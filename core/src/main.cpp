@@ -204,6 +204,7 @@ void apply_set_o(Shell &sh, const std::string &name, bool set) {
   else if (name == "nounset") sh.opt_nounset = set;
   else if (name == "noglob") sh.opt_noglob = set;
   else if (name == "verbose") sh.opt_verbose = set;
+  else if (name == "noexec") sh.opt_noexec = set;
   // Other -o names (pipefail, posix, vi, emacs, ...) are accepted and ignored.
 }
 
@@ -307,7 +308,8 @@ int main(int argc, char **argv) {
         case 'u': sh.opt_nounset = set; break;
         case 'f': sh.opt_noglob = set; break;
         case 'v': sh.opt_verbose = set; break;
-        case 'n': case 'r': case 'm': case 'B': case 'h': case 'H':
+        case 'n': sh.opt_noexec = set; break;  // read but don't execute
+        case 'r': case 'm': case 'B': case 'h': case 'H':
           break;  // accepted, not (yet) acted on
         case 'c': have_c = true; stop_after = true; break;
         case 'o': {

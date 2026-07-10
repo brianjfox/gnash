@@ -255,6 +255,12 @@ int run_interactive(Shell &sh) {
   sh.init_job_control(true);
   sh.interactive = true;
 
+  // Match bash's bash_initialize_history: single (and double) quotes inhibit
+  // history expansion, so a `!' inside '...' is left literal rather than being
+  // treated as an event designator.  The history library defaults this off.
+  history_quotes_inhibit_expansion = 1;
+  history_search_delimiter_chars = const_cast<char *>(";&()|<>");
+
   // The history file is $HISTFILE (set per-personality in main, e.g. the bash
   // persona defaults to ~/.bash_history), falling back to the built-in default.
   std::string histfile = sh.get("HISTFILE");

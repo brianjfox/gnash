@@ -236,6 +236,7 @@ class Shell {
   bool opt_nounset = false;   // -u
   bool opt_noglob = false;    // -f
   bool opt_verbose = false;   // -v
+  bool opt_noexec = false;    // -n: read/parse commands but don't execute them
   bool opt_pipefail = false;  // -o pipefail: pipeline status = last non-zero stage
   bool opt_functrace = false; // -T / -o functrace: DEBUG/RETURN traps inherited
   int errexit_suppress = 0;   // >0 while a command's status is being checked

@@ -749,7 +749,7 @@ std::vector<std::pair<std::string, bool>> set_option_states(Shell &sh) {
       {"history", i},         {"ignoreeof", false},
       {"interactive-comments", true}, {"keyword", false},
       {"monitor", i},         {"noclobber", false},
-      {"noexec", false},      {"noglob", sh.opt_noglob},
+      {"noexec", sh.opt_noexec}, {"noglob", sh.opt_noglob},
       {"nolog", false},       {"notify", false},
       {"nounset", sh.opt_nounset}, {"onecmd", false},
       {"physical", false},    {"pipefail", sh.opt_pipefail},
@@ -785,6 +785,7 @@ int bi_set(Shell &sh, const std::vector<std::string> &argv) {
           case 'u': sh.opt_nounset = on; break;
           case 'f': sh.opt_noglob = on; break;
           case 'v': sh.opt_verbose = on; break;
+          case 'n': if (!sh.interactive) sh.opt_noexec = on; break;  // ignored when interactive
           case 'T': sh.opt_functrace = on; break;  // DEBUG/RETURN trap inheritance
           case 'o': {
             if (i + 1 >= argv.size()) {
@@ -800,6 +801,7 @@ int bi_set(Shell &sh, const std::vector<std::string> &argv) {
               else if (o == "nounset") sh.opt_nounset = on;
               else if (o == "noglob") sh.opt_noglob = on;
               else if (o == "verbose") sh.opt_verbose = on;
+              else if (o == "noexec") { if (!sh.interactive) sh.opt_noexec = on; }
               else if (o == "functrace" || o == "errtrace") sh.opt_functrace = on;
               else if (o == "pipefail") sh.opt_pipefail = on;
               // `set -o vi'/`set -o emacs' switch the readline editing mode

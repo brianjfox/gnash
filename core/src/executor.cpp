@@ -275,6 +275,14 @@ void apply_assignment_word(Shell &sh, const std::string &word) {
 int Executor::run(const Command *c) {
   if (!c || unwinding()) return sh_.last_status;
 
+  // `-n' (noexec): parse commands but never run them, so a script can be
+  // syntax-checked without side effects.  Gating each command here -- rather
+  // than skipping the whole tree in run_string -- matches bash: a `set -n'
+  // reached mid-script executes (turning noexec on), after which every later
+  // command is skipped, and a subsequent `set +n' never runs to turn it back
+  // off.  Ignored by interactive shells, exactly as bash does.
+  if (sh_.opt_noexec && !sh_.interactive) return sh_.last_status;
+
   sh_.run_pending_traps();  // deliver any signals received between commands
 
   if (auto *p = dynamic_cast<const SimpleCommand *>(c)) return run_simple(p);

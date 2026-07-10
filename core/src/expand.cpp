@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <pwd.h>
@@ -56,27 +57,103 @@ size_t scan_balanced(const std::string &t, size_t i, char open, char close) {
   return std::string::npos;
 }
 
+// Encode a Unicode code point as UTF-8 (for \u / \U), matching bash's u32cconv.
+void append_utf8(std::string &out, unsigned long v) {
+  if (v <= 0x7f) {
+    out += static_cast<char>(v);
+  } else if (v <= 0x7ff) {
+    out += static_cast<char>(0xc0 | (v >> 6));
+    out += static_cast<char>(0x80 | (v & 0x3f));
+  } else if (v <= 0xffff) {
+    out += static_cast<char>(0xe0 | (v >> 12));
+    out += static_cast<char>(0x80 | ((v >> 6) & 0x3f));
+    out += static_cast<char>(0x80 | (v & 0x3f));
+  } else {
+    out += static_cast<char>(0xf0 | (v >> 18));
+    out += static_cast<char>(0x80 | ((v >> 12) & 0x3f));
+    out += static_cast<char>(0x80 | ((v >> 6) & 0x3f));
+    out += static_cast<char>(0x80 | (v & 0x3f));
+  }
+}
+
+// ANSI-C dequoting for $'...' -- matches bash's ansicstr(..., flags=2).  Beyond
+// the single-letter escapes it decodes octal (\nnn), hex (\xHH and \x{...}),
+// Unicode (\uHHHH, \UHHHHHHHH), and control (\cX) escapes into real bytes.  An
+// unrecognized escape keeps its backslash, as bash does.
 std::string ansi_c(const std::string &s) {
+  auto hexval = [](char c) {
+    return c <= '9' ? c - '0' : (std::tolower((unsigned char)c) - 'a' + 10);
+  };
   std::string out;
   for (size_t i = 0; i < s.size(); i++) {
-    if (s[i] == '\\' && i + 1 < s.size()) {
-      char c = s[++i];
-      switch (c) {
-        case 'n': out += '\n'; break;
-        case 't': out += '\t'; break;
-        case 'r': out += '\r'; break;
-        case 'a': out += '\a'; break;
-        case 'b': out += '\b'; break;
-        case 'f': out += '\f'; break;
-        case 'v': out += '\v'; break;
-        case '\\': out += '\\'; break;
-        case '\'': out += '\''; break;
-        case '"': out += '"'; break;
-        case 'e': out += '\033'; break;
-        default: out += '\\'; out += c; break;
+    if (s[i] != '\\' || i + 1 >= s.size()) { out += s[i]; continue; }
+    char c = s[++i];
+    switch (c) {
+      case 'n': out += '\n'; break;
+      case 't': out += '\t'; break;
+      case 'r': out += '\r'; break;
+      case 'a': out += '\a'; break;
+      case 'b': out += '\b'; break;
+      case 'f': out += '\f'; break;
+      case 'v': out += '\v'; break;
+      case '\\': out += '\\'; break;
+      case '\'': out += '\''; break;
+      case '"': out += '"'; break;
+      case '?': out += '?'; break;
+      case 'e': case 'E': out += '\033'; break;
+      case '0': case '1': case '2': case '3':
+      case '4': case '5': case '6': case '7': {
+        // Octal: this digit plus up to two more (three total).
+        int v = c - '0', k = 0;
+        while (k < 2 && i + 1 < s.size() && s[i + 1] >= '0' && s[i + 1] <= '7') {
+          v = v * 8 + (s[++i] - '0');
+          k++;
+        }
+        out += static_cast<char>(v & 0xff);
+        break;
       }
-    } else {
-      out += s[i];
+      case 'x': {
+        // Hex: \xHH (1-2 digits) or brace form \x{HH...}.  A bare \x with no
+        // hex digit is passed through unchanged.
+        bool brace = i + 1 < s.size() && s[i + 1] == '{';
+        if (brace) i++;
+        int v = 0, k = 0;
+        int limit = brace ? INT_MAX : 2;
+        while (k < limit && i + 1 < s.size() &&
+               std::isxdigit((unsigned char)s[i + 1])) {
+          v = v * 16 + hexval(s[++i]);
+          k++;
+        }
+        if (brace && i + 1 < s.size() && s[i + 1] == '}') i++;
+        if (k == 0) { out += '\\'; out += 'x'; if (brace) out += '{'; }
+        else out += static_cast<char>(v & 0xff);
+        break;
+      }
+      case 'u': case 'U': {
+        // Unicode: \u up to 4 hex digits, \U up to 8; encoded as UTF-8.  With
+        // no hex digit following, the backslash is kept.
+        int limit = c == 'u' ? 4 : 8;
+        unsigned long v = 0;
+        int k = 0;
+        while (k < limit && i + 1 < s.size() &&
+               std::isxdigit((unsigned char)s[i + 1])) {
+          v = v * 16 + static_cast<unsigned long>(hexval(s[++i]));
+          k++;
+        }
+        if (k == 0) { out += '\\'; out += c; }
+        else append_utf8(out, v);
+        break;
+      }
+      case 'c': {
+        // Control char: \cX -> TOCTRL(X).  At end of string, literal \c.
+        if (i + 1 >= s.size()) { out += '\\'; out += 'c'; break; }
+        char n = s[++i];
+        if (n == '\\' && i + 1 < s.size() && s[i + 1] == '\\') i++;  // $'\c\\'
+        out += static_cast<char>(n == '?' ? 0x7f
+                                          : (std::toupper((unsigned char)n) & 0x1f));
+        break;
+      }
+      default: out += '\\'; out += c; break;
     }
   }
   return out;
@@ -131,6 +208,7 @@ std::string Expander::param_value(const std::string &name, bool &set, bool defau
     if (sh_.opt_errexit) f += 'e';
     if (sh_.opt_noglob) f += 'f';
     if (sh_.interactive) f += 'i';  // rc files test `case $- in *i*)'
+    if (sh_.opt_noexec) f += 'n';
     if (sh_.opt_nounset) f += 'u';
     if (sh_.opt_xtrace) f += 'x';
     if (sh_.opt_verbose) f += 'v';
