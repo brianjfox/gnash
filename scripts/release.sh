@@ -61,7 +61,21 @@ step()  { printf '\n\033[1;34m==>\033[0m \033[1m%s\033[0m\n' "$*"; }
 info()  { printf '    %s\n' "$*"; }
 skip()  { printf '    \033[2m(skip) %s\033[0m\n' "$*"; }
 die()   { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
-maybe_push() { if [ "$DO_PUSH" = 1 ]; then git "$@"; else skip "would: git ${*}"; fi; }
+# Push a repo's HEAD (and optionally a tag) to origin.  A GitHub HTTPS remote
+# has no non-interactive credentials, so fall back to the authenticated gh
+# token; SSH remotes (git@github.com) push directly.
+git_push() {  # git_push DIR [REFSPEC...]
+  local dir=$1; shift
+  if [ "$DO_PUSH" != 1 ]; then skip "would: git -C $dir push origin ${*:-HEAD}"; return; fi
+  local url; url=$(git -C "$dir" remote get-url origin)
+  case "$url" in
+    https://github.com/*)
+      local slug=${url#https://github.com/}; slug=${slug%.git}
+      git -C "$dir" push "https://x-access-token:$(gh auth token)@github.com/$slug.git" \
+        "${@:-HEAD:$(git -C "$dir" symbolic-ref --short HEAD)}" ;;
+    *) git -C "$dir" push origin "${@:-HEAD}" ;;
+  esac
+}
 
 # ---- preflight -------------------------------------------------------------
 step "Preflight for $TAG"
@@ -110,8 +124,8 @@ else
     -m "Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
   git tag -a "$TAG" -m "$FORMULA $VERSION"
   info "committed and tagged $TAG"
-  maybe_push push origin HEAD
-  maybe_push push origin "$TAG"
+  git_push "$ROOT"
+  git_push "$ROOT" "$TAG"
 fi
 
 # ---- 3. universal macOS tarball --------------------------------------------
@@ -225,11 +239,7 @@ fi
 
 # ---- push the tap ----------------------------------------------------------
 step "Push tap $TAP_REPO"
-if [ "$DO_PUSH" = 1 ]; then
-  git -C "$TAP_DIR" push origin HEAD
-else
-  skip "would: git -C $TAP_DIR push origin HEAD"
-fi
+git_push "$TAP_DIR"
 
 step "Done: $TAG released"
 info "main release: https://github.com/$MAIN_REPO/releases/tag/$TAG"
