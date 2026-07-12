@@ -2442,15 +2442,54 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
   } else if (cmd == "suspend") {
     st = 0;
   } else if (cmd == "command") {
-    if (argv.size() > 1 && argv[1] == "-v") {
-      st = 1;
-      if (argv.size() > 2) {
-        std::string n = argv[2];
-        if (sh.functions.count(n) || is_builtin_name(n)) { std::printf("%s\n", n.c_str()); st = 0; }
-        else { std::string p = find_in_path(sh, n); if (!p.empty()) { std::printf("%s\n", p.c_str()); st = 0; } }
+    // Execution of `command NAME args' is handled in the executor (run_simple),
+    // which runs NAME through the normal builtin/external path with shell
+    // functions bypassed.  Only the describe forms (-v/-V) and option errors
+    // reach here; the name-lookup helpers this needs live in this file.
+    size_t i = 1;
+    bool desc_v = false, desc_V = false, bad = false;
+    std::string badopt;
+    for (; i < argv.size(); i++) {
+      const std::string &o = argv[i];
+      if (o == "--") { i++; break; }
+      if (o.size() < 2 || o[0] != '-') break;
+      for (size_t k = 1; k < o.size(); k++) {
+        if (o[k] == 'v') desc_v = true;
+        else if (o[k] == 'V') desc_V = true;
+        else if (o[k] == 'p') { /* default PATH: accepted, no-op */ }
+        else { bad = true; badopt = std::string("-") + o[k]; break; }
+      }
+      if (bad) break;
+    }
+    if (bad) {
+      std::fprintf(stderr, "%scommand: %s: invalid option\n", sh.err_prefix().c_str(),
+                   badopt.c_str());
+      st = 2;
+    } else if (desc_V) {
+      // `command -V NAME...' == `type NAME...'.
+      std::vector<std::string> t = {"type"};
+      t.insert(t.end(), argv.begin() + i, argv.end());
+      st = bi_type(sh, t);
+    } else if (desc_v) {
+      // For each name print the name (function/builtin/keyword) or its full path
+      // (external), 0 if all resolved, 1 otherwise.
+      st = (i < argv.size()) ? 0 : 1;
+      for (size_t j = i; j < argv.size(); j++) {
+        const std::string &n = argv[j];
+        if (sh.functions.count(n) || is_builtin_name(n) || is_reserved_word(n)) {
+          std::printf("%s\n", n.c_str());
+        } else {
+          std::string p = find_in_path(sh, n);
+          if (!p.empty()) std::printf("%s\n", p.c_str());
+          else st = 1;
+        }
       }
     } else {
-      st = sh.run_string(join(argv, 1));
+      // No -v/-V: execution is handled in run_simple; reached only defensively
+      // (e.g. run_builtin called directly).  Run the target if it is a builtin.
+      std::vector<std::string> rest(argv.begin() + i, argv.end());
+      if (!rest.empty()) run_builtin(sh, rest, &st);
+      else st = 0;
     }
   } else if (cmd == "exec") {
     // Options: -a NAME (argv[0] for the command), -c (empty environment),

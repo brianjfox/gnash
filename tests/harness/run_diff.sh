@@ -166,6 +166,16 @@ scripts=(
   'type if; type cd; type ls'
   'help -s cd; help -d pushd popd; help -s shopt'
   'cd(){ echo fn; }; builtin cd /tmp && pwd; builtin echo direct'
+  # `command NAME args' runs NAME with its argv verbatim -- no re-parsing of the
+  # already-expanded, quoted words (regression: it used to re-join+re-lex them,
+  # mangling backslash escapes, quoted whitespace, and embedded metacharacters).
+  'nvm_echo() { command printf %s\\n "$*"; }; nvm_echo "unknown version dir"'
+  'command printf "%s\n" "a  b|c;d(e)"'
+  'printf(){ echo shadow; }; command printf "%s\n" real'
+  'command command echo nested; command; echo "bare=$?"'
+  'command -v printf; command -v ls >/dev/null && echo ls-found; command -v nosuch_xyz; echo "rc=$?"'
+  'command -V cd; command -V nosuch_xyz 2>/dev/null; echo "rc=$?"'
+  'f(){ echo fn; }; command -v f; command f 2>/dev/null; echo "cmd-f-rc=$?"'
   'shopt | wc -l | tr -d " "; shopt -q nullglob; echo $?; shopt -s nullglob; shopt -q nullglob; echo $?'
   'shopt -p nullglob extglob dotglob'
   'cd /tmp; set -- nomatch_glob_*.zz; echo "off=$#"; shopt -s nullglob; set -- nomatch_glob_*.zz; echo "on=$#"'

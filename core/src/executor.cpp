@@ -516,6 +516,35 @@ int Executor::run_simple(const SimpleCommand *c) {
     std::fprintf(stderr, "%s\n", line.c_str());
   }
 
+  // `command [-pvV] NAME [args...]': run NAME as a builtin or external, bypassing
+  // any shell function of the same name.  The execution case is handled here --
+  // not in the `command' builtin -- so NAME reuses the normal redirect / temporary-
+  // assignment / job-control path with the already-expanded, correctly-quoted argv.
+  // (The builtin re-joined the words into a string and re-parsed them, which
+  // corrupted quoting and any embedded shell metacharacters.)  The describe forms
+  // -v/-V, and invalid options, are left for the builtin's `command' case, where
+  // the name-lookup helpers live: we detect them and simply don't strip.
+  bool skip_functions = false;
+  while (!argv.empty() && argv[0] == "command") {
+    size_t k = 1;
+    bool describe = false, bad = false;
+    for (; k < argv.size(); k++) {
+      const std::string &o = argv[k];
+      if (o == "--") { k++; break; }
+      if (o.size() < 2 || o[0] != '-') break;
+      for (size_t j = 1; j < o.size(); j++) {
+        if (o[j] == 'v' || o[j] == 'V') describe = true;
+        else if (o[j] == 'p') { /* use a default PATH: accepted, no-op here */ }
+        else { bad = true; break; }
+      }
+      if (bad) break;
+    }
+    if (describe || bad) break;  // -v/-V/invalid: dispatch to the `command' builtin
+    argv.erase(argv.begin(), argv.begin() + k);  // strip `command' and its options
+    skip_functions = true;
+    if (argv.empty()) return (sh_.last_status = 0);  // bare `command'
+  }
+
   // No command word: assignments take effect in the current shell.  The status
   // is that of the last command substitution in the RHS, or 0 if there was none.
   if (argv.empty()) {
@@ -538,7 +567,7 @@ int Executor::run_simple(const SimpleCommand *c) {
 
   // Builtins and functions run in-process (with redirects applied/restored).
   auto fit = sh_.functions.find(argv[0]);
-  bool is_func = fit != sh_.functions.end();
+  bool is_func = !skip_functions && fit != sh_.functions.end();
   int dummy = 0;
   bool builtin = false;
   {
