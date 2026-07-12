@@ -351,6 +351,9 @@ int main(int argc, char **argv) {
     if (stop_after) continue;
   }
   sh.login_shell = login;
+  // Keep the `login_shell' shopt in sync: it was seeded from the (still false)
+  // default before the invocation was parsed, so refresh it now.
+  sh.shopt_opts["login_shell"] = login;
 
   // The personality: the --personality flag wins, else the invocation name.
   configure_persona(sh, personality_flag.empty() ? prefix : personality_flag, exec_path);
@@ -364,6 +367,7 @@ int main(int argc, char **argv) {
 
   // ---- dispatch ----------------------------------------------------------
   if (have_c) {
+    sh.invocation_char = 'c';  // $- includes `c'
     std::string cmd = idx < args.size() ? args[idx++] : "";
     if (idx < args.size()) {
       sh.arg0 = args[idx];
@@ -391,6 +395,7 @@ int main(int argc, char **argv) {
     sh.run_string(ss.str());
   } else {
     // Read commands from standard input.
+    sh.invocation_char = 's';  // $- includes `s' when reading from stdin
     if (idx < args.size())  // `-s' with trailing args: they are positionals
       sh.positional.assign(args.begin() + idx, args.end());
     bool interactive = force_interactive || isatty(STDIN_FILENO);

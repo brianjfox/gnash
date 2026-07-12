@@ -204,14 +204,23 @@ std::string Expander::param_value(const std::string &name, bool &set, bool defau
   if (name == "#") return std::to_string(sh_.positional.size());
   if (name == "0") return sh_.arg0;
   if (name == "-") {
+    // The current option flags, in bash's order: the single-letter set options
+    // (alphabetical), then the always-on defaults B/H/m, then the invocation
+    // letter (`c' for -c, `s' when reading from stdin).  hashall (h) and
+    // braceexpand (B) are on by default, as in bash.
     std::string f;
     if (sh_.opt_errexit) f += 'e';
     if (sh_.opt_noglob) f += 'f';
+    f += 'h';                       // hashall: on by default
     if (sh_.interactive) f += 'i';  // rc files test `case $- in *i*)'
+    if (sh_.job_control) f += 'm';  // monitor: interactive job control
     if (sh_.opt_noexec) f += 'n';
     if (sh_.opt_nounset) f += 'u';
-    if (sh_.opt_xtrace) f += 'x';
     if (sh_.opt_verbose) f += 'v';
+    if (sh_.opt_xtrace) f += 'x';
+    f += 'B';                       // braceexpand: on by default
+    if (sh_.interactive) f += 'H';  // histexpand: on for interactive shells
+    if (sh_.invocation_char) f += sh_.invocation_char;
     return f;
   }
   if (!name.empty() && std::isdigit(static_cast<unsigned char>(name[0]))) {

@@ -142,6 +142,7 @@ class Shell {
   int job_terminal = -1;        // controlling-terminal fd, or -1
   bool job_control = false;     // interactive + tty
   bool interactive = false;
+  char invocation_char = 0;     // $- invocation letter: 'c' (-c), 's' (stdin), else 0
 
   void init_job_control(bool interactive_shell);
   Job *add_job(long pgid, const std::vector<long> &pids, const std::string &cmd, bool background);

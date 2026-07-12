@@ -176,6 +176,14 @@ scripts=(
   'command -v printf; command -v ls >/dev/null && echo ls-found; command -v nosuch_xyz; echo "rc=$?"'
   'command -V cd; command -V nosuch_xyz 2>/dev/null; echo "rc=$?"'
   'f(){ echo fn; }; command -v f; command f 2>/dev/null; echo "cmd-f-rc=$?"'
+  # $- reports the option flags in bash order (default hashall/braceexpand on,
+  # then the invocation letter -- `c' under -c).
+  'echo "[$-]"'
+  'set -e; echo "[$-]"'
+  'set -efuvx; echo "[$-]" 2>/dev/null; set +efuvx; echo "[$-]"'
+  'case $- in *c*) echo has-c;; *) echo no-c;; esac; case $- in *i*) echo interactive;; *) echo noninteractive;; esac'
+  # A non-login shell reports login_shell off (matches bash under -c).
+  'shopt -q login_shell && echo login || echo nonlogin'
   # Alias expansion only applies in command position: a `for'/`select'/`case'
   # variable that happens to name an alias must stay literal (regression: the
   # loop variable was being alias-expanded, breaking `for j in ...; do').  The
