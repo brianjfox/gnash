@@ -888,18 +888,29 @@ static void expand_alias_tokens(std::vector<Token> &toks,
       "if", "then", "else", "elif", "do", "done", "{", "}", "while", "until",
       "for", "case", "select", "fi", "esac", "!", "time", "function"};
   bool cmd_pos = true, next_also = false;
+  // After `for'/`select'/`case' the next word is a variable name (or the value
+  // being matched), not a command word, so it must NOT be alias-expanded -- e.g.
+  // `for j in ...; do' with `alias j=...' must keep `j' literal, as bash does.
+  bool name_next = false;
   std::set<std::string> active;
   int guard = 0;
   for (size_t i = 0; i < toks.size() && guard < 10000;) {
     Tok ty = toks[i].type;
     if (ty == Tok::Newline || ty == Tok::Semi || ty == Tok::Amp || ty == Tok::Pipe ||
         ty == Tok::AndAnd || ty == Tok::OrOr || ty == Tok::Lparen || ty == Tok::SemiSemi) {
-      cmd_pos = true; next_also = false; active.clear(); i++; continue;
+      cmd_pos = true; next_also = false; name_next = false; active.clear(); i++; continue;
     }
     if (ty != Tok::Word) { i++; continue; }
     const std::string text = toks[i].text;
     bool quoted = toks[i].quoted;
-    if (!quoted && kw.count(text)) { cmd_pos = true; next_also = false; i++; continue; }
+    if (!quoted && kw.count(text)) {
+      cmd_pos = true; next_also = false;
+      name_next = (text == "for" || text == "select" || text == "case");
+      i++; continue;
+    }
+    // The variable name after for/select/case: never an alias, and it is not a
+    // command word, so what follows it (the `in'/`do'/list) is not either.
+    if (name_next) { name_next = false; cmd_pos = false; i++; continue; }
     // zsh global aliases (`alias -g') expand in ANY word position.
     if (!quoted && global_aliases.count(text) && !active.count(text)) {
       active.insert(text);

@@ -176,6 +176,28 @@ scripts=(
   'command -v printf; command -v ls >/dev/null && echo ls-found; command -v nosuch_xyz; echo "rc=$?"'
   'command -V cd; command -V nosuch_xyz 2>/dev/null; echo "rc=$?"'
   'f(){ echo fn; }; command -v f; command f 2>/dev/null; echo "cmd-f-rc=$?"'
+  # Alias expansion only applies in command position: a `for'/`select'/`case'
+  # variable that happens to name an alias must stay literal (regression: the
+  # loop variable was being alias-expanded, breaking `for j in ...; do').  The
+  # alias must be active before the loop is *parsed*, so it is defined here and
+  # the loop is sourced from a separate file, as when an rc file sources nvm.sh.
+  'shopt -s expand_aliases; alias j="jobs -l"
+cat > /tmp/gnrx1.$$ <<"EOF"
+for j in a b c; do printf "%s " "$j"; done; echo
+EOF
+source /tmp/gnrx1.$$; rm -f /tmp/gnrx1.$$'
+  'shopt -s expand_aliases; alias j="jobs -l"
+cat > /tmp/gnrx2.$$ <<"EOF"
+case j in j) echo matched;; *) echo no;; esac
+EOF
+source /tmp/gnrx2.$$; rm -f /tmp/gnrx2.$$'
+  # An alias in real command position must still expand (guard against over-
+  # suppressing the fix above).
+  'shopt -s expand_aliases; alias greet="echo expanded-ok"
+cat > /tmp/gnrx3.$$ <<"EOF"
+greet
+EOF
+source /tmp/gnrx3.$$; rm -f /tmp/gnrx3.$$'
   'shopt | wc -l | tr -d " "; shopt -q nullglob; echo $?; shopt -s nullglob; shopt -q nullglob; echo $?'
   'shopt -p nullglob extglob dotglob'
   'cd /tmp; set -- nomatch_glob_*.zz; echo "off=$#"; shopt -s nullglob; set -- nomatch_glob_*.zz; echo "on=$#"'
