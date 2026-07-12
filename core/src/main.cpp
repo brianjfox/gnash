@@ -11,7 +11,9 @@
 // option processing.  Startup files follow bash too, with the personal-file
 // names derived from the invocation name (basename of argv[0], minus a leading
 // '-'): invoked as "gnash" it reads ~/.gnash_profile / ~/.gnashrc / $GNASH_ENV;
-// invoked as "bash" it reads ~/.bash_profile / ~/.bashrc / $BASH_ENV.
+// invoked as "bash" it reads ~/.bash_profile / ~/.bashrc / $BASH_ENV.  As a
+// convenience the gnash persona falls back to the bash-named files when its own
+// are absent, so gnash works out of the box for users with only ~/.bash* files.
 #include <cctype>
 #include <cerrno>
 #include <cstdio>
@@ -172,12 +174,24 @@ void read_startup_files(Shell &sh, const std::string &prefix, bool login, bool i
   const char *home = std::getenv("HOME");
   std::string h = home ? home : "";
 
+  // The gnash persona falls back to bash's dotfiles: if no ~/.gnash* startup
+  // file exists, gnash reads the bash analogue (~/.bash_profile, ~/.bashrc,
+  // ...), so gnash behaves like bash for users who never wrote gnash rc files.
+  // `prefixes' is the ordered list of names to try; for every other personality
+  // it holds just its own name.
+  std::vector<std::string> prefixes = {prefix};
+  if (prefix == "gnash") prefixes.push_back("bash");
+
   if (login) {
     if (!o.noprofile) {
       source_if_exists(sh, "/etc/profile");
       if (!h.empty()) {
-        const std::string candidates[] = {h + "/." + prefix + "_profile",
-                                          h + "/." + prefix + "_login", h + "/.profile"};
+        std::vector<std::string> candidates;
+        for (const std::string &p : prefixes) {
+          candidates.push_back(h + "/." + p + "_profile");
+          candidates.push_back(h + "/." + p + "_login");
+        }
+        candidates.push_back(h + "/.profile");
         for (const std::string &c : candidates)
           if (file_readable(c)) { source_if_exists(sh, c); break; }
       }
@@ -187,12 +201,20 @@ void read_startup_files(Shell &sh, const std::string &prefix, bool login, bool i
       if (!o.rcfile.empty()) {
         source_if_exists(sh, o.rcfile);
       } else {
-        source_if_exists(sh, "/etc/" + prefix + "." + prefix + "rc");
-        if (!h.empty()) source_if_exists(sh, h + "/." + prefix + "rc");
+        for (const std::string &p : prefixes)
+          source_if_exists(sh, "/etc/" + p + "." + p + "rc");
+        if (!h.empty())
+          for (const std::string &p : prefixes)
+            if (file_readable(h + "/." + p + "rc")) {
+              source_if_exists(sh, h + "/." + p + "rc");
+              break;
+            }
       }
     }
   } else {
-    const char *env = std::getenv((upper(prefix) + "_ENV").c_str());
+    const char *env = nullptr;
+    for (const std::string &p : prefixes)
+      if ((env = std::getenv((upper(p) + "_ENV").c_str())) && *env) break;
     if (env && *env) source_if_exists(sh, env);
   }
 }

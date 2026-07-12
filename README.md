@@ -90,7 +90,7 @@ cmake --build build -j
 **gnash** can be run under many different personalities.  The name of the binary (or the value of the `--personality=XXX` option) controls which startup files are read, whether syntax highlighting on the command line exists, and other behaviors.  Currently, **gnash** supports running as:
 
 * **bash** -- reads `~/.bash_profile`, `~/.bashrc`, behaves like **bash-5.3**
-* **gnash** -- reads `~/.gnash_profile`, `~/.gnashrc`, behaves like **bash-5.3**
+* **gnash** -- reads `~/.gnash_profile`, `~/.gnashrc` (falling back to `~/.bash_profile`, `~/.bashrc` when the gnash-named files are absent), behaves like **bash-5.3**
 * **zsh** -- reads `~/.zshenv`, `~/.zprofile`, `~/.zshrc`, `~/.zlogin`, uses `%`-style prompts and highlights the command line as you type, zsh-style tab completion, behaves like **zsh-5.1**
 * **ash** (also **dash**, **sh**) -- reads `/etc/profile`, `~/.profile`, and `$ENV`, uses a plain POSIX `$ ` prompt, behaves like **bash-5.3**
 * **ksh** (also **ksh93**, **mksh**, **pdksh**) -- reads `/etc/profile`, `~/.profile`, and `$ENV`, uses a `$ ` prompt in which `!` expands to the history number, behaves like **bash-5.3**
