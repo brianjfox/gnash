@@ -20,7 +20,8 @@ land.
     and the bindable `int(int,int)` commands.
   - Keymaps + dispatch: programmatic **emacs** (standard/meta/ctlx + CSI/SS3) and **vi**
     (insertion/movement) keymaps; ESC/meta and Ctrl-X prefixes; numeric arguments
-    (`M-<digit>`, `C-u`); history movement (`C-p`/`C-n`/arrows).
+    (`M-<digit>`, `C-u`); history movement (`C-p`/`C-n`/arrows); history-argument
+    yanks (`M-.`/`M-_` yank-last-arg with cycling, `M-C-y` yank-nth-arg).
   - **Completion + hooks** (the design centerpiece): `rl_complete`/`rl_possible_completions`,
     `rl_completion_matches`, filename & username generators, and the hook seam
     (`rl_attempted_completion_function` / `rl_completion_entry_function` / `rl_completer_*`)

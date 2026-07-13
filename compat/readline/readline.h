@@ -109,6 +109,8 @@ extern int rl_kill_word (int count, int key);
 extern int rl_backward_kill_word (int count, int key);
 extern int rl_unix_word_rubout (int count, int key);
 extern int rl_yank (int count, int key);
+extern int rl_yank_nth_arg (int count, int key);
+extern int rl_yank_last_arg (int count, int key);
 extern int rl_transpose_chars (int count, int key);
 extern int rl_upcase_word (int count, int key);
 extern int rl_downcase_word (int count, int key);
