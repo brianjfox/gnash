@@ -129,6 +129,9 @@ void build_emacs_keymaps() {
   for (int d = '0'; d <= '9'; d++) bind_func(meta, d, rl_digit_argument);
   bind_func(meta, '-', rl_digit_argument);
   bind_func(meta, '?', rl_possible_completions);
+  bind_func(meta, '.', rl_yank_last_arg);
+  bind_func(meta, '_', rl_yank_last_arg);
+  bind_func(meta, 0x19, rl_yank_nth_arg);         // M-C-y
   bind_map(meta, '[', esc);   // ESC [ ... (CSI)
   bind_map(meta, 'O', esc);   // ESC O ... (SS3, application cursor keys)
 

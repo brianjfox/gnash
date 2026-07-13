@@ -12,6 +12,8 @@
 #include <string>
 
 #include "gnash/readline_internal.hpp"
+#include "gnash/sh/xmalloc.hpp"
+#include "readline/history.h"
 #include "readline/readline.h"
 
 namespace {
@@ -191,6 +193,78 @@ extern "C" int rl_yank(int /*count*/, int /*key*/) {
   rl_mark = rl_point;
   rl_insert_text(k->c_str());
   return 0;
+}
+
+namespace {
+
+// Insert the COUNTth word of a previous history line at point, skipping
+// HISTORY_SKIP lines back before "the previous line".  COUNT may be the magic
+// '$' (take the last word), which history_arg_extract() understands.
+int yank_nth_arg_internal(int count, int history_skip) {
+  int pos = where_history();
+  HIST_ENTRY *entry = nullptr;
+  for (int i = 0; i <= history_skip; i++) entry = previous_history();
+  history_set_pos(pos);
+  if (entry == nullptr) return rl_ding();
+
+  char *arg = history_arg_extract(count, count, entry->line);
+  if (arg == nullptr || *arg == '\0') {
+    gnash::sh::xfree(arg);
+    return rl_ding();
+  }
+  rl_mark = rl_point;
+  rl_insert_text(arg);
+  gnash::sh::xfree(arg);
+  return 0;
+}
+
+}  // namespace
+
+extern "C" int rl_yank_nth_arg(int count, int /*key*/) {
+  breaks_kill();
+  return yank_nth_arg_internal(count, 0);
+}
+
+extern "C" int rl_yank_last_arg(int count, int /*key*/) {
+  // Successive invocations cycle back through history, replacing the argument
+  // inserted by the previous press (bash tracks this with an undo group; we
+  // remember the inserted span instead).
+  static int history_skip = 0;
+  static int explicit_arg_p = 0;
+  static int count_passed = 1;
+  static int direction = 1;
+  static int inserted_at = -1;
+  static int inserted_len = 0;
+
+  breaks_kill();
+  if (rl_last_func != rl_yank_last_arg) {
+    history_skip = 0;
+    explicit_arg_p = rl_explicit_arg;
+    count_passed = count;
+    direction = 1;
+    inserted_at = -1;
+    inserted_len = 0;
+  } else {
+    if (inserted_at >= 0 && inserted_len > 0 &&
+        inserted_at + inserted_len <= rl_end) {
+      rl_delete_text(inserted_at, inserted_at + inserted_len);
+      rl_point = inserted_at;
+    }
+    if (count < 0) direction = -direction;
+    history_skip += direction;
+    if (history_skip < 0) history_skip = 0;
+  }
+
+  int before = rl_point;
+  int r = yank_nth_arg_internal(explicit_arg_p ? count_passed : '$', history_skip);
+  if (r == 0) {
+    inserted_at = before;
+    inserted_len = rl_point - before;
+  } else {
+    inserted_at = -1;
+    inserted_len = 0;
+  }
+  return r;
 }
 
 // ---- transpose -----------------------------------------------------------
