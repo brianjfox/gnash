@@ -40,11 +40,47 @@ extern int last_command_was_kill;
 // prepend) and remove it from the line.
 void kill_text(int from, int to, int dir);
 
-// Newest kill-ring entry (what yank inserts), or nullptr if empty.
+// Kill-ring entry at the current ring index (what yank inserts), or nullptr
+// if the ring is empty.  Each new kill resets the index to the newest entry.
 const std::string *current_kill();
+
+// Rotate the ring index to the previous (older) entry, wrapping; the entry
+// rotated to, or nullptr if the ring is empty.  Used by yank-pop.
+const std::string *rotate_kill();
 
 // Discard the kill ring (used by tests).
 void reset_kill_ring();
+
+// ---- input pushback and key-recording taps (input.cpp) --------------------
+
+// Queue KEYS so rl_read_key() returns them before reading the stream.
+void stuff_input(const std::string &keys);
+
+// A key is readable within TIMEOUT_MS (pushback queue or the input fd).
+bool input_pending(int timeout_ms);
+
+extern bool macro_recording;   // C-x ( .. C-x ): tap keys into macro_keys
+extern std::string macro_keys;
+extern bool redo_capturing;    // vi change command in progress: tap keys
+extern std::string redo_capture;
+extern std::string redo_keys;  // last completed vi change, for `.'
+
+// ---- emacs undo (misc.cpp) -------------------------------------------------
+
+// Discard all undo state (new line, or the line was replaced from history).
+void undo_clear();
+
+// Bumped by undo_clear(); the dispatch loop skips recording a snapshot when a
+// command cleared the undo list itself (history motions must not be undoable).
+unsigned undo_generation();
+
+// Record a pre-command snapshot of the line.
+void undo_push(const std::string &line, int point);
+
+// ---- vi redo (vi_mode.cpp) -------------------------------------------------
+
+// FN starts a vi change command (worth capturing for `.').
+bool vi_change_starter(rl_command_func_t *fn);
 
 }  // namespace gnash::readline
 

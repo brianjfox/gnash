@@ -195,6 +195,22 @@ extern "C" int rl_yank(int /*count*/, int /*key*/) {
   return 0;
 }
 
+extern "C" int rl_yank_pop(int /*count*/, int /*key*/) {
+  breaks_kill();
+  // Only meaningful immediately after a yank (or another yank-pop): the text
+  // between mark and point is the previous yank, which we replace with the
+  // next-older kill-ring entry.
+  if (rl_last_func != rl_yank && rl_last_func != rl_yank_pop) return rl_ding();
+  const std::string *k = gnash::readline::rotate_kill();
+  if (k == nullptr) return rl_ding();
+  int start = rl_mark < rl_point ? rl_mark : rl_point;
+  int end = rl_mark < rl_point ? rl_point : rl_mark;
+  rl_delete_text(start, end);
+  rl_point = rl_mark = start;
+  rl_insert_text(k->c_str());
+  return 0;
+}
+
 namespace {
 
 // Insert the COUNTth word of a previous history line at point, skipping
@@ -282,6 +298,87 @@ extern "C" int rl_transpose_chars(int /*count*/, int /*key*/) {
     rl_line_buffer[rl_point - 1] = t;
     rl_point++;
   }
+  return 0;
+}
+
+// ---- character search (C-], M-C-]) -----------------------------------------
+
+namespace {
+
+// Move point to the COUNTth occurrence of the next typed character, searching
+// in DIR (+1 forward from point+1, -1 backward from point-1).
+int char_search_internal(int count, int dir) {
+  int ch = rl_read_key();
+  if (ch == EOF) return rl_ding();
+  if (count < 0) {
+    count = -count;
+    dir = -dir;
+  }
+  int p = rl_point;
+  while (count-- > 0) {
+    int q = p + dir;
+    while (q >= 0 && q < rl_end && rl_line_buffer[q] != ch) q += dir;
+    if (q < 0 || q >= rl_end) return rl_ding();
+    p = q;
+  }
+  rl_point = p;
+  return 0;
+}
+
+}  // namespace
+
+extern "C" int rl_char_search(int count, int /*key*/) {
+  breaks_kill();
+  return char_search_internal(count, +1);
+}
+
+extern "C" int rl_backward_char_search(int count, int /*key*/) {
+  breaks_kill();
+  return char_search_internal(count, -1);
+}
+
+// ---- transpose-words (M-t) --------------------------------------------------
+
+extern "C" int rl_transpose_words(int count, int key) {
+  breaks_kill();
+  if (count < 0) count = 1;
+  while (count-- > 0) {
+    int orig = rl_point;
+    rl_forward_word(1, key);
+    int w2_end = rl_point;
+    rl_backward_word(1, key);
+    int w2_beg = rl_point;
+    rl_backward_word(1, key);
+    int w1_beg = rl_point;
+    rl_forward_word(1, key);
+    int w1_end = rl_point;
+    if (w1_beg == w2_beg || w2_beg < w1_end) {
+      rl_point = orig;
+      return rl_ding();
+    }
+    std::string w1(rl_line_buffer + w1_beg, static_cast<size_t>(w1_end - w1_beg));
+    std::string sep(rl_line_buffer + w1_end, static_cast<size_t>(w2_beg - w1_end));
+    std::string w2(rl_line_buffer + w2_beg, static_cast<size_t>(w2_end - w2_beg));
+    rl_delete_text(w1_beg, w2_end);
+    rl_point = w1_beg;
+    rl_insert_text((w2 + sep + w1).c_str());  // leaves point after the swap
+  }
+  return 0;
+}
+
+// ---- delete-horizontal-space (M-\) -------------------------------------------
+
+extern "C" int rl_delete_horizontal_space(int /*count*/, int /*key*/) {
+  breaks_kill();
+  int start = rl_point;
+  while (start > 0 && std::isblank(static_cast<unsigned char>(rl_line_buffer[start - 1])))
+    start--;
+  int end = rl_point;
+  while (end < rl_end && std::isblank(static_cast<unsigned char>(rl_line_buffer[end])))
+    end++;
+  if (end <= start) return 0;
+  rl_delete_text(start, end);
+  rl_point = start;
   return 0;
 }
 

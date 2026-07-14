@@ -12,6 +12,7 @@
 #include <cstring>
 #include <string>
 
+#include "gnash/readline_internal.hpp"
 #include "readline/history.h"
 #include "readline/readline.h"
 
@@ -102,4 +103,69 @@ extern "C" int rl_reverse_search_history(int /*count*/, int /*key*/) {
 
 extern "C" int rl_forward_search_history(int /*count*/, int /*key*/) {
   return isearch(1);
+}
+
+// ---- non-incremental search (M-n / M-p, vi / ? n N) ------------------------
+//
+// Reads a search string on a minibuffer line introduced by PCHAR, then finds
+// the nearest history line containing it in DIR (-1 older, +1 newer).  The
+// string is remembered so the `again' entries (vi `n'/`N') can repeat it.
+
+namespace {
+
+std::string nsearch_string;
+
+// Read the search string; false if the user aborted.
+bool nsearch_read(int pchar) {
+  FILE *o = rl_outstream;
+  std::string s;
+  for (;;) {
+    if (o) {
+      std::fprintf(o, "\r%s%c%s\033[K", rl_prompt ? rl_prompt : "", pchar, s.c_str());
+      std::fflush(o);
+    }
+    int c = rl_read_key();
+    if (c == EOF || c == 0x07 || c == 0x1b) return false;  // C-g/ESC: abort
+    if (c == '\r' || c == '\n') break;
+    if (c == 0x7f || c == 0x08) {
+      if (!s.empty()) s.pop_back();
+      continue;
+    }
+    if (c >= ' ') s.push_back(static_cast<char>(c));
+  }
+  if (!s.empty()) nsearch_string = s;  // empty input repeats the last search
+  return true;
+}
+
+int nsearch_do(int dir) {
+  if (nsearch_string.empty()) return rl_ding();
+  int from = where_history() + dir;
+  int found = search_history(nsearch_string, from, dir);
+  if (found < 0) return rl_ding();
+  HIST_ENTRY *e = history_get(history_base + found);
+  history_set_pos(found);
+  gnash::readline::undo_clear();  // like history motion: not undoable
+  rl_replace_line(e && e->line ? e->line : "", 1);
+  rl_point = 0;
+  return 0;
+}
+
+}  // namespace
+
+extern "C" int rl_noninc_reverse_search(int /*count*/, int key) {
+  if (!nsearch_read((key == '/' || key == '?') ? key : ':')) return rl_ding();
+  return nsearch_do(-1);
+}
+
+extern "C" int rl_noninc_forward_search(int /*count*/, int key) {
+  if (!nsearch_read((key == '/' || key == '?') ? key : ':')) return rl_ding();
+  return nsearch_do(1);
+}
+
+extern "C" int rl_noninc_reverse_search_again(int /*count*/, int /*key*/) {
+  return nsearch_do(-1);
+}
+
+extern "C" int rl_noninc_forward_search_again(int /*count*/, int /*key*/) {
+  return nsearch_do(1);
 }
