@@ -16,12 +16,21 @@ land.
   `<termcap.h>`. `tgoto` cursor addressing is verified.
 - **libreadline** — functional. `readline()` is interactive and covers the major
   subsystems:
-  - Editing core: line buffer, `rl_point`/`rl_end`/`rl_mark`, kill ring (emacs accumulation),
-    and the bindable `int(int,int)` commands.
+  - Editing core: line buffer, `rl_point`/`rl_end`/`rl_mark`, kill ring (emacs
+    accumulation, rotation via `M-y` yank-pop), snapshot **undo** (`C-_`, `C-x C-u`,
+    `M-r` revert-line), and the bindable `int(int,int)` commands.
   - Keymaps + dispatch: programmatic **emacs** (standard/meta/ctlx + CSI/SS3) and **vi**
-    (insertion/movement) keymaps; ESC/meta and Ctrl-X prefixes; numeric arguments
-    (`M-<digit>`, `C-u`); history movement (`C-p`/`C-n`/arrows); history-argument
-    yanks (`M-.`/`M-_` yank-last-arg with cycling, `M-C-y` yank-nth-arg).
+    (insertion/movement) keymaps matching **bash's default bindings key-for-key**;
+    ESC/meta and Ctrl-X prefixes; numeric arguments (`M-<digit>`, `C-u`);
+    do-lowercase-version for meta/ctlx uppercase; 8-bit self-insert; history movement
+    (`C-p`/`C-n`/arrows with counts, `M-<`/`M->`, `C-o` operate-and-get-next, `G`
+    fetch-history); history-argument yanks (`M-.`/`M-_` yank-last-arg with cycling,
+    `M-C-y` yank-nth-arg); character search (`C-]`/`M-C-]`), transpose-words,
+    delete-horizontal-space, quoted/tab insert, tilde-expand, insert-comment,
+    set-mark/exchange-point-and-mark, keyboard macros (`C-x (`/`C-x )`/`C-x e`),
+    and `M-x` execute-named-command.
+  - **Non-incremental search** (`M-n`/`M-p`, vi `/` `?` `n` `N`) alongside the
+    incremental `C-r`/`C-s`.
   - **Completion + hooks** (the design centerpiece): `rl_complete`/`rl_possible_completions`,
     `rl_completion_matches`, filename & username generators, and the hook seam
     (`rl_attempted_completion_function` / `rl_completion_entry_function` / `rl_completer_*`)
@@ -30,16 +39,21 @@ land.
     (`rl_parse_and_bind`, `rl_bind_keyseq` with `\C-x`/`\M-f`/`\e[A`/`\xNN` syntax,
     `rl_named_function`, `rl_read_init_file`).
   - **vi editing mode** (`set -o vi` / `set editing-mode vi`): motions (`h l 0 ^ $ w W b
-    B e E`, `f`/`F`/`t`/`T` with `;`/`,`), the `d`/`c`/`y` operators with counts and the
-    doubled `dd`/`cc`/`yy` / `C`/`D`/`S` forms, edits (`x X r ~ s p P`), insert-mode entry
-    (`a A i I`), a delete/yank register feeding `p`/`P`, and one-level undo (`u`).
+    B e E | ` `f`/`F`/`t`/`T` with `;`/`,`, `%` bracket match, marks `m`/`` ` ``), the
+    `d`/`c`/`y` operators with counts and the doubled `dd`/`cc`/`yy` / `C`/`D`/`S`/`Y`
+    forms, edits (`x X r ~ s p P`, `R` overwrite), insert-mode entry (`a A i I`, `_`
+    append-last-arg), a delete/yank register feeding `p`/`P`, one-level undo (`u`) plus
+    `U` revert-line, `.` redo of the last change (captured keystroke replay), history
+    (`k j - +`, `G`, `/` `?` `n` `N` search), completion (`\` `*` `=`), and the full
+    control-key set of bash's vi keymaps (searches, kill/yank, arrows via the ESC
+    prefix with bash's keyseq-timeout behavior).
   - **Menu completion** (`rl_menu_complete` / `rl_backward_menu_complete`, used by the zsh
     persona), plus the column-major completion grid.
   - tty raw mode + termcap-based redisplay (single row with horizontal scrolling).
 
-  Try `build/libreadline/gnash_rl_demo`. Remaining refinements: multibyte/UTF-8, yank-pop
-  & kill-ring rotation, multi-row wrapped redisplay, and the rest of the `.inputrc`
-  directive set (`$if`, macros, all `set` vars).
+  Try `build/libreadline/gnash_rl_demo`. Remaining refinements: multibyte/UTF-8,
+  multi-row wrapped redisplay, and the rest of the `.inputrc` directive set
+  (`$if`, macros, all `set` vars).
 - **libhistory** — complete: history list management, navigation, search, state, file
   I/O, and full history expansion (`history_expand`, `history_arg_extract`,
   `history_tokenize`, `get_history_event`) — faithful to `history.c` / `histfile.c` /

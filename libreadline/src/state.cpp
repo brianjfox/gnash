@@ -37,6 +37,7 @@ int line_buffer_len = 0;  // capacity of rl_line_buffer
 // accumulate into the newest entry (forward kills append, backward kills
 // prepend), matching emacs/readline behaviour.
 static std::vector<std::string> kill_ring;
+static int kill_index = -1;  // ring slot yank inserts; yank-pop rotates it
 static constexpr int kMaxKills = 10;
 int last_command_was_kill = 0;
 
@@ -140,6 +141,7 @@ void kill_text(int from, int to, int dir) {
     kill_ring.push_back(slice);
     if (static_cast<int>(kill_ring.size()) > kMaxKills) kill_ring.erase(kill_ring.begin());
   }
+  kill_index = static_cast<int>(kill_ring.size()) - 1;
 
   rl_delete_text(from, to);
   if (rl_point > from) rl_point = from;
@@ -148,11 +150,21 @@ void kill_text(int from, int to, int dir) {
 
 const std::string *current_kill() {
   if (kill_ring.empty()) return nullptr;
-  return &kill_ring.back();
+  if (kill_index < 0 || kill_index >= static_cast<int>(kill_ring.size()))
+    kill_index = static_cast<int>(kill_ring.size()) - 1;
+  return &kill_ring[static_cast<size_t>(kill_index)];
+}
+
+const std::string *rotate_kill() {
+  if (kill_ring.empty()) return nullptr;
+  int n = static_cast<int>(kill_ring.size());
+  kill_index = (kill_index - 1 + n) % n;
+  return &kill_ring[static_cast<size_t>(kill_index)];
 }
 
 void reset_kill_ring() {
   kill_ring.clear();
+  kill_index = -1;
   last_command_was_kill = 0;
 }
 

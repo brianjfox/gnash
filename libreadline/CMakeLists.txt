@@ -11,6 +11,7 @@
 # hooks, incremental search, vi mode, .inputrc.
 add_library(gnash_readline STATIC
   src/state.cpp
+  src/misc.cpp
   src/text.cpp
   src/keymaps.cpp
   src/tty.cpp
