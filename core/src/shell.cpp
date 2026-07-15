@@ -534,7 +534,19 @@ bool Shell::get_if_set(const std::string &n_in, std::string &out) const {
   std::string n = deref(n_in);
   auto it = vars.find(n);
   if (it == vars.end()) return false;
-  out = it->second.value;
+  const Variable &v = it->second;
+  // An array in scalar context is its element 0 (indexed) / "0" (assoc).
+  if (v.kind == VarKind::Indexed) {
+    if (!v.idx.count(0)) return false;
+    out = v.idx.at(0);
+    return true;
+  }
+  if (v.kind == VarKind::Assoc) {
+    if (!v.assoc.count("0")) return false;
+    out = v.assoc.at("0");
+    return true;
+  }
+  out = v.value;
   return true;
 }
 

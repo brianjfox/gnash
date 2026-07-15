@@ -46,29 +46,6 @@ std::string join(const std::vector<std::string> &v, size_t from) {
 
 // ---- echo / printf -------------------------------------------------------
 
-std::string decode_escapes(const std::string &s) {
-  std::string out;
-  for (size_t i = 0; i < s.size(); i++) {
-    if (s[i] == '\\' && i + 1 < s.size()) {
-      switch (s[++i]) {
-        case 'n': out += '\n'; break;
-        case 't': out += '\t'; break;
-        case 'r': out += '\r'; break;
-        case 'a': out += '\a'; break;
-        case 'b': out += '\b'; break;
-        case 'f': out += '\f'; break;
-        case 'v': out += '\v'; break;
-        case '\\': out += '\\'; break;
-        case '0': out += '\0'; break;
-        default: out += '\\'; out += s[i]; break;
-      }
-    } else {
-      out += s[i];
-    }
-  }
-  return out;
-}
-
 // printf %b: like echo -e but also interprets octal (\nnn, \0nnn) and hex
 // (\xHH) escapes, and \c which stops all further output.
 std::string decode_b(const std::string &s, bool &stop) {
@@ -141,12 +118,13 @@ int bi_echo(Shell &, const std::vector<std::string> &argv) {
     }
   }
   std::string out;
-  for (size_t j = i; j < argv.size(); j++) {
+  bool stop = false;
+  for (size_t j = i; j < argv.size() && !stop; j++) {
     if (j > i) out += ' ';
-    out += escapes ? decode_escapes(argv[j]) : argv[j];
+    out += escapes ? decode_b(argv[j], stop) : argv[j];
   }
   std::fwrite(out.data(), 1, out.size(), stdout);
-  if (newline) std::fputc('\n', stdout);
+  if (newline && !stop) std::fputc('\n', stdout);  // \c suppresses everything after
   return 0;
 }
 
@@ -374,7 +352,12 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
                    conv == 'o' || conv == 'u') {
           std::string sp = spec;
           sp.insert(sp.size() - 1, "l");  // promote to long
-          if (!append_formatted(out, sp, std::strtol(next().c_str(), nullptr, 0))) oversize = true;
+          std::string a = next();
+          // A leading ' or " makes the value the next character's code.
+          long v = (!a.empty() && (a[0] == '\'' || a[0] == '"'))
+                       ? (a.size() > 1 ? static_cast<unsigned char>(a[1]) : 0)
+                       : std::strtol(a.c_str(), nullptr, 0);
+          if (!append_formatted(out, sp, v)) oversize = true;
           consumed_any = true;
         } else if (conv == 'f' || conv == 'F' || conv == 'g' || conv == 'G' ||
                    conv == 'e' || conv == 'E') {
