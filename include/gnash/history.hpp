@@ -107,6 +107,9 @@ class History {
   // -- tunables (mirror the exported history_* globals) -------------------
   char comment_char = '#';
   bool write_timestamps = false;
+  // Group non-timestamp lines into multi-line entries when reading a file
+  // that carries timestamps (bash: $HISTTIMEFORMAT is set).
+  bool multiline_entries = false;
   int lines_read_from_file = 0;
   int lines_written_to_file = 0;
 

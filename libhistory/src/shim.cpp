@@ -30,6 +30,7 @@ int history_lines_read_from_file = 0;
 int history_lines_written_to_file = 0;
 char history_comment_char = '#';
 int history_write_timestamps = 0;
+int history_multiline_entries = 0;
 int max_input_history = 0;
 }
 
@@ -40,6 +41,7 @@ History &H() {
   History &h = default_history();
   h.comment_char = history_comment_char;
   h.write_timestamps = history_write_timestamps != 0;
+  h.multiline_entries = history_multiline_entries != 0;
   return h;
 }
 

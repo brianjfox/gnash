@@ -837,6 +837,27 @@ void set_print_var(const std::string &name, const Variable &v) {
   }
 }
 
+// Apply one `set -o NAME' / `set +o NAME'; false if NAME is unknown.
+bool set_o_option(Shell &sh, const std::string &o, bool on) {
+  if (o == "errexit") sh.opt_errexit = on;
+  else if (o == "xtrace") sh.opt_xtrace = on;
+  else if (o == "nounset") sh.opt_nounset = on;
+  else if (o == "noglob") sh.opt_noglob = on;
+  else if (o == "verbose") sh.opt_verbose = on;
+  else if (o == "noexec") { if (!sh.interactive) sh.opt_noexec = on; }
+  else if (o == "functrace" || o == "errtrace") sh.opt_functrace = on;
+  else if (o == "pipefail") sh.opt_pipefail = on;
+  else if (o == "history") { if (on) sh.enable_history(); else sh.opt_history = false; }
+  else if (o == "histexpand") sh.opt_histexpand = on;
+  else if (o == "posix") sh.opt_posix = on;
+  // `set -o vi'/`set -o emacs' switch the readline editing mode (they are
+  // mutually exclusive); `+o' flips to the other.
+  else if (o == "vi") { if (on) rl_vi_editing_mode(0, 0); else rl_emacs_editing_mode(0, 0); }
+  else if (o == "emacs") { if (on) rl_emacs_editing_mode(0, 0); else rl_vi_editing_mode(0, 0); }
+  else return false;
+  return true;
+}
+
 // The `set -o'/`set +o' option table with each option's current state.
 std::vector<std::pair<std::string, bool>> set_option_states(Shell &sh) {
   bool i = sh.interactive;
@@ -895,22 +916,7 @@ int bi_set(Shell &sh, const std::vector<std::string> &argv) {
                 else std::printf("set %co %s\n", o.second ? '-' : '+', o.first.c_str());
               }
             } else {
-              std::string o = argv[++i];
-              if (o == "errexit") sh.opt_errexit = on;
-              else if (o == "xtrace") sh.opt_xtrace = on;
-              else if (o == "nounset") sh.opt_nounset = on;
-              else if (o == "noglob") sh.opt_noglob = on;
-              else if (o == "verbose") sh.opt_verbose = on;
-              else if (o == "noexec") { if (!sh.interactive) sh.opt_noexec = on; }
-              else if (o == "functrace" || o == "errtrace") sh.opt_functrace = on;
-              else if (o == "pipefail") sh.opt_pipefail = on;
-              else if (o == "history") { if (on) sh.enable_history(); else sh.opt_history = false; }
-              else if (o == "histexpand") sh.opt_histexpand = on;
-              else if (o == "posix") sh.opt_posix = on;
-              // `set -o vi'/`set -o emacs' switch the readline editing mode
-              // (they are mutually exclusive); `+o' flips to the other.
-              else if (o == "vi") { if (on) rl_vi_editing_mode(0, 0); else rl_emacs_editing_mode(0, 0); }
-              else if (o == "emacs") { if (on) rl_emacs_editing_mode(0, 0); else rl_vi_editing_mode(0, 0); }
+              set_o_option(sh, argv[++i], on);
             }
             k = a.size();  // -o consumes the rest of the word
             break;
@@ -1728,6 +1734,7 @@ namespace {  // reopen the anonymous namespace
 int bi_shopt(Shell &sh, const std::vector<std::string> &argv) {
   shopt_seed(sh);
   bool set_s = false, unset_u = false, quiet_q = false, print_p = false;
+  bool o_names = false;  // -o: names are `set -o' option names
   size_t i = 1;
   for (; i < argv.size(); i++) {
     const std::string &a = argv[i];
@@ -1739,10 +1746,39 @@ int bi_shopt(Shell &sh, const std::vector<std::string> &argv) {
         case 'u': unset_u = true; break;
         case 'q': quiet_q = true; break;
         case 'p': print_p = true; break;
-        case 'o': break;  // -o maps to set -o options; accepted
+        case 'o': o_names = true; break;
         default: break;
       }
     }
+  }
+
+  if (o_names) {
+    if (i >= argv.size()) {  // list set -o options
+      for (const auto &o : set_option_states(sh)) {
+        if (set_s && !o.second) continue;
+        if (unset_u && o.second) continue;
+        if (!quiet_q) std::printf("set %co %s\n", o.second ? '-' : '+', o.first.c_str());
+      }
+      return 0;
+    }
+    int st = 0;
+    for (; i < argv.size(); i++) {
+      const std::string &n = argv[i];
+      bool found = false, cur = false;
+      for (const auto &o : set_option_states(sh))
+        if (o.first == n) { found = true; cur = o.second; }
+      if (!found) {
+        if (!quiet_q)
+          std::fprintf(stderr, "%sshopt: %s: invalid shell option name\n",
+                       sh.err_prefix().c_str(), n.c_str());
+        st = 1;
+        continue;
+      }
+      if (set_s || unset_u) set_o_option(sh, n, set_s);
+      else if (quiet_q) { if (!cur) st = 1; }
+      else std::printf("set %co %s\n", cur ? '-' : '+', n.c_str());
+    }
+    return st;
   }
   auto show = [&](const std::string &n, bool on) {
     if (quiet_q) return;
@@ -2033,114 +2069,362 @@ static std::string hist_file(Shell &sh) {
 }
 
 int bi_history(Shell &sh, const std::vector<std::string> &argv) {
+  static const char *kUsage =
+      "history: usage: history [-c] [-d offset] [n] or history -anrw [filename] "
+      "or history -ps arg [arg...]";
+
+  // Parse a history display number (possibly negative = from the end) into a
+  // 0-based list index; false if out of range.
+  auto resolve = [&](long v, int &idx) {
+    long n = v < 0 ? history_length + v : v - history_base;
+    if (n < 0 || n >= history_length) return false;
+    idx = static_cast<int>(n);
+    return true;
+  };
+
+  bool clear = false, del = false, app = false, wr = false, rd = false, nw = false;
+  bool stash = false, expand = false;
+  std::string del_arg, fname;
   int limit = -1;
   size_t i = 1;
+  std::vector<std::string> rest;
+
   for (; i < argv.size(); i++) {
     const std::string &a = argv[i];
-    if (a == "-c") { clear_history(); return 0; }
-    if (a == "-d") {
-      if (i + 1 < argv.size()) remove_history(std::atoi(argv[i + 1].c_str()) - history_base);
-      return 0;
-    }
-    if (a == "-s") {
-      std::string s = join(argv, i + 1);
-      if (!s.empty()) { add_history(s.c_str()); sh.hist_new_entries++; }
-      return 0;
-    }
-    if (a == "-p") {
-      int st = 0;
-      sh.sync_histchars();
-      for (size_t k = i + 1; k < argv.size(); k++) {
-        char *e = nullptr;
-        int hr = history_expand(const_cast<char *>(argv[k].c_str()), &e);
-        if (hr < 0) {
-          std::fprintf(stderr, "%shistory: %s: history expansion failed\n",
-                       sh.err_prefix().c_str(), argv[k].c_str());
-          st = 1;
-        } else if (e) {
-          std::printf("%s\n", e);
+    if (a == "--") { i++; break; }
+    if (a.size() >= 2 && a[0] == '-' &&
+        !std::isdigit(static_cast<unsigned char>(a[1]))) {
+      for (size_t k = 1; k < a.size(); k++) {
+        switch (a[k]) {
+          case 'c': clear = true; break;
+          case 'd':
+            del = true;
+            if (k + 1 < a.size()) { del_arg = a.substr(k + 1); k = a.size(); }
+            else if (i + 1 < argv.size()) del_arg = argv[++i];
+            break;
+          case 'a': app = true; break;
+          case 'w': wr = true; break;
+          case 'r': rd = true; break;
+          case 'n': nw = true; break;
+          case 's': stash = true; break;
+          case 'p': expand = true; break;
+          default:
+            std::fprintf(stderr, "%shistory: -%c: invalid option\n",
+                         sh.err_prefix().c_str(), a[k]);
+            std::fprintf(stderr, "%s\n", kUsage);
+            return 2;
         }
-        std::free(e);
       }
-      return st;
+    } else {
+      break;
     }
-    if (a == "-w") { write_history((i + 1 < argv.size() ? argv[i + 1] : hist_file(sh)).c_str()); return 0; }
-    if (a == "-a") {
-      append_history(sh.hist_new_entries, (i + 1 < argv.size() ? argv[i + 1] : hist_file(sh)).c_str());
-      sh.hist_new_entries = 0;
+  }
+  for (; i < argv.size(); i++) rest.push_back(argv[i]);
+
+  if (app + wr + rd + nw > 1) {
+    std::fprintf(stderr, "%shistory: cannot use more than one of -anrw\n",
+                 sh.err_prefix().c_str());
+    return 2;
+  }
+
+  if (clear) {
+    clear_history();
+    sh.hist_new_entries = 0;
+    if (!del && !app && !wr && !rd && !nw && !stash && !expand && rest.empty()) return 0;
+  }
+  if (del) {
+    // OFFSET or START-END ranges, in history display numbers; negative counts
+    // from the end.  bash's error messages distinguish an unparsable token
+    // ("invalid number") from a parsable but out-of-range one.
+    const std::string &d = del_arg;
+    char *e1 = nullptr;
+    long v1 = std::strtol(d.c_str(), &e1, 10);
+    int lo, hi;
+    if (e1 != d.c_str() && *e1 == '\0') {           // single offset
+      if (!resolve(v1, lo)) {
+        std::fprintf(stderr, "%shistory: %s: history position out of range\n",
+                     sh.err_prefix().c_str(), d.c_str());
+        return 2;
+      }
+      HIST_ENTRY *old = remove_history(lo);
+      if (old) free_history_entry(old);
       return 0;
     }
-    if (a == "-r" || a == "-n") { read_history((i + 1 < argv.size() ? argv[i + 1] : hist_file(sh)).c_str()); return 0; }
-    if (!a.empty() && (std::isdigit(static_cast<unsigned char>(a[0])))) { limit = std::atoi(a.c_str()); continue; }
-    break;
+    if (e1 != d.c_str() && *e1 == '-') {             // START-END range
+      const char *p2 = e1 + 1;
+      char *e2 = nullptr;
+      long v2 = std::strtol(p2, &e2, 10);
+      if (e2 != p2 && *e2 == '\0') {
+        if (!resolve(v1, lo)) {
+          std::fprintf(stderr, "%shistory: %ld: history position out of range\n",
+                       sh.err_prefix().c_str(), v1);
+          return 2;
+        }
+        if (!resolve(v2, hi)) {
+          std::fprintf(stderr, "%shistory: %ld: history position out of range\n",
+                       sh.err_prefix().c_str(), v2);
+          return 2;
+        }
+        if (hi < lo) { int t = lo; lo = hi; hi = t; }
+        for (int k = hi; k >= lo; k--) {
+          HIST_ENTRY *old = remove_history(k);
+          if (old) free_history_entry(old);
+        }
+        return 0;
+      }
+      // Range-shaped but the end does not parse: report the whole token.
+      std::fprintf(stderr, "%shistory: %s: history position out of range\n",
+                   sh.err_prefix().c_str(), d.c_str());
+      return 2;
+    }
+    std::fprintf(stderr, "%shistory: %s: invalid number\n", sh.err_prefix().c_str(),
+                 d.c_str());
+    return 2;
   }
+  if (stash) {
+    std::string line = join(rest, 0);
+    if (!line.empty()) { add_history(line.c_str()); sh.hist_new_entries++; }
+    return 0;
+  }
+  if (expand) {
+    int st = 0;
+    sh.sync_histchars();
+    for (const std::string &a : rest) {
+      char *e = nullptr;
+      int hr = history_expand(const_cast<char *>(a.c_str()), &e);
+      if (hr < 0) {
+        std::fprintf(stderr, "%shistory: %s: history expansion failed\n",
+                     sh.err_prefix().c_str(), a.c_str());
+        st = 1;
+      } else if (e) {
+        std::printf("%s\n", e);
+      }
+      std::free(e);
+    }
+    return st;
+  }
+  history_write_timestamps = sh.is_set("HISTTIMEFORMAT") ? 1 : 0;
+  history_multiline_entries = history_write_timestamps;
+  if (wr) { write_history((rest.empty() ? hist_file(sh) : rest[0]).c_str()); return 0; }
+  if (app) {
+    append_history(sh.hist_new_entries, (rest.empty() ? hist_file(sh) : rest[0]).c_str());
+    sh.hist_new_entries = 0;
+    return 0;
+  }
+  if (rd || nw) { read_history((rest.empty() ? hist_file(sh) : rest[0]).c_str()); return 0; }
+
+  if (!rest.empty()) {
+    char *e = nullptr;
+    long v = std::strtol(rest[0].c_str(), &e, 10);
+    if (e == rest[0].c_str() || *e != '\0' || v < 0) {
+      std::fprintf(stderr, "%shistory: %s: numeric argument required\n",
+                   sh.err_prefix().c_str(), rest[0].c_str());
+      return 2;
+    }
+    limit = static_cast<int>(v);
+  }
+
   HIST_ENTRY **list = history_list();
   if (!list) return 0;
   int n = 0;
   while (list[n]) n++;
-  int start = (limit > 0 && limit < n) ? n - limit : 0;
+  int start = (limit >= 0 && limit < n) ? n - limit : 0;
   for (int k = start; k < n; k++)
     std::printf("%5d  %s\n", history_base + k, list[k]->line);
   return 0;
 }
 
 int bi_fc(Shell &sh, const std::vector<std::string> &argv) {
+  static const char *kUsage =
+      "fc: usage: fc [-e ename] [-lnr] [first] [last] or fc -s [pat=rep] [command]";
+  enum { kInvalid = -2, kNotFound = -3 };
+
   bool list = false, nonum = false, reverse = false, subst = false;
+  std::string ename;
+  bool have_e = false;
   size_t i = 1;
   for (; i < argv.size(); i++) {
     const std::string &a = argv[i];
     if (a.size() < 2 || a[0] != '-') break;
     if (a == "--") { i++; break; }
+    // A leading -N (digits) is a command spec, not options.
+    if (std::isdigit(static_cast<unsigned char>(a[1]))) break;
+    bool consumed_next = false;
     for (size_t k = 1; k < a.size(); k++) {
-      if (a[k] == 'l') list = true;
-      else if (a[k] == 'n') nonum = true;
-      else if (a[k] == 'r') reverse = true;
-      else if (a[k] == 's') subst = true;
-      else if (a[k] == 'e') { if (i + 1 < argv.size()) i++; }  // editor: ignored
+      switch (a[k]) {
+        case 'l': list = true; break;
+        case 'n': nonum = true; break;
+        case 'r': reverse = true; break;
+        case 's': subst = true; break;
+        case 'e':
+          have_e = true;
+          if (k + 1 < a.size()) { ename = a.substr(k + 1); k = a.size(); }
+          else if (i + 1 < argv.size()) { ename = argv[i + 1]; consumed_next = true; }
+          break;
+        default:
+          std::fprintf(stderr, "%sfc: -%c: invalid option\n", sh.err_prefix().c_str(),
+                       a[k]);
+          std::fprintf(stderr, "%s\n", kUsage);
+          return 2;
+      }
     }
+    if (consumed_next) i++;
   }
+  // `fc -e -' is the re-execute-without-editing form: same as `fc -s'.
+  if (have_e && ename == "-") subst = true;
+
   HIST_ENTRY **hl = history_list();
   int n = 0;
   if (hl) while (hl[n]) n++;
   if (n == 0) return 0;
 
-  if (subst) {  // fc -s [old=new] [command]: re-run a previous command
-    std::string oldpat, newpat, match;
+  // The fc invocation's own entry (when it was recorded) is skipped: fc works
+  // on the commands before it (bash's hist_last_line_added).
+  bool self_recorded = sh.hist_cur_cmd_index >= 0 && sh.hist_cur_cmd_index == n - 1;
+  int last_hist = n - 1 - (self_recorded ? 1 : 0);
+  int real_last = n - 1;
+  if (last_hist < 0) last_hist = 0;
+
+  auto no_command = [&]() {
+    std::fprintf(stderr, "%sfc: no command found\n", sh.err_prefix().c_str());
+    return 1;
+  };
+  auto out_of_range = [&]() {
+    std::fprintf(stderr, "%sfc: history specification out of range\n",
+                 sh.err_prefix().c_str());
+    return 1;
+  };
+
+  // bash's fc_gethnum: resolve SPEC to a 0-based index.  Numeric specs clamp
+  // to the valid range (hn_first selects which end); `-0' is special.
+  auto gethnum = [&](const std::string &spec, bool hn_first) -> int {
+    const char *s = spec.c_str();
+    int sign = 1;
+    if (*s == '-') { sign = -1; s++; }
+    if (std::isdigit(static_cast<unsigned char>(*s))) {
+      const char *q = s;
+      while (std::isdigit(static_cast<unsigned char>(*q))) q++;
+      long v = std::atol(s) * sign;
+      (void)q;
+      if (v < 0) {
+        v += last_hist + 1;
+        return v < 0 ? 0 : static_cast<int>(v);
+      }
+      if (v == 0) return sign == -1 ? (list ? real_last : kInvalid) : last_hist;
+      v -= history_base;
+      if (v < 0) return hn_first ? 0 : last_hist;
+      if (v > last_hist) return hn_first ? 0 : last_hist;
+      return static_cast<int>(v);
+    }
+    for (int k = last_hist; k >= 0; k--)
+      if (std::strncmp(hl[k]->line, spec.c_str(), spec.size()) == 0) return k;
+    return kNotFound;
+  };
+
+  // Replace fc's own entry with the command it ran (bash's fc_replhist), or
+  // record the command when fc itself wasn't recorded.
+  auto replace_self = [&](const std::string &cmd) {
+    if (self_recorded) {
+      HIST_ENTRY *old = replace_history_entry(n - 1, cmd.c_str(), nullptr);
+      if (old) free_history_entry(old);
+    } else {
+      add_history(cmd.c_str());
+      sh.hist_new_entries++;
+    }
+  };
+
+  if (subst) {  // fc -s [pat=rep ...] [command]: re-run with substitutions
+    std::vector<std::pair<std::string, std::string>> subs;
+    std::string spec;
     for (; i < argv.size(); i++) {
       auto eq = argv[i].find('=');
-      if (eq != std::string::npos && oldpat.empty()) { oldpat = argv[i].substr(0, eq); newpat = argv[i].substr(eq + 1); }
-      else match = argv[i];
+      if (eq != std::string::npos && spec.empty())
+        subs.emplace_back(argv[i].substr(0, eq), argv[i].substr(eq + 1));
+      else
+        spec = argv[i];
     }
-    int idx = n - 1;  // most recent
-    if (!match.empty())
-      for (int k = n - 1; k >= 0; k--)
-        if (std::strncmp(hl[k]->line, match.c_str(), match.size()) == 0) { idx = k; break; }
+    int idx = spec.empty() ? last_hist : gethnum(spec, false);
+    if (idx < 0) return no_command();
     std::string cmd = hl[idx]->line;
-    if (!oldpat.empty()) {
-      auto p = cmd.find(oldpat);
-      if (p != std::string::npos) cmd.replace(p, oldpat.size(), newpat);
+    for (const auto &pr : subs) {          // each pat=rep applies globally
+      if (pr.first.empty()) continue;
+      size_t pos = 0;
+      while ((pos = cmd.find(pr.first, pos)) != std::string::npos) {
+        cmd.replace(pos, pr.first.size(), pr.second);
+        pos += pr.second.size();
+      }
     }
-    std::printf("%s\n", cmd.c_str());
-    add_history(cmd.c_str());
+    std::fprintf(stderr, "%s\n", cmd.c_str());
+    replace_self(cmd);
     return sh.run_string(cmd);
   }
 
-  // fc -l [first] [last]: list a range (default last 16).
-  int first = n - 16, last = n - 1;
-  std::vector<std::string> nums;
-  for (; i < argv.size(); i++) nums.push_back(argv[i]);
-  if (nums.size() >= 1) first = std::atoi(nums[0].c_str()) - history_base;
-  if (nums.size() >= 2) last = std::atoi(nums[1].c_str()) - history_base;
-  if (first < 0) first = 0;
-  if (last >= n) last = n - 1;
-  if (!list) list = true;  // default action without an editor is to list here
-  auto emit = [&](int k) {
-    if (nonum) std::printf("%s\n", hl[k]->line);
-    else std::printf("%d\t %s\n", history_base + k, hl[k]->line);
-  };
-  if (reverse) for (int k = last; k >= first; k--) emit(k);
-  else for (int k = first; k <= last; k++) emit(k);
-  return 0;
+  std::vector<std::string> specs;
+  for (; i < argv.size(); i++) specs.push_back(argv[i]);
+
+  int histbeg, histend;
+  if (!specs.empty()) {
+    histbeg = gethnum(specs[0], true);
+    if (specs.size() > 1)
+      histend = gethnum(specs[1], false);
+    else if (histbeg == real_last)
+      histend = list ? real_last : histbeg;
+    else
+      histend = list ? last_hist : histbeg;
+  } else if (list) {
+    histend = last_hist;
+    histbeg = histend - 16 + 1;
+    if (histbeg < 0) histbeg = 0;
+  } else {
+    histbeg = histend = last_hist;
+  }
+  if (histbeg == kInvalid || histend == kInvalid) return out_of_range();
+  if (histbeg == kNotFound || histend == kNotFound) return no_command();
+  if (histbeg > histend) { int t = histbeg; histbeg = histend; histend = t; reverse = !list || reverse; }
+
+  if (list) {
+    auto emit = [&](int k) {
+      if (nonum) std::printf("\t %s\n", hl[k]->line);
+      else std::printf("%d\t %s\n", history_base + k, hl[k]->line);
+    };
+    if (reverse) for (int k = histend; k >= histbeg; k--) emit(k);
+    else for (int k = histbeg; k <= histend; k++) emit(k);
+    return 0;
+  }
+
+  // fc [-e ename] [first] [last]: edit and re-execute.
+  std::string text;
+  if (reverse) for (int k = histend; k >= histbeg; k--) { text += hl[k]->line; text += '\n'; }
+  else for (int k = histbeg; k <= histend; k++) { text += hl[k]->line; text += '\n'; }
+
+  char tmpl[] = "/tmp/gnash_fc_XXXXXX";
+  int fd = mkstemp(tmpl);
+  if (fd < 0) return 1;
+  (void)!write(fd, text.data(), text.size());
+  close(fd);
+
+  if (!have_e) {
+    ename = sh.get("FCEDIT");
+    if (ename.empty()) ename = sh.get("EDITOR");
+    if (ename.empty()) ename = "vi";
+  }
+  // `fc -e -' re-executes without editing.
+  if (ename != "-") {
+    int est = sh.run_string(ename + " " + tmpl);
+    if (est != 0) { unlink(tmpl); return est; }
+  }
+
+  std::ifstream f(tmpl);
+  std::ostringstream ss;
+  ss << f.rdbuf();
+  unlink(tmpl);
+  std::string cmd = ss.str();
+  while (!cmd.empty() && cmd.back() == '\n') cmd.pop_back();
+  if (cmd.empty()) return 0;
+  std::printf("%s\n", cmd.c_str());
+  std::fflush(stdout);
+  replace_self(cmd);
+  return sh.run_string(cmd);
 }
 
 // ---- compgen / complete / compopt ----------------------------------------

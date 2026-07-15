@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "gnash/history.hpp"
+#include "gnash/sh/xmalloc.hpp"
 
 namespace gnash::history {
 
@@ -83,21 +84,49 @@ int History::read_file_range(const char *filename, int from, int to) {
   int last = (to < from) ? nlines : to;
   if (last > nlines) last = nlines;
 
+  // When the file carries `#<epoch>' timestamp lines and multiline entries
+  // are enabled (bash: $HISTTIMEFORMAT is set), the timestamps delimit the
+  // entries: the lines between two timestamps are one entry joined with
+  // newlines, with each group's leading blank lines dropped.
+  bool has_timestamps = false;
+  for (int i = from; i < last; i++)
+    if (is_timestamp_line(lines[static_cast<std::size_t>(i)], comment_char)) {
+      has_timestamps = true;
+      break;
+    }
+  const bool group = multiline_entries && has_timestamps;
+
   std::string pending_ts;
   bool have_ts = false;
+  bool in_entry = false;  // grouping: the current entry has begun
   int count = 0;
   for (int i = from; i < last; i++) {
     const std::string &ln = lines[static_cast<std::size_t>(i)];
     if (is_timestamp_line(ln, comment_char)) {
       pending_ts = ln;
       have_ts = true;
+      in_entry = false;
       continue;
     }
+    if (group && in_entry) {  // continuation of the current entry
+      Entry *e = entries_.empty() ? nullptr : entries_.back();
+      if (e) {
+        std::string joined = e->line ? e->line : "";
+        joined += '\n';
+        joined += ln;
+        gnash::sh::xfree(e->line);
+        e->line = gnash::sh::savestring(joined.c_str());
+        continue;
+      }
+    }
+    if (group && !in_entry && ln.find_first_not_of(" \t") == std::string::npos)
+      continue;  // leading blank lines of a group are dropped
     add(ln);
     if (have_ts) {
       add_time(pending_ts);
       have_ts = false;
     }
+    in_entry = true;
     count++;
   }
 
@@ -167,7 +196,10 @@ int History::truncate_file(const char *filename, int nlines) {
   if (nlines >= total) return 0;  // nothing to trim
 
   int keep_from_entry = total - nlines;
-  int start_line = entry_idx[static_cast<std::size_t>(keep_from_entry)];
+  // nlines == 0 keeps nothing: truncate the file to empty.
+  int start_line = keep_from_entry >= total
+                       ? static_cast<int>(lines.size())
+                       : entry_idx[static_cast<std::size_t>(keep_from_entry)];
   // Keep an immediately-preceding timestamp line with its entry.
   if (start_line > 0 &&
       is_timestamp_line(lines[static_cast<std::size_t>(start_line - 1)], comment_char))

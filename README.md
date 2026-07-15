@@ -174,4 +174,7 @@ Six harnesses:
   and self-test summaries, so a behaviourally-correct gnash still diverges on those lines.
   The differential and error-format harnesses (individual constructs cross-checked against
   real bash) are the more representative signal. The tests gnash reproduces exactly are
-  pinned as a ctest regression gate (`conformance_gate.sh`).
+  pinned as a ctest regression gate (`conformance_gate.sh`). The readline-domain test
+  files — `read.tests`, `histexp.tests`, and `history.tests` — produce output
+  byte-identical to bash 5.3's when both shells run them in the same environment
+  (modulo the program name and a run-varying pid in one job-control warning).

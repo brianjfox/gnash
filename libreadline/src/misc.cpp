@@ -14,6 +14,7 @@
 #include <cctype>
 #include <cstdio>
 #include <cstring>
+#include <unistd.h>
 #include <string>
 #include <vector>
 
@@ -200,7 +201,7 @@ extern "C" int rl_re_read_init_file(int /*count*/, int /*key*/) {
 
 extern "C" int rl_execute_named_command(int count, int /*key*/) {
   FILE *o = rl_outstream ? rl_outstream : stdout;
-  bool tty = rl_outstream != nullptr;
+  bool tty = isatty(fileno(o));
   std::string name;
 
   for (;;) {

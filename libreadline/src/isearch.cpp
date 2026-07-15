@@ -9,6 +9,7 @@
 // accepts, C-g aborts (restoring the original line), C-r/C-s repeat, DEL trims.
 
 #include <cstdio>
+#include <unistd.h>
 #include <cstring>
 #include <string>
 
@@ -42,7 +43,7 @@ int isearch(int dir) {
   std::string orig(rl_line_buffer, static_cast<size_t>(rl_end));
   std::string ss;
   int matchpos = -1;  // history index currently displayed, -1 = none yet
-  bool tty = rl_outstream != nullptr;
+  bool tty = rl_outstream != nullptr && isatty(fileno(rl_outstream));
 
   for (;;) {
     if (tty) show(dir, ss);
@@ -55,6 +56,7 @@ int isearch(int dir) {
       return 0;
     }
     if (c == '\r' || c == '\n') {  // accept
+      if (matchpos >= 0) history_set_pos(matchpos);
       rl_done = 1;
       return 0;
     }
@@ -74,7 +76,12 @@ int isearch(int dir) {
       ss.push_back(static_cast<char>(c));
       start = (matchpos < 0) ? ((dir < 0) ? history_length - 1 : 0) : matchpos;
     } else {
-      // Any other key terminates the search, leaving the found line.
+      // Any other key terminates the search, leaving the found line; the key
+      // itself is executed as a normal command (as GNU readline does).  The
+      // history position moves to the match so commands like C-o and C-p
+      // continue from it.
+      if (matchpos >= 0) history_set_pos(matchpos);
+      gnash::readline::stuff_input(std::string(1, static_cast<char>(c)));
       return 0;
     }
 
@@ -117,7 +124,7 @@ std::string nsearch_string;
 
 // Read the search string; false if the user aborted.
 bool nsearch_read(int pchar) {
-  FILE *o = rl_outstream;
+  FILE *o = (rl_outstream && isatty(fileno(rl_outstream))) ? rl_outstream : nullptr;
   std::string s;
   for (;;) {
     if (o) {

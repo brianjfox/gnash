@@ -559,10 +559,13 @@ bool Shell::set(const std::string &n_in, const std::string &v) {
     return false;
   }
   var.value = v;
-  // Assigning HISTSIZE re-stifles the loaded history list, as bash does.
+  // Assigning HISTSIZE re-stifles the loaded history list, as bash does; a
+  // non-numeric or empty value leaves the list unbounded.
   if (n == "HISTSIZE" && history_loaded) {
-    int hs = std::atoi(v.c_str());
-    if (hs >= 0) stifle_history(hs);
+    char *e = nullptr;
+    long hv = std::strtol(v.c_str(), &e, 10);
+    if (!v.empty() && e && *e == '\0' && hv >= 0) stifle_history(static_cast<int>(hv));
+    else unstifle_history();
   }
   return true;
 }
@@ -578,6 +581,7 @@ void Shell::set_exported(const std::string &n_in, const std::string &v) {
 void Shell::export_name(const std::string &n) { vars[n].exported = true; }
 
 void Shell::unset(const std::string &n_in) {
+  if (n_in == "HISTSIZE" && history_loaded) unstifle_history();
   // `unset name' on a nameref removes the target; only `unset -n' (not modeled
   // here) removes the nameref itself.  Following the ref matches common usage.
   std::string n = deref(n_in);
@@ -730,11 +734,14 @@ void Shell::enable_history() {
   if (history_loaded) return;
   history_loaded = true;
   using_history();
+  history_multiline_entries = is_set("HISTTIMEFORMAT") ? 1 : 0;
   std::string hf = get("HISTFILE");
   if (!hf.empty()) read_history(hf.c_str());
   if (is_set("HISTSIZE")) {
-    int hs = std::atoi(get("HISTSIZE").c_str());
-    if (hs >= 0) stifle_history(hs);
+    const std::string hs = get("HISTSIZE");
+    char *e = nullptr;
+    long v = std::strtol(hs.c_str(), &e, 10);
+    if (!hs.empty() && e && *e == '\0' && v >= 0) stifle_history(static_cast<int>(v));
   }
   using_history();
 }
@@ -790,11 +797,19 @@ bool Shell::add_history_line(const std::string &line) {
   return true;
 }
 
-void Shell::append_history_line(const std::string &line) {
+void Shell::append_history_line(const std::string &line, bool heredoc) {
   if (history_length == 0) return;
   HIST_ENTRY *e = history_get(history_base + history_length - 1);
   if (e == nullptr || e->line == nullptr) return;
   std::string cur = e->line;
+
+  if (heredoc) {  // keep the document's line structure
+    std::string joined = cur + "\n" + line;
+    using_history();
+    HIST_ENTRY *old = replace_history_entry(history_length - 1, joined.c_str(), e->data);
+    if (old) free_history_entry(old);
+    return;
+  }
 
   // Join with bash's history_delimiting_chars, approximately: no semicolon
   // after an operator or after a keyword that a command follows directly.
@@ -825,9 +840,12 @@ void Shell::append_history_line(const std::string &line) {
   if (old) free_history_entry(old);
 }
 
-// True if TEXT ends inside a quoted string, command/process substitution, or
-// backquotes -- contexts where bash does not history-expand continuation lines.
-static bool in_open_context(const std::string &t) {
+// Where TEXT ends: inside a quoted string, inside a command/process
+// substitution or backquotes, or in neither.  Used to decide whether bash
+// would history-expand a continuation line and how it joins the command's
+// history entry.
+enum class OpenCtx { None, Quote, Subst };
+static OpenCtx open_context(const std::string &t) {
   bool squote = false, dquote = false;
   int depth = 0;
   for (size_t i = 0; i < t.size(); i++) {
@@ -843,7 +861,8 @@ static bool in_open_context(const std::string &t) {
     }
     if (c == ')' && depth > 0) depth--;
   }
-  return squote || dquote || depth > 0;
+  if (squote || dquote) return OpenCtx::Quote;
+  return depth > 0 ? OpenCtx::Subst : OpenCtx::None;
 }
 
 int Shell::run_script_lines(const std::string &text) {
@@ -855,11 +874,13 @@ int Shell::run_script_lines(const std::string &text) {
   std::string pending;
   bool cont_bslash = false;  // previous line ended in a line continuation
   bool first_line_saved = false;  // this command's first line is in the history
+  bool in_heredoc = false;   // the pending command has an open here-document
   int st = last_status;
 
   auto flush = [&]() {
     cont_bslash = false;
     first_line_saved = false;
+    in_heredoc = false;
     if (pending.find_first_not_of(" \t\n") == std::string::npos) {
       pending.clear();
       return;
@@ -867,6 +888,7 @@ int Shell::run_script_lines(const std::string &text) {
     lineno_base = pending_line - 1;
     st = run_string(pending);
     lineno_base = 0;
+    hist_cur_cmd_index = -1;
     pending.clear();
   };
 
@@ -883,7 +905,8 @@ int Shell::run_script_lines(const std::string &text) {
     // pre_process_line): `!' expansion with the expanded line echoed to
     // stderr, then recorded in the history -- all before execution.
     if (opt_history && line.find_first_not_of(" \t") != std::string::npos) {
-      if (opt_histexpand && (fresh || !in_open_context(pending))) {
+      OpenCtx ctx = fresh ? OpenCtx::None : open_context(pending);
+      if (opt_histexpand && ctx == OpenCtx::None) {
         sync_histchars();
         cur_lineno = lineno;  // the expansion error prefix names this line
         // Expanding a later line of a multi-line command: history references
@@ -916,12 +939,17 @@ int Shell::run_script_lines(const std::string &text) {
       }
       if (fresh) {
         first_line_saved = add_history_line(line);
+        hist_cur_cmd_index = first_line_saved ? history_length - 1 : -1;
       } else if (first_line_saved &&
-                 !(line.find_first_not_of(" \t") != std::string::npos &&
-                   line[line.find_first_not_of(" \t")] == '#')) {
+                 (in_heredoc || ctx == OpenCtx::Quote ||
+                  !(line.find_first_not_of(" \t") != std::string::npos &&
+                    line[line.find_first_not_of(" \t")] == '#'))) {
         // shopt cmdhist: later lines of the command extend its history entry
-        // (pure comment lines are not appended).
-        append_history_line(line);
+        // (pure comment lines are not appended).  Here-document lines and
+        // lines continuing a quoted string keep their line structure:
+        // newline joins, with a here-document body's trailing newline
+        // preserved when the delimiter closes it.
+        append_history_line(line, in_heredoc || ctx == OpenCtx::Quote);
       }
     }
 
@@ -939,7 +967,16 @@ int Shell::run_script_lines(const std::string &text) {
     }
     cont_bslash = false;
 
-    if (pos < text.size() && parse(pending).incomplete) continue;
+    if (pos < text.size()) {
+      ParseResult chk = parse(pending);
+      bool was_heredoc = in_heredoc;
+      in_heredoc = chk.heredoc_eof;
+      if (was_heredoc && !in_heredoc && first_line_saved)
+        append_history_line("", true);  // the closing delimiter's newline
+      if (chk.incomplete) continue;
+    } else {
+      in_heredoc = false;
+    }
     flush();
   }
   if (!exiting) flush();  // whatever remains (an incomplete tail still errors)

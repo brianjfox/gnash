@@ -289,7 +289,7 @@ int Executor::run(const Command *c) {
   // reached mid-script executes (turning noexec on), after which every later
   // command is skipped, and a subsequent `set +n' never runs to turn it back
   // off.  Ignored by interactive shells, exactly as bash does.
-  if (sh_.opt_noexec && !sh_.interactive) return sh_.last_status;
+  if (sh_.opt_noexec) return sh_.last_status;
 
   sh_.run_pending_traps();  // deliver any signals received between commands
 

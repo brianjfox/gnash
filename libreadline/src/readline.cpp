@@ -443,7 +443,9 @@ extern "C" char *readline(const char *prompt) {
   if (saved_history_offset >= 0) {
     int back = where_history() - (saved_history_offset - history_base);
     saved_history_offset = -1;
-    if (back > 0) rl_get_previous_history(back, 0);
+    // A non-positive count moves forward -- the position can already be
+    // before the target (e.g. after an incremental search).
+    if (back != 0) rl_get_previous_history(back, 0);
   }
 
   rl_last_func = nullptr;  // a new line: nothing was dispatched before it
@@ -470,6 +472,11 @@ extern "C" char *readline(const char *prompt) {
     if (sigaction(SIGINT, &sa, &old_int) == 0) int_installed = true;
     prep_terminal(fd);
     rl_redisplay();
+  } else {
+    // Interactive on a non-terminal (bash -i on a pipe): the prompt goes to
+    // stderr, and the accepted line is echoed after it.
+    std::fputs(rl_prompt, stderr);
+    std::fflush(stderr);
   }
 
   while (!rl_done) {
@@ -499,6 +506,9 @@ extern "C" char *readline(const char *prompt) {
     std::fputc('\n', rl_outstream);
     std::fflush(rl_outstream);
     if (int_installed) sigaction(SIGINT, &old_int, nullptr);
+  } else if (!(rl_eof_found && rl_end == 0) && !rl_pending_sigint) {
+    std::fprintf(stderr, "%s\n", rl_line_buffer);
+    std::fflush(stderr);
   }
 
   if (rl_pending_sigint) return gnash::sh::savestring("");  // discarded line

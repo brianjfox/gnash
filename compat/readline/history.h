@@ -102,6 +102,7 @@ extern int history_lines_read_from_file;
 extern int history_lines_written_to_file;
 extern char history_comment_char;
 extern int history_write_timestamps;
+extern int history_multiline_entries;
 extern int max_input_history;
 
 /* History expansion tunables (defined in histexpand.cpp). */
