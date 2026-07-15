@@ -20,7 +20,9 @@
 #include <cerrno>
 #include <dirent.h>
 #include <sys/resource.h>
+#include <sys/select.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -149,14 +151,52 @@ int bi_echo(Shell &, const std::vector<std::string> &argv) {
 }
 
 // ---- %q shell-quoting (matches bash's sh_backslash_quote / ansic_quote) ----
+
+// Length of the valid UTF-8 sequence starting at s[i], or 0 if invalid.  Used
+// so multibyte text stays literal under %q while stray high bytes are escaped.
+size_t utf8_seq_len(const std::string &s, size_t i) {
+  unsigned char c = s[i];
+  size_t len;
+  if (c < 0x80) return 1;
+  if (c >= 0xc2 && c <= 0xdf) len = 2;
+  else if (c >= 0xe0 && c <= 0xef) len = 3;
+  else if (c >= 0xf0 && c <= 0xf4) len = 4;
+  else return 0;
+  if (i + len > s.size()) return 0;
+  for (size_t k = 1; k < len; k++)
+    if ((static_cast<unsigned char>(s[i + k]) & 0xc0) != 0x80) return 0;
+  return len;
+}
+
+// The current locale takes multibyte (UTF-8) text.
+bool locale_is_utf8() {
+  const char *v = std::getenv("LC_ALL");
+  if (v == nullptr || *v == '\0') v = std::getenv("LC_CTYPE");
+  if (v == nullptr || *v == '\0') v = std::getenv("LANG");
+  if (v == nullptr) return false;
+  std::string s = v;
+  return s.find("UTF-8") != std::string::npos || s.find("utf8") != std::string::npos ||
+         s.find("utf-8") != std::string::npos || s.find("UTF8") != std::string::npos;
+}
+
 bool q_needs_ansic(const std::string &s) {
-  for (unsigned char c : s)
+  bool mb = locale_is_utf8();
+  for (size_t i = 0; i < s.size(); i++) {
+    unsigned char c = s[i];
     if (c < 32 || c == 127) return true;
+    if (c >= 128) {
+      size_t len = mb ? utf8_seq_len(s, i) : 0;
+      if (len == 0) return true;
+      i += len - 1;
+    }
+  }
   return false;
 }
 std::string q_ansic(const std::string &s) {
+  bool mb = locale_is_utf8();
   std::string r = "$'";
-  for (unsigned char c : s) {
+  for (size_t i = 0; i < s.size(); i++) {
+    unsigned char c = s[i];
     switch (c) {
       case '\n': r += "\\n"; break;
       case '\t': r += "\\t"; break;
@@ -168,7 +208,15 @@ std::string q_ansic(const std::string &s) {
       case '\f': r += "\\f"; break;
       case '\v': r += "\\v"; break;
       default:
-        if (c < 32 || c == 127) {
+        if (c >= 128) {
+          size_t len = mb ? utf8_seq_len(s, i) : 0;
+          if (len > 0) {
+            r.append(s, i, len);
+            i += len - 1;
+            break;
+          }
+        }
+        if (c < 32 || c >= 127) {
           char b[8];
           std::snprintf(b, sizeof b, "\\%03o", c);
           r += b;
@@ -195,6 +243,56 @@ std::string shell_quote(const std::string &s) {
     r += static_cast<char>(c);
   }
   return r;
+}
+
+// Decode the backslash escape starting at fmt[i] (fmt[i] == '\\') in a printf
+// FORMAT string, appending the result to OUT and advancing I past the escape.
+// ANSI-C escapes plus octal \N..\NNN (a leading 0 is just the first digit) and
+// hex \xH[H], as bash's printf does for format strings.
+void decode_fmt_escape(const std::string &fmt, size_t &i, std::string &out) {
+  if (i + 1 >= fmt.size()) {
+    out += '\\';
+    i++;
+    return;
+  }
+  char e = fmt[++i];
+  i++;
+  switch (e) {
+    case 'n': out += '\n'; return;
+    case 't': out += '\t'; return;
+    case 'r': out += '\r'; return;
+    case 'a': out += '\a'; return;
+    case 'b': out += '\b'; return;
+    case 'f': out += '\f'; return;
+    case 'v': out += '\v'; return;
+    case 'e': case 'E': out += '\033'; return;
+    case '\\': out += '\\'; return;
+    case '\'': out += '\''; return;
+    case '"': out += '"'; return;
+    case '?': out += '?'; return;
+    case 'x': {
+      int v = 0, k = 0;
+      while (k < 2 && i < fmt.size() && std::isxdigit(static_cast<unsigned char>(fmt[i]))) {
+        char h = fmt[i++];
+        v = v * 16 + (h <= '9' ? h - '0' : (std::tolower(h) - 'a' + 10));
+        k++;
+      }
+      if (k == 0) { out += "\\x"; return; }
+      out += static_cast<char>(v);
+      return;
+    }
+    case '0': case '1': case '2': case '3':
+    case '4': case '5': case '6': case '7': {
+      int v = e - '0', k = 1;
+      while (k < 3 && i < fmt.size() && fmt[i] >= '0' && fmt[i] <= '7') {
+        v = v * 8 + (fmt[i++] - '0');
+        k++;
+      }
+      out += static_cast<char>(v);
+      return;
+    }
+    default: out += '\\'; out += e; return;
+  }
 }
 
 // Format one numeric/string conversion with width/precision via snprintf.
@@ -245,9 +343,10 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
     consumed_any = false;
     for (size_t i = 0; i < fmt.size(); i++) {
       char c = fmt[i];
-      if (c == '\\' && i + 1 < fmt.size()) {
-        out += decode_escapes(fmt.substr(i, 2));
-        i++;
+      if (c == '\\') {
+        size_t p = i;
+        decode_fmt_escape(fmt, p, out);
+        i = p - 1;  // loop increment lands on the next character
       } else if (c == '%' && i + 1 < fmt.size()) {
         size_t j = i + 1;
         while (j < fmt.size() && std::strchr("-+ #0123456789.", fmt[j])) j++;
@@ -832,6 +931,8 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
   int delim = '\n';                 // -d DELIM (default newline; -d '' is NUL)
   bool have_n = false, exact = false;  // -n / -N
   long nchars = 0;
+  bool have_t = false;              // -t TIMEOUT (fractional seconds)
+  double timeout = 0.0;
   std::vector<std::string> names;
 
   for (size_t i = 1; i < argv.size(); i++) {
@@ -850,9 +951,34 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
           case 'p': prompt = val(); break;
           case 'u': fd = std::atoi(val().c_str()); break;
           case 'd': { std::string d = val(); delim = d.empty() ? 0 : static_cast<unsigned char>(d[0]); break; }
-          case 'n': have_n = true; exact = false; nchars = std::atol(val().c_str()); break;
-          case 'N': have_n = true; exact = true; nchars = std::atol(val().c_str()); break;
-          case 't': case 'i': (void)val(); break;   // timeout / initial text: accepted, not acted on
+          case 'n': case 'N': {
+            std::string v = val();
+            char *end = nullptr;
+            long nv = std::strtol(v.c_str(), &end, 10);
+            if (v.empty() || (end && *end) || nv < 0) {
+              std::fprintf(stderr, "%sread: %s: invalid number\n", sh.err_prefix().c_str(),
+                           v.c_str());
+              return 1;
+            }
+            have_n = true;
+            exact = (o == 'N');
+            nchars = nv;
+            break;
+          }
+          case 't': {
+            std::string v = val();
+            char *end = nullptr;
+            double tv = std::strtod(v.c_str(), &end);
+            if (v.empty() || (end && *end) || tv < 0) {
+              std::fprintf(stderr, "%sread: %s: invalid timeout specification\n",
+                           sh.err_prefix().c_str(), v.c_str());
+              return 1;
+            }
+            have_t = true;
+            timeout = tv;
+            break;
+          }
+          case 'i': (void)val(); break;              // initial text: needs readline; accepted
           case 's': case 'e': case 'E': break;       // silent / readline editing: accepted
           default: break;
         }
@@ -862,74 +988,153 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
     }
   }
 
+  // $TMOUT is the default timeout, but only when reading from a terminal.
+  if (!have_t && isatty(fd)) {
+    std::string tm = sh.get("TMOUT");
+    if (!tm.empty()) {
+      char *end = nullptr;
+      double tv = std::strtod(tm.c_str(), &end);
+      if (end && *end == '\0' && tv > 0) { have_t = true; timeout = tv; }
+    }
+  }
+
+  // -t 0: don't read anything, just report whether input is available.
+  if (have_t && timeout == 0.0) {
+    fd_set rfds;
+    FD_ZERO(&rfds);
+    FD_SET(fd, &rfds);
+    struct timeval tv = {0, 0};
+    return select(fd + 1, &rfds, nullptr, nullptr, &tv) > 0 ? 0 : 1;
+  }
+
   if (!prompt.empty() && isatty(fd)) { std::fputs(prompt.c_str(), stderr); std::fflush(stderr); }
 
-  // Read one "line" (up to the delimiter, or `nchars' with -n/-N) byte by byte
-  // so we don't consume input past it.
-  std::string line;
-  bool got = false;
-  char ch;
-  while (!(have_n && static_cast<long>(line.size()) >= nchars)) {
-    if (::read(fd, &ch, 1) != 1) break;
-    got = true;
-    if (!exact && static_cast<unsigned char>(ch) == static_cast<unsigned char>(delim)) break;
-    if (!raw && ch == '\\') {                 // backslash escaping (unless -r)
-      char nx;
-      if (::read(fd, &nx, 1) != 1) { line += '\\'; break; }
-      if (nx == '\n') continue;               // line continuation: drop both
-      line += nx;
-      continue;
+  // Deadline for -t: reads must complete before it, or the read times out with
+  // status 128+SIGALRM and whatever was read so far is still assigned.
+  struct timeval start_tv;
+  gettimeofday(&start_tv, nullptr);
+  double deadline = have_t
+      ? start_tv.tv_sec + start_tv.tv_usec / 1e6 + timeout
+      : 0.0;
+
+  bool eof = false, timed_out = false;
+  // Read a byte, honoring the deadline: 1 = got byte, 0 = EOF/error, -1 = timeout.
+  auto read_byte = [&](char &ch) -> int {
+    if (have_t) {
+      struct timeval now;
+      gettimeofday(&now, nullptr);
+      double remain = deadline - (now.tv_sec + now.tv_usec / 1e6);
+      if (remain <= 0) return -1;
+      fd_set rfds;
+      FD_ZERO(&rfds);
+      FD_SET(fd, &rfds);
+      struct timeval tv;
+      tv.tv_sec = static_cast<time_t>(remain);
+      tv.tv_usec = static_cast<suseconds_t>((remain - static_cast<double>(tv.tv_sec)) * 1e6);
+      if (select(fd + 1, &rfds, nullptr, nullptr, &tv) <= 0) return -1;
     }
-    line += ch;
+    return ::read(fd, &ch, 1) == 1 ? 1 : 0;
+  };
+
+  // Read up to the delimiter (or `nchars' with -n/-N) byte by byte so we don't
+  // consume input past it.  QUOTED marks backslash-escaped characters: they
+  // are not IFS delimiters and are not stripped as trailing whitespace.
+  std::string line;
+  std::string quoted;
+  if (!(have_n && nchars == 0)) {
+    for (;;) {
+      char ch;
+      int r = read_byte(ch);
+      if (r <= 0) { eof = (r == 0); timed_out = (r < 0); break; }
+      if (ch == '\0' && delim != 0) continue;    // stray NULs are discarded
+      if (!raw && ch == '\\') {                  // backslash escaping (unless -r)
+        char nx;
+        int r2 = read_byte(nx);
+        if (r2 <= 0) { eof = (r2 == 0); timed_out = (r2 < 0); break; }  // trailing \ dropped
+        if (nx == '\n') continue;                // line continuation: drop both
+        line += nx;
+        quoted += '\1';
+        if (have_n && static_cast<long>(line.size()) >= nchars) break;
+        continue;
+      }
+      if (!exact && static_cast<unsigned char>(ch) == static_cast<unsigned char>(delim)) break;
+      line += ch;
+      quoted += '\0';
+      if (have_n && static_cast<long>(line.size()) >= nchars) break;
+    }
   }
-  if (!got && line.empty()) return 1;
 
   const std::string ifs = sh.ifs();
-  auto is_ifs = [&](char c) { return ifs.find(c) != std::string::npos; };
-  auto is_ifs_ws = [&](char c) { return is_ifs(c) && (c == ' ' || c == '\t' || c == '\n'); };
-
-  // Split LINE into fields on IFS (whitespace runs collapse; each non-whitespace
-  // IFS char is its own delimiter, so empty fields are possible).
-  auto split_all = [&]() {
-    std::vector<std::string> out;
-    size_t i = 0, n = line.size();
-    while (i < n && is_ifs_ws(line[i])) i++;   // strip leading IFS whitespace
-    while (i < n) {
-      std::string f;
-      while (i < n && !is_ifs(line[i])) f += line[i++];
-      out.push_back(f);
-      while (i < n && is_ifs_ws(line[i])) i++;
-      if (i < n && is_ifs(line[i]) && !is_ifs_ws(line[i])) { i++; while (i < n && is_ifs_ws(line[i])) i++; }
-      if (i >= n) break;
-    }
-    return out;
+  size_t p = 0;
+  const size_t n = line.size();
+  auto is_ifs = [&](size_t idx) {
+    return quoted[idx] == '\0' && ifs.find(line[idx]) != std::string::npos;
   };
+  auto is_ifs_ws = [&](size_t idx) {
+    return is_ifs(idx) && std::isspace(static_cast<unsigned char>(line[idx]));
+  };
+  auto skip_ifs_ws = [&]() { while (p < n && is_ifs_ws(p)) p++; };
+  // One field, then its trailing whitespace and at most one non-whitespace
+  // delimiter (plus more whitespace) -- bash's get_word_from_string.
+  auto get_word = [&]() {
+    std::string w;
+    while (p < n && !is_ifs(p)) w += line[p++];
+    while (p < n && is_ifs_ws(p)) p++;
+    if (p < n && is_ifs(p) && !is_ifs_ws(p)) {
+      p++;
+      while (p < n && is_ifs_ws(p)) p++;
+    }
+    return w;
+  };
+
+  int retval = timed_out ? 128 + SIGALRM : (eof ? 1 : 0);
 
   if (!arrayname.empty()) {                    // -a: all words into the array
     std::vector<std::pair<std::optional<std::string>, std::string>> elems;
-    for (const std::string &w : split_all()) elems.emplace_back(std::nullopt, w);
+    skip_ifs_ws();
+    while (p < n) elems.emplace_back(std::nullopt, get_word());
     sh.array_assign(arrayname, elems, false, false);
-    return 0;
+    return retval;
   }
-  if (names.empty()) { sh.set("REPLY", line); return 0; }
+  if (names.empty()) {
+    if (!sh.set("REPLY", line)) return 2;
+    return retval;
+  }
+  if (exact) {
+    // -N: assigned without word splitting.
+    if (!sh.set(names[0], line)) return 2;
+    for (size_t k = 1; k < names.size(); k++)
+      if (!sh.set(names[k], std::string())) return 2;
+    return retval;
+  }
 
-  // Assign fields to names; the last name gets the unsplit remainder.
+  // Assign fields to names; the last name gets the remainder: a lone final
+  // field is assigned with its delimiters consumed, anything more keeps the
+  // raw text with only trailing IFS whitespace stripped (as bash does).
   std::vector<std::string> fields;
-  size_t p = 0;
-  while (p < line.size() && is_ifs_ws(line[p])) p++;
-  for (size_t k = names.size(); k > 1 && p < line.size(); k--) {
-    std::string cur;
-    while (p < line.size() && !is_ifs(line[p])) cur += line[p++];
-    fields.push_back(cur);
-    while (p < line.size() && is_ifs_ws(line[p])) p++;
-    if (p < line.size() && is_ifs(line[p]) && !is_ifs_ws(line[p])) { p++; while (p < line.size() && is_ifs_ws(line[p])) p++; }
+  skip_ifs_ws();
+  for (size_t k = 0; k + 1 < names.size(); k++)
+    fields.push_back(p < n ? get_word() : std::string());
+  std::string rest;
+  if (p < n) {
+    size_t save = p;
+    std::string w = get_word();
+    if (p >= n) {
+      rest = w;
+    } else {
+      // Trailing IFS whitespace is stripped even when backslash-escaped: bash
+      // strips the character and the later dequoting drops the lone escape.
+      size_t e = n;
+      while (e > save && std::isspace(static_cast<unsigned char>(line[e - 1])) &&
+             ifs.find(line[e - 1]) != std::string::npos)
+        e--;
+      rest = line.substr(save, e - save);
+    }
   }
-  std::string rest = line.substr(p);
-  while (!rest.empty() && is_ifs_ws(rest.back())) rest.pop_back();
   fields.push_back(rest);
   for (size_t k = 0; k < names.size(); k++)
-    sh.set(names[k], k < fields.size() ? fields[k] : std::string());
-  return 0;
+    if (!sh.set(names[k], k < fields.size() ? fields[k] : std::string())) return 2;
+  return retval;
 }
 
 std::string find_in_path(Shell &sh, const std::string &name) {

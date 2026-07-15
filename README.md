@@ -144,7 +144,7 @@ Six harnesses:
 
 - **Differential** (`tests/harness/run_diff.sh`, gated in ctest) — runs a growing corpus
   of scripts under both gnash and bash 5.3 and requires identical stdout + exit status.
-  Currently **191 scripts** covering expansion, arithmetic, control flow, arrays, functions,
+  Currently **213 scripts** covering expansion, arithmetic, control flow, arrays, functions,
   redirection, process substitution, the special variables, the full builtin set, and job
   control — all matching.
 - **csh differential** (`tests/harness/run_diff_csh.sh`, gated in ctest when `tcsh` is

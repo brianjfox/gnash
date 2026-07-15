@@ -159,6 +159,14 @@ void restore_fds(std::vector<SavedFd> &saved) {
   saved.clear();
 }
 
+// Make the applied redirections permanent (`exec < file'): drop the backups
+// instead of restoring from them.
+void discard_saved_fds(std::vector<SavedFd> &saved) {
+  for (const SavedFd &s : saved)
+    if (s.saved >= 0) close(s.saved);
+  saved.clear();
+}
+
 // ---- assignments (scalar, array element, and array literal) --------------
 
 struct Assign {
@@ -720,7 +728,12 @@ int Executor::run_simple(const SimpleCommand *c) {
   // Flush buffered builtin/function output while our redirections are still in
   // effect, so it lands on the right fd and in program order.
   std::fflush(stdout);
-  restore_fds(saved);
+  // `exec' makes its redirections permanent in the current shell (this path is
+  // only reached when exec had no command word, or its exec failed).
+  if (builtin && !argv.empty() && argv[0] == "exec" && status == 0)
+    discard_saved_fds(saved);
+  else
+    restore_fds(saved);
   if (c->flags & CMD_INVERT_RETURN) status = status ? 0 : 1;
   sh_.last_status = status;
   if (sh_.opt_errexit && status != 0 && sh_.errexit_suppress == 0 && !unwinding() &&
