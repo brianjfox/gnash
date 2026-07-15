@@ -48,7 +48,8 @@ class Shell {
   std::string deref(const std::string &n) const;
   std::string get(const std::string &n) const;  // "" if unset
   bool get_if_set(const std::string &n, std::string &out) const;
-  void set(const std::string &n, const std::string &v);
+  // Assign N=V; false if N is readonly (an error is printed).
+  bool set(const std::string &n, const std::string &v);
   void set_exported(const std::string &n, const std::string &v);
   void export_name(const std::string &n);
   void unset(const std::string &n);

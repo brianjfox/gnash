@@ -257,6 +257,38 @@ source /tmp/gnrx3.$$; rm -f /tmp/gnrx3.$$'
   # set -u: a genuine unbound reference (and ${x?}) is fatal with status 127
   'set -u; echo pre; echo "$UNSET"; echo post'
   'echo pre; echo "${UNSET?boom}"; echo post'
+  # read: backslash escapes quote IFS chars; trailing backslash before EOF drops
+  'echo " a  b\ " | { read x y; echo "-$x-$y-"; }'
+  'echo " a  b\ " | { read x; echo "-$x-"; }'
+  'printf "abc\\\\" | { read v; echo "[$v]"; }'
+  'printf "ab\\\\cd" | { read v; echo "[$v]"; }'
+  # read: exit status is 1 at EOF without delimiter, 0 with it
+  'printf "abc" | { read v; echo "$? [$v]"; }'
+  'printf "abc\n" | { read v; echo "$? [$v]"; }'
+  # read: the last variable takes a lone final field dequoted, more fields raw
+  'IFS=: read x y z <<< ":::"; echo "[$x][$y][$z]"'
+  'IFS=: read v rest <<< "a:b:c d"; echo "[$v][$rest]"'
+  'IFS=: read v <<< ":abc:"; echo "[$v]"'
+  # read: -N assigns without splitting; -n stops at the count
+  'printf "a b c d\n" | { read -N 5 v; echo "[$v]"; }'
+  'printf "abcdefg\n" | { read -n 3 v; echo "[$v]"; read rest; echo "[$rest]"; }'
+  # read: -t 0 polls for available input; bad -t / -n are usage errors
+  'echo data | { read -t 0; echo $?; }'
+  'read -t -3 v 2>/dev/null <<< x; echo $?'
+  'read -n -1 v 2>/dev/null <<< x; echo $?'
+  # read: readonly target stops assignment with status 2
+  'readonly RB; read RA RB RC 2>/dev/null <<< "1 2 3"; echo "$? [$RA][$RC]"'
+  # read into REPLY keeps the line unsplit and unstripped
+  'echo " A B " | { read; echo "[$REPLY]"; }'
+  # exec redirections are permanent in the current shell
+  'echo file-line > /tmp/gnash_exec_$$; exec < /tmp/gnash_exec_$$; read v; echo "[$v]"; rm -f /tmp/gnash_exec_$$'
+  # printf: octal/hex escapes in the format string; %q of nonprintable bytes
+  'LC_ALL=C printf "%s\n" "$(printf "a\101b")"'
+  'printf "x\11y\n" | cat -v'
+  'LC_ALL=C printf "<%q>\n" "$(printf "B\315")"'
+  'LC_ALL=C printf "<%q>\n" "$(printf "tab\thigh\200")"'
+  # printf %b arguments still handle \0NNN
+  'printf "%b\n" "A\0101Z" | cat -v'
 )
 
 fails=0

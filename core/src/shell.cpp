@@ -536,7 +536,7 @@ bool Shell::get_if_set(const std::string &n_in, std::string &out) const {
   return true;
 }
 
-void Shell::set(const std::string &n_in, const std::string &v) {
+bool Shell::set(const std::string &n_in, const std::string &v) {
   std::string n = deref(n_in);
   // Assigning BASH_ARGV0 resets $0 (and the name used in error messages), as
   // bash does; still stored so `$BASH_ARGV0' reads back the value.
@@ -545,19 +545,20 @@ void Shell::set(const std::string &n_in, const std::string &v) {
   if (n == "RANDOM") {
     rand_seed = static_cast<unsigned long>(std::strtoul(v.c_str(), nullptr, 10));
     rand_seeded = true;
-    return;
+    return true;
   }
   if (n == "SECONDS") {
     seconds_base = static_cast<long long>(std::time(nullptr)) -
                    std::strtoll(v.c_str(), nullptr, 10);
-    return;
+    return true;
   }
   Variable &var = vars[n];
   if (var.readonly) {
     std::fprintf(stderr, "%s%s: readonly variable\n", err_prefix().c_str(), n.c_str());
-    return;
+    return false;
   }
   var.value = v;
+  return true;
 }
 
 void Shell::set_exported(const std::string &n_in, const std::string &v) {
