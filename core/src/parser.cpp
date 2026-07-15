@@ -78,6 +78,7 @@ struct Parser {
   bool err = false;
   bool incomplete = false;
   std::string errmsg;
+  int err_line = 0;  // source line of the first failure
 
   explicit Parser(std::vector<Token> t) : toks(std::move(t)) {}
 
@@ -152,6 +153,7 @@ struct Parser {
     if (!err) {
       err = true;
       errmsg = m;
+      err_line = i < toks.size() ? toks[i].line : 1;
     }
   }
   void expect_reserved(const char *w) {
@@ -543,8 +545,7 @@ struct Parser {
     advance();  // (
     advance();  // (
     int depth = 0;
-    int part = 0;
-    std::string parts[3];
+    std::vector<std::string> parts(1);
     while (!is(Tok::Eof) && !err) {
       if (is(Tok::Rparen) && depth == 0) {
         if (peek(1).type == Tok::Rparen) {
@@ -557,24 +558,38 @@ struct Parser {
       }
       if (is(Tok::Lparen)) {
         depth++;
-        parts[part] += '(';
+        parts.back() += '(';
         advance();
         continue;
       }
       if (is(Tok::Rparen)) {
         depth--;
-        parts[part] += ')';
+        parts.back() += ')';
         advance();
         continue;
       }
       if (is(Tok::Semi) && depth == 0) {
-        if (part < 2) part++;
+        parts.emplace_back();
         advance();
         continue;
       }
-      if (!parts[part].empty() && cur().preceded_by_blank) parts[part] += ' ';
-      parts[part] += tok_to_text(cur());
+      if (!parts.back().empty() && cur().preceded_by_blank) parts.back() += ' ';
+      parts.back() += tok_to_text(cur());
       advance();
+    }
+    // Exactly three expressions, as bash requires; the diagnostics are two
+    // lines (both get the `syntax error: ' prefix when printed).
+    if (!err && parts.size() != 3) {
+      std::string raw = "(( ";
+      for (size_t k = 0; k < parts.size(); k++) {
+        if (k) raw += "; ";
+        raw += trim(parts[k]);
+      }
+      raw += " ))";
+      fail(std::string(parts.size() < 3 ? "arithmetic expression required"
+                                        : "`;' unexpected") +
+           "\n`" + raw + "'");
+      return;
     }
     n.a_init = trim(parts[0]);
     n.a_cond = trim(parts[1]);
@@ -866,6 +881,7 @@ struct Parser {
     if (err) {
       res.ok = false;
       res.error = errmsg;
+      res.error_line = err_line;
       res.incomplete = incomplete;
       res.command.reset();
       return res;

@@ -80,6 +80,8 @@ int is_cclass(int c, const char *name) {
              {"punct", std::ispunct}, {"cntrl", std::iscntrl},
              {"print", std::isprint}, {"graph", std::isgraph},
              {"blank", std::isblank}, {"xdigit", std::isxdigit},
+             {"ascii", [](int ch) { return static_cast<int>(ch >= 0 && ch <= 0x7f); }},
+             {"word", [](int ch) { return static_cast<int>(std::isalnum(ch) || ch == '_'); }},
              {nullptr, nullptr}};
   for (int i = 0; tbl[i].name; i++)
     if (std::strcmp(tbl[i].name, name) == 0)

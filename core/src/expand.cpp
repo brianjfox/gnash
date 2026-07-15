@@ -32,6 +32,10 @@ constexpr char FIELD_SEP = '\x01';  // internal "$@" field boundary marker
 // A double-quoted "$@"/"${a[@]}" that expands to nothing absorbs the marker,
 // so it yields *no* field (matching bash).  Stripped before the result is used.
 constexpr char QNULL = '\x02';
+// Mask letter for the marker bytes themselves: only a FIELD_SEP/QNULL whose
+// mask is MMARK is an internal marker; the same byte under any other mask is
+// literal data (e.g. $'\001').
+constexpr char MMARK = 'M';
 
 bool pat_match(const std::string &pattern, const std::string &text) {
   std::string p = pattern, t = text;
@@ -451,7 +455,7 @@ bool Expander::emit_zsh_flags(const std::string &body, bool dq, std::string &out
     }
   } else {
     for (size_t x = 0; x < items.size(); x++) {
-      if (x) { out += FIELD_SEP; mask += '0'; }
+      if (x) { out += FIELD_SEP; mask += MMARK; }
       for (char c : items[x]) { out += c; mask += '0'; }
     }
   }
@@ -508,7 +512,7 @@ void Expander::emit_zsh_subscript(const std::string &name, const std::string &su
       }
     } else {
       for (size_t k = 0; k < items.size(); k++) {
-        if (k) { out += FIELD_SEP; mask += '0'; }
+        if (k) { out += FIELD_SEP; mask += MMARK; }
         for (char c : items[k]) { out += c; mask += '0'; }
       }
     }
@@ -526,7 +530,10 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
   // A double-quoted "$@"/"${a[@]}" manages its own fields, so it absorbs the
   // quoted-null the opening quote emitted -- letting an empty list drop the word.
   auto absorb_qnull = [&]() {
-    if (!out.empty() && out.back() == QNULL) { out.pop_back(); mask.pop_back(); }
+    if (!out.empty() && out.back() == QNULL && mask.back() == MMARK) {
+      out.pop_back();
+      mask.pop_back();
+    }
   };
 
   // $((expr))
@@ -618,7 +625,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
         bool have = false;
         auto flush = [&]() {
           if (!have) return;
-          if (!first) { out += FIELD_SEP; mask += '0'; }
+          if (!first) { out += FIELD_SEP; mask += MMARK; }
           for (char c : cur) { out += c; mask += '0'; }
           first = false; cur.clear(); have = false;
         };
@@ -669,8 +676,8 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
           if (sel == '@' && dq) {
             absorb_qnull();
             for (size_t k = 0; k < items.size(); k++) {
-              if (k) { out += FIELD_SEP; mask += '0'; }
-              out += QNULL; mask += '1';  // keep an empty element as a field
+              if (k) { out += FIELD_SEP; mask += MMARK; }
+              out += QNULL; mask += MMARK;  // keep an empty element as a field
               for (char c : items[k]) { out += c; mask += '1'; }
             }
           } else if (sel == '*' && dq) {
@@ -682,7 +689,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
             }
           } else {
             for (size_t k = 0; k < items.size(); k++) {
-              if (k) { out += FIELD_SEP; mask += '0'; }
+              if (k) { out += FIELD_SEP; mask += MMARK; }
               for (char c : items[k]) { out += c; mask += '0'; }
             }
           }
@@ -707,8 +714,8 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
           char m = (asel == '@' && dq) ? '1' : '0';
           if (asel == '@' && dq) absorb_qnull();
           for (size_t k = 0; k < items.size(); k++) {
-            if (k) { out += FIELD_SEP; mask += '0'; }
-            if (asel == '@' && dq) { out += QNULL; mask += '1'; }  // keep empty element
+            if (k) { out += FIELD_SEP; mask += MMARK; }
+            if (asel == '@' && dq) { out += QNULL; mask += MMARK; }  // keep empty element
             for (char c : items[k]) { out += c; mask += m; }
           }
         }
@@ -752,8 +759,8 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
           char m = (ssel == '@' && dq) ? '1' : '0';
           if (ssel == '@' && dq) absorb_qnull();
           for (size_t k = 0; k < slice.size(); k++) {
-            if (k) { out += FIELD_SEP; mask += '0'; }
-            if (ssel == '@' && dq) { out += QNULL; mask += '1'; }  // keep empty element
+            if (k) { out += FIELD_SEP; mask += MMARK; }
+            if (ssel == '@' && dq) { out += QNULL; mask += MMARK; }  // keep empty element
             for (char c : slice[k]) { out += c; mask += m; }
           }
         }
@@ -779,8 +786,8 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
     if (n1 == '@' && dq) {
       absorb_qnull();
       for (size_t k = 0; k < pos.size(); k++) {
-        if (k) { out += FIELD_SEP; mask += '0'; }
-        out += QNULL; mask += '1';  // keep an empty positional as a field
+        if (k) { out += FIELD_SEP; mask += MMARK; }
+        out += QNULL; mask += MMARK;  // keep an empty positional as a field
         for (char c : pos[k]) { out += c; mask += '1'; }
       }
     } else if (n1 == '*' && dq) {
@@ -792,7 +799,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
       }
     } else {  // unquoted $@ or $*
       for (size_t k = 0; k < pos.size(); k++) {
-        if (k) { out += FIELD_SEP; mask += '0'; }
+        if (k) { out += FIELD_SEP; mask += MMARK; }
         for (char c : pos[k]) { out += c; mask += '0'; }
       }
     }
@@ -849,7 +856,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
       }
     } else {
       for (size_t k = 0; k < items.size(); k++) {
-        if (k) { out += FIELD_SEP; mask += '0'; }
+        if (k) { out += FIELD_SEP; mask += MMARK; }
         for (char c : items[k]) { out += c; mask += '0'; }
       }
     }
@@ -1220,12 +1227,12 @@ void Expander::process(const std::string &text, std::string &out, std::string &m
       // Inside a here-document, quote characters are ordinary text.
       out += c; mask += '2'; i++;
     } else if (c == '\'') {
-      out += QNULL; mask += '1';  // a quote region yields a field even if empty
+      out += QNULL; mask += MMARK;  // a quote region yields a field even if empty
       i++;
       while (i < text.size() && text[i] != '\'') { out += text[i]; mask += '1'; i++; }
       if (i < text.size()) i++;
     } else if (c == '"') {
-      out += QNULL; mask += '1';
+      out += QNULL; mask += MMARK;
       i++;
       while (i < text.size() && text[i] != '"') {
         if (text[i] == '\\' && i + 1 < text.size() &&
@@ -1261,7 +1268,7 @@ void Expander::process(const std::string &text, std::string &out, std::string &m
       }
       if (i < text.size()) i++;
     } else if (!heredoc && c == '$' && i + 1 < text.size() && text[i + 1] == '\'') {
-      out += QNULL; mask += '1';
+      out += QNULL; mask += MMARK;
       size_t j = i + 2;
       std::string inner;
       while (j < text.size() && text[j] != '\'') {
@@ -1328,7 +1335,8 @@ std::vector<std::pair<std::string, std::string>> Expander::split_ifs(const std::
     // Quoted ('1') and literal ('2') text is never split, even when it contains
     // IFS characters; '0'/'4' expansion output is (subject to the rule above).
     bool q = mask[i] == '1' || mask[i] == '2';
-    if (!q && c == FIELD_SEP) {
+    (void)q;
+    if (mask[i] == MMARK && c == FIELD_SEP) {
       flush();
       i++;
       continue;
@@ -1448,7 +1456,10 @@ std::vector<std::string> Expander::expand_args(const std::vector<Word> &words) {
         v.reserve(fm.first.size());
         m.reserve(fm.first.size());
         for (size_t k = 0; k < fm.first.size(); k++)
-          if (fm.first[k] != QNULL) { v += fm.first[k]; m += fm.second[k]; }
+          if (!(fm.first[k] == QNULL && fm.second[k] == MMARK)) {
+            v += fm.first[k];
+            m += fm.second[k];
+          }
         fm.first = std::move(v);
         fm.second = std::move(m);
       }
@@ -1459,6 +1470,25 @@ std::vector<std::string> Expander::expand_args(const std::vector<Word> &words) {
   return result;
 }
 
+std::string Expander::expand_pattern(const std::string &text) {
+  std::string src = text;
+  extract_procsubs(src);
+  std::string out, mask;
+  process(src, out, mask, false);
+  std::string r;
+  r.reserve(out.size());
+  for (size_t i = 0; i < out.size(); i++) {
+    char c = out[i];
+    if (i < mask.size() && mask[i] == MMARK) {
+      if (c == FIELD_SEP) r += ' ';
+      continue;  // marker bytes never reach the pattern
+    }
+    if (i < mask.size() && mask[i] == '1') r += '\\';  // quoted: match literally
+    r += c;
+  }
+  return r;
+}
+
 std::string Expander::expand_no_split(const std::string &text, bool do_glob) {
   std::string src = text;
   extract_procsubs(src);  // e.g. a redirect target: < <(cmd)
@@ -1467,9 +1497,12 @@ std::string Expander::expand_no_split(const std::string &text, bool do_glob) {
   // drop internal markers: field separators become spaces, quoted-nulls vanish
   std::string joined;
   joined.reserve(out.size());
-  for (char c : out) {
-    if (c == FIELD_SEP) joined += ' ';
-    else if (c != QNULL) joined += c;
+  for (size_t k = 0; k < out.size(); k++) {
+    if (k < mask.size() && mask[k] == MMARK) {
+      if (out[k] == FIELD_SEP) joined += ' ';
+      continue;
+    }
+    joined += out[k];
   }
   if (do_glob) {
     std::string fmask(joined.size(), '0');
@@ -1487,9 +1520,12 @@ std::string Expander::expand_heredoc(const std::string &text) {
   std::string out, mask;
   process(text, out, mask, false, /*heredoc=*/true);  // quotes stay literal
   std::string joined;
-  for (char c : out) {
-    if (c == FIELD_SEP) joined += ' ';
-    else if (c != QNULL) joined += c;
+  for (size_t k = 0; k < out.size(); k++) {
+    if (k < mask.size() && mask[k] == MMARK) {
+      if (out[k] == FIELD_SEP) joined += ' ';
+      continue;
+    }
+    joined += out[k];
   }
   return joined;
 }
