@@ -54,6 +54,12 @@ struct Token {
   bool quoted = false;          // word contained quoting
   bool glued = false;           // Lparen immediately followed by `(' (for `((')
   bool lex_error = false;       // set on the Eof token if a span was unterminated
+  // Set on the Eof token when a here-document ran to end-of-input without its
+  // delimiter: the body is still attached (bash runs it with a warning), but
+  // line-oriented readers treat the input as incomplete.
+  bool heredoc_eof = false;
+  std::string heredoc_eof_delim;
+  int heredoc_eof_line = 0;
   // For a here-document delimiter word, the collected body and whether the
   // delimiter was quoted (which disables expansion of the body).
   std::string heredoc_body;

@@ -844,15 +844,15 @@ std::vector<std::pair<std::string, bool>> set_option_states(Shell &sh) {
       {"allexport", false},   {"braceexpand", true},
       {"emacs", rl_editing_mode == 1}, {"errexit", sh.opt_errexit},
       {"errtrace", sh.opt_functrace}, {"functrace", sh.opt_functrace},
-      {"hashall", true},      {"histexpand", i},
-      {"history", i},         {"ignoreeof", false},
+      {"hashall", true},      {"histexpand", sh.opt_histexpand},
+      {"history", sh.opt_history}, {"ignoreeof", false},
       {"interactive-comments", true}, {"keyword", false},
       {"monitor", i},         {"noclobber", false},
       {"noexec", sh.opt_noexec}, {"noglob", sh.opt_noglob},
       {"nolog", false},       {"notify", false},
       {"nounset", sh.opt_nounset}, {"onecmd", false},
       {"physical", false},    {"pipefail", sh.opt_pipefail},
-      {"posix", false},       {"privileged", false},
+      {"posix", sh.opt_posix}, {"privileged", false},
       {"verbose", sh.opt_verbose}, {"vi", rl_editing_mode == 0},
       {"xtrace", sh.opt_xtrace}};
 }
@@ -886,6 +886,7 @@ int bi_set(Shell &sh, const std::vector<std::string> &argv) {
           case 'v': sh.opt_verbose = on; break;
           case 'n': if (!sh.interactive) sh.opt_noexec = on; break;  // ignored when interactive
           case 'T': sh.opt_functrace = on; break;  // DEBUG/RETURN trap inheritance
+          case 'H': sh.opt_histexpand = on; break;  // `!' history expansion
           case 'o': {
             if (i + 1 >= argv.size()) {
               // `set -o' lists states; `set +o' reproduces as commands.
@@ -903,6 +904,9 @@ int bi_set(Shell &sh, const std::vector<std::string> &argv) {
               else if (o == "noexec") { if (!sh.interactive) sh.opt_noexec = on; }
               else if (o == "functrace" || o == "errtrace") sh.opt_functrace = on;
               else if (o == "pipefail") sh.opt_pipefail = on;
+              else if (o == "history") { if (on) sh.enable_history(); else sh.opt_history = false; }
+              else if (o == "histexpand") sh.opt_histexpand = on;
+              else if (o == "posix") sh.opt_posix = on;
               // `set -o vi'/`set -o emacs' switch the readline editing mode
               // (they are mutually exclusive); `+o' flips to the other.
               else if (o == "vi") { if (on) rl_vi_editing_mode(0, 0); else rl_emacs_editing_mode(0, 0); }
@@ -2040,19 +2044,32 @@ int bi_history(Shell &sh, const std::vector<std::string> &argv) {
     }
     if (a == "-s") {
       std::string s = join(argv, i + 1);
-      if (!s.empty()) add_history(s.c_str());
+      if (!s.empty()) { add_history(s.c_str()); sh.hist_new_entries++; }
       return 0;
     }
     if (a == "-p") {
+      int st = 0;
+      sh.sync_histchars();
       for (size_t k = i + 1; k < argv.size(); k++) {
         char *e = nullptr;
-        history_expand(const_cast<char *>(argv[k].c_str()), &e);
-        if (e) { std::printf("%s\n", e); std::free(e); }
+        int hr = history_expand(const_cast<char *>(argv[k].c_str()), &e);
+        if (hr < 0) {
+          std::fprintf(stderr, "%shistory: %s: history expansion failed\n",
+                       sh.err_prefix().c_str(), argv[k].c_str());
+          st = 1;
+        } else if (e) {
+          std::printf("%s\n", e);
+        }
+        std::free(e);
       }
-      return 0;
+      return st;
     }
     if (a == "-w") { write_history((i + 1 < argv.size() ? argv[i + 1] : hist_file(sh)).c_str()); return 0; }
-    if (a == "-a") { append_history(0, (i + 1 < argv.size() ? argv[i + 1] : hist_file(sh)).c_str()); return 0; }
+    if (a == "-a") {
+      append_history(sh.hist_new_entries, (i + 1 < argv.size() ? argv[i + 1] : hist_file(sh)).c_str());
+      sh.hist_new_entries = 0;
+      return 0;
+    }
     if (a == "-r" || a == "-n") { read_history((i + 1 < argv.size() ? argv[i + 1] : hist_file(sh)).c_str()); return 0; }
     if (!a.empty() && (std::isdigit(static_cast<unsigned char>(a[0])))) { limit = std::atoi(a.c_str()); continue; }
     break;

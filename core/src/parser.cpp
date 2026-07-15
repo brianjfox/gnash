@@ -853,7 +853,7 @@ struct Parser {
     ParseResult res;
     if (!toks.empty() && toks.back().lex_error) {
       res.ok = false;
-      res.incomplete = true;  // unterminated quote/substitution/here-doc
+      res.incomplete = true;  // unterminated quote/substitution
       res.error = "unterminated quoted string or substitution";
       return res;
     }
@@ -868,6 +868,15 @@ struct Parser {
       res.error = errmsg;
       res.incomplete = incomplete;
       res.command.reset();
+      return res;
+    }
+    // A here-document delimited by end of input: runnable, but incomplete for
+    // callers that can supply more lines.
+    if (!toks.empty() && toks.back().heredoc_eof) {
+      res.incomplete = true;
+      res.heredoc_eof = true;
+      res.heredoc_eof_delim = toks.back().heredoc_eof_delim;
+      res.heredoc_eof_line = toks.back().heredoc_eof_line;
     }
     return res;
   }
