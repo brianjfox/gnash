@@ -76,7 +76,11 @@ struct Command {
 
 using CommandPtr = std::unique_ptr<Command>;
 
-std::string to_string(const Command *c);  // full canonical rendering
+std::string to_string(const Command *c);
+
+// bash's multi-line function rendering (print_cmd.c named_function_string),
+// used by `type', `declare -f', and `set' -- byte-identical to bash.
+std::string named_function_string(const std::string &name, const Command *body);  // full canonical rendering
 
 struct SimpleCommand : Command {
   std::vector<Word> words;  // assignment prefix + argv, in order
