@@ -39,6 +39,7 @@ Shell::Shell() {
     vars[name] = var;
   }
   if (!is_set("IFS")) set("IFS", " \t\n");
+  set("OPTIND", "1");  // bash initializes getopts state at startup
   set("PPID", std::to_string(static_cast<long>(getppid())));
   set("$", std::to_string(static_cast<long>(getpid())));
   seconds_base = static_cast<long long>(std::time(nullptr));  // $SECONDS origin
@@ -1007,18 +1008,41 @@ int Shell::run_string(const std::string &script) {
                       ? parse_with_aliases(script, aliases, global_aliases, suffix_aliases)
                       : parse(script);
   if (!r.ok) {
-    // bash's format: `NAME: [-c: ]line N: syntax error: MSG' per message line.
-    std::string pfx = shell_name + ": " +
-                      (invocation_char == 'c' ? std::string("-c: ") : std::string()) +
-                      "line " + std::to_string(lineno_base + (r.error_line > 0 ? r.error_line : 1)) +
+    // bash's format: `NAME: [CONTEXT: ][-c: ]line N: syntax error...' per
+    // message line; "near unexpected token" joins without a colon, and the
+    // offending source line is echoed after it.
+    std::string ctx;
+    if (!error_context.empty()) ctx = error_context + ": ";
+    else if (invocation_char == 'c') ctx = "-c: ";
+    std::string pfx = shell_name + ": " + ctx + "line " +
+                      std::to_string(lineno_base + (r.error_line > 0 ? r.error_line : 1)) +
                       ": ";
     size_t p0 = 0;
     while (p0 <= r.error.size()) {
       size_t nl = r.error.find('\n', p0);
       std::string line = r.error.substr(p0, nl == std::string::npos ? std::string::npos : nl - p0);
-      std::fprintf(stderr, "%ssyntax error: %s\n", pfx.c_str(), line.c_str());
+      if (line.compare(0, 14, "unexpected EOF") == 0) {
+        std::fprintf(stderr, "%s%s\n", pfx.c_str(), line.c_str());  // no `syntax error'
+      } else {
+        const char *sep = line.compare(0, 5, "near ") == 0 ? " " : ": ";
+        std::fprintf(stderr, "%ssyntax error%s%s\n", pfx.c_str(), sep, line.c_str());
+      }
       if (nl == std::string::npos) break;
       p0 = nl + 1;
+    }
+    if (r.error.compare(0, 5, "near ") == 0 && r.error_line > 0) {
+      // Echo the offending source line, as bash does.
+      size_t start = 0;
+      for (int k = 1; k < r.error_line && start != std::string::npos; k++) {
+        start = script.find('\n', start);
+        if (start != std::string::npos) start++;
+      }
+      if (start != std::string::npos) {
+        size_t fin = script.find('\n', start);
+        std::string src = script.substr(start, fin == std::string::npos ? std::string::npos
+                                                                        : fin - start);
+        std::fprintf(stderr, "%s`%s'\n", pfx.c_str(), src.c_str());
+      }
     }
     last_status = 2;
     return 2;

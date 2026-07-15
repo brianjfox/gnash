@@ -196,6 +196,9 @@ class Shell {
 
   // --- diagnostics -------------------------------------------------------
   std::string shell_name = "gnash";  // program name shown in error messages
+  // Extra context component for parse errors ("eval", "command substitution"),
+  // as bash prints `NAME: eval: line N: ...'.
+  std::string error_context;
   // "NAME: line N: " prefix that bash prints before runtime errors.
   std::string err_prefix() const {
     return shell_name + ": line " + std::to_string(cur_lineno > 0 ? cur_lineno : 1) + ": ";

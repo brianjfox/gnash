@@ -781,9 +781,17 @@ int bi_unset(Shell &sh, const std::vector<std::string> &argv) {
 // Quote a scalar value for `set' output: bare if it is "simple", else single
 // quoted with embedded quotes escaped (matching bash).
 std::string set_quote(const std::string &v) {
+  // bash's sh_single_quote conventions: a lone single quote prints as \';
+  // `~' and `#' only force quoting at the start of the value.
+  if (v == "'") return "\\'";
   bool simple = true;  // an empty value prints bare (name=)
-  for (unsigned char c : v)
-    if (!(std::isalnum(c) || std::strchr("_-./:=+,%@", c))) { simple = false; break; }
+  for (size_t i = 0; i < v.size(); i++) {
+    unsigned char c = static_cast<unsigned char>(v[i]);
+    if (std::isalnum(c) || std::strchr("_-./:=+,%@^", c) != nullptr) continue;
+    if ((c == '~' || c == '#') && i != 0) continue;
+    simple = false;
+    break;
+  }
   if (simple) return v;
   std::string r = "'";
   for (char c : v) { if (c == '\'') r += "'\\''"; else r += c; }
@@ -2799,7 +2807,10 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
     sh.continue_count = argv.size() > 1 ? std::atoi(argv[1].c_str()) : 1;
     st = 0;
   } else if (cmd == "eval") {
+    std::string saved_ctx = sh.error_context;
+    sh.error_context = "eval";  // parse errors report `NAME: eval: line N: ...'
     st = sh.run_string(join(argv, 1));
+    sh.error_context = saved_ctx;
   } else if (cmd == "source" || cmd == ".") {
     if (argv.size() > 1) {
       // Like bash: a filename without a slash is looked up on PATH first, then
@@ -2839,7 +2850,8 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
   } else if (cmd == "local") {
     st = bi_declare(sh, argv, true, false);
   } else if (cmd == "declare" || cmd == "typeset") {
-    st = bi_declare(sh, argv, false, false);
+    // Inside a function, declare/typeset without -g makes the variable local.
+    st = bi_declare(sh, argv, sh.in_function(), false);
   } else if (cmd == "readonly") {
     st = bi_declare(sh, argv, false, true);
   } else if (cmd == "let") {

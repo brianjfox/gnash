@@ -654,11 +654,21 @@ int Executor::run_simple(const SimpleCommand *c) {
     sh_.positional = saved_pos;
     sh_.arg0 = saved_arg0;
     if (sh_.returning) { sh_.returning = false; status = sh_.exit_status; }
+    // In posix mode, assignments preceding a function call persist.
+    if (sh_.opt_posix) restore.clear();
     undo_temp();
   } else if ((apply_temp(), run_builtin(sh_, argv, &status))) {
     // A preceding `VAR=val builtin' applies to the builtin (e.g. IFS=, read),
-    // then is restored.
+    // then is restored -- except that posix mode makes assignments before the
+    // POSIX special builtins permanent.
     builtin = true;
+    if (sh_.opt_posix) {
+      static const std::set<std::string> kSpecial = {
+          ":",      ".",     "break", "continue", "eval",  "exec",
+          "exit",   "export", "readonly", "return", "set", "shift",
+          "source", "times", "trap",  "unset"};
+      if (kSpecial.count(argv[0])) restore.clear();
+    }
     undo_temp();
   } else {
     undo_temp();  // not a builtin after all: the external path sets its own env
@@ -798,6 +808,18 @@ int Executor::run_loop(const LoopCommand *c) {
 
 int Executor::run_for(const ForCommand *c) {
   int st = 0;
+  if (!c->is_arith && !c->var.empty()) {
+    // The loop variable must be a valid identifier (validated at execution,
+    // as bash does: `NAME: line N: \`x-y': not a valid identifier').
+    bool okname = std::isalpha(static_cast<unsigned char>(c->var[0])) || c->var[0] == '_';
+    for (char ch : c->var)
+      if (!(std::isalnum(static_cast<unsigned char>(ch)) || ch == '_')) okname = false;
+    if (!okname) {
+      std::fprintf(stderr, "%s`%s': not a valid identifier\n", sh_.err_prefix().c_str(),
+                   c->var.c_str());
+      return (sh_.last_status = 1);
+    }
+  }
   if (c->is_arith) {
     bool ok = true;
     // The three arithmetic sections undergo parameter/command expansion before

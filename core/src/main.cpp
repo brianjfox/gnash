@@ -371,6 +371,7 @@ int main(int argc, char **argv) {
     std::string cmd = idx < args.size() ? args[idx++] : "";
     if (idx < args.size()) {
       sh.arg0 = args[idx];
+      sh.shell_name = args[idx];  // $0 also names the shell in error messages
       sh.positional.assign(args.begin() + idx + 1, args.end());
     }
     sh.init_job_control(false);

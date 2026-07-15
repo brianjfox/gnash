@@ -59,6 +59,7 @@ struct Lexer {
   std::vector<Pending> pending;
   int awaiting = -1;  // -1 none, 0 <<, 1 <<-
   bool unterminated = false;
+  char unterm_close = 0;  // the closer we were looking for at EOF
   bool heredoc_eof = false;        // here-doc body delimited by end of input
   std::string heredoc_eof_delim;
   int heredoc_eof_line = 0;
@@ -103,7 +104,8 @@ struct Lexer {
   void scan_single(std::string &w) {
     w += in[pos++];  // '
     while (pos < n && in[pos] != '\'') w += in[pos++];
-    if (pos < n) w += in[pos++]; else unterminated = true;
+    if (pos < n) w += in[pos++];
+    else { unterminated = true; if (!unterm_close) unterm_close = '\''; }
   }
   void scan_backtick(std::string &w) {
     w += in[pos++];  // `
@@ -115,7 +117,8 @@ struct Lexer {
         w += in[pos++];
       }
     }
-    if (pos < n) w += in[pos++]; else unterminated = true;
+    if (pos < n) w += in[pos++];
+    else { unterminated = true; if (!unterm_close) unterm_close = '`'; }
   }
   void scan_paren(std::string &w) {  // pos at '('
     int depth = 0;
@@ -144,7 +147,7 @@ struct Lexer {
         pos++;
       }
     } while (pos < n && depth > 0);
-    if (depth > 0) unterminated = true;
+    if (depth > 0) { unterminated = true; if (!unterm_close) unterm_close = ')'; }
   }
   void scan_brace(std::string &w) {  // pos at '{'
     int depth = 0;
@@ -173,7 +176,7 @@ struct Lexer {
         pos++;
       }
     } while (pos < n && depth > 0);
-    if (depth > 0) unterminated = true;
+    if (depth > 0) { unterminated = true; if (!unterm_close) unterm_close = '}'; }
   }
   void scan_double(std::string &w) {
     w += in[pos++];  // "
@@ -198,7 +201,8 @@ struct Lexer {
         pos++;
       }
     }
-    if (pos < n) w += in[pos++]; else unterminated = true;
+    if (pos < n) w += in[pos++];
+    else { unterminated = true; if (!unterm_close) unterm_close = '"'; }
   }
   void scan_dollar_single(std::string &w) {  // pos at '$', next '\''
     w += in[pos++];  // $
@@ -211,7 +215,8 @@ struct Lexer {
         w += in[pos++];
       }
     }
-    if (pos < n) w += in[pos++]; else unterminated = true;
+    if (pos < n) w += in[pos++];
+    else { unterminated = true; if (!unterm_close) unterm_close = '\''; }
   }
 
   bool is_metachar(char c) {
@@ -473,6 +478,7 @@ struct Lexer {
     Token eof;
     eof.type = Tok::Eof;
     eof.lex_error = unterminated;
+    eof.lex_close = unterm_close;
     eof.heredoc_eof = heredoc_eof;
     eof.heredoc_eof_delim = heredoc_eof_delim;
     eof.heredoc_eof_line = heredoc_eof_line;
