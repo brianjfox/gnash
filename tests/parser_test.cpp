@@ -101,8 +101,8 @@ int main() {
   ok("[[ $x =~ ^ab.*$ ]]", "[[ $x =~ ^ab.*$ ]]");
 
   // arithmetic (( )) and arithmetic for
-  ok("(( x + 1 ))", "((x + 1))");
-  ok("(( i = 0 ))", "((i = 0))");
+  ok("(( x + 1 ))", "(( x + 1 ))");
+  ok("(( i = 0 ))", "(( i = 0 ))");
   // arithmetic sections are rendered faithfully to the source spacing, so a
   // glued operator like `<' (which the lexer splits) is re-glued, not spaced.
   ok("for ((i=0; i<10; i++)); do echo $i; done", "for ((i=0; i<10; i++)); do echo $i; done");

@@ -8,6 +8,7 @@
 // semantically faithful.
 
 #include "gnash/core/ast.hpp"
+#include "gnash/core/parser.hpp"
 
 namespace gnash::core {
 
@@ -156,9 +157,9 @@ void CondCommand::print(std::string &out) const {
 
 void ArithCommand::print(std::string &out) const {
   invert_prefix(this, out);
-  out += "((";
+  out += "(( ";
   out += expression;
-  out += "))";
+  out += " ))";
   print_redirects(redirects, out);
 }
 
@@ -195,6 +196,340 @@ void FunctionDef::print(std::string &out) const {
   out += " () ";
   if (body) body->print(out);
   print_redirects(redirects, out);
+}
+
+
+// ---- bash-format multi-line printing (print_cmd.c's named_function_string) --
+//
+// `type', `declare -f', and `set' display function bodies in bash's canonical
+// indented form; these must match bash byte-for-byte (including trailing
+// blanks after `NAME () ', `{ ', and `case W in ').
+
+namespace {
+
+std::string canonical_word(const std::string &w);
+
+struct MPrinter {
+  std::string out;
+  std::vector<const Redirect *> pending_heredocs;
+  bool last_was_heredoc = false;
+  bool last_was_amp = false;
+
+  void ind(int n) { out.append(static_cast<size_t>(n), ' '); }
+  void nl(int n) { out += '\n'; ind(n); }
+
+  void print_redir(const Redirect &r) {
+    out += ' ';
+    if (r.source_fd >= 0) out += std::to_string(r.source_fd);
+    switch (r.op) {
+      case RedirOp::HereDoc: out += "<<"; out += r.target.text; return;
+      case RedirOp::HereDocStrip: out += "<<-"; out += r.target.text; return;
+      case RedirOp::DupInput: out += "<&"; out += r.target.text; return;
+      case RedirOp::DupOutput: out += ">&"; out += r.target.text; return;
+      default: break;
+    }
+    out += op_string(r.op);
+    out += ' ';
+    out += r.target.text;
+  }
+
+  void print_redirs(const std::vector<Redirect> &rs) {
+    for (const Redirect &r : rs) {
+      print_redir(r);
+      if (r.op == RedirOp::HereDoc || r.op == RedirOp::HereDocStrip)
+        pending_heredocs.push_back(&r);
+    }
+  }
+
+  // Emit queued here-document bodies right after the command's line.
+  bool flush_heredocs() {
+    if (pending_heredocs.empty()) return false;
+    for (const Redirect *r : pending_heredocs) {
+      out += '\n';
+      out += r->heredoc_body;  // body lines keep their own newlines
+      out += r->target.text;
+    }
+    pending_heredocs.clear();
+    return true;
+  }
+
+  // One statement (a sequence element) at INDENT; records how it ended so the
+  // caller knows whether to append `;'.
+  void stmt(const Command *c, int I) {
+    last_was_amp = false;
+    inline_cmd(c, I);
+    last_was_heredoc = flush_heredocs();
+  }
+
+  // Statement sequences: each Semi-connected element on its own line.  The
+  // parser builds these left-associated, so recurse into both sides.
+  void list(const Command *c, int I) {
+    const auto *cn = dynamic_cast<const Connection *>(c);
+    if (cn && (cn->conn == Connector::Semi || cn->conn == Connector::Newline)) {
+      list(cn->first.get(), I);
+      if (cn->second) {
+        if (last_was_heredoc) { out += '\n'; nl(I); }
+        else if (last_was_amp) { nl(I); }
+        else { out += ';'; nl(I); }
+        list(cn->second.get(), I);
+      }
+      return;
+    }
+    if (cn && cn->conn == Connector::Amp) {
+      list(cn->first.get(), I);
+      if (!last_was_amp) out += " &";
+      last_was_amp = true;
+      last_was_heredoc = false;
+      if (cn->second) {
+        out += ' ';  // `a & b' stays on one line
+        last_was_amp = false;
+        list(cn->second.get(), I);
+      }
+      return;
+    }
+    stmt(c, I);
+  }
+
+  // Terminate a clause body (then/else/do): append `;' unless the last
+  // statement ended with `&' or a here-document.
+  void clause_semi() {
+    if (!last_was_amp && !last_was_heredoc) out += ';';
+  }
+
+  // Render one command; compounds span lines from INDENT.
+  void inline_cmd(const Command *c, int I) {
+    if (c == nullptr) return;
+    if (c->flags & CMD_INVERT_RETURN) out += "! ";
+    if (c->flags & CMD_TIME) out += (c->flags & CMD_TIME_POSIX) ? "time -p " : "time ";
+
+    if (const auto *sc = dynamic_cast<const SimpleCommand *>(c)) {
+      for (size_t i = 0; i < sc->words.size(); i++) {
+        if (i) out += ' ';
+        out += canonical_word(sc->words[i].text);
+      }
+      print_redirs(sc->redirects);
+      return;
+    }
+    if (const auto *cn = dynamic_cast<const Connection *>(c)) {
+      switch (cn->conn) {
+        case Connector::And:
+          inline_cmd(cn->first.get(), I);
+          out += " && ";
+          inline_cmd(cn->second.get(), I);
+          return;
+        case Connector::Or:
+          inline_cmd(cn->first.get(), I);
+          out += " || ";
+          inline_cmd(cn->second.get(), I);
+          return;
+        case Connector::Pipe:
+          inline_cmd(cn->first.get(), I);
+          out += " | ";
+          inline_cmd(cn->second.get(), I);
+          return;
+        case Connector::Amp:
+          inline_cmd(cn->first.get(), I);
+          out += " &";
+          last_was_amp = true;
+          if (cn->second) {
+            out += ' ';
+            inline_cmd(cn->second.get(), I);
+            last_was_amp = false;
+          }
+          return;
+        case Connector::Semi:
+        case Connector::Newline:
+          inline_cmd(cn->first.get(), I);
+          out += "; ";
+          inline_cmd(cn->second.get(), I);
+          return;
+      }
+      return;
+    }
+    if (const auto *g = dynamic_cast<const Group *>(c)) {
+      out += "{ ";
+      nl(I + 4);
+      list(g->body.get(), I + 4);
+      nl(I);
+      out += '}';
+      print_redirs(g->redirects);
+      return;
+    }
+    if (const auto *ss = dynamic_cast<const Subshell *>(c)) {
+      out += "( ";
+      inline_cmd(ss->body.get(), I);
+      out += " )";
+      print_redirs(ss->redirects);
+      return;
+    }
+    if (const auto *ic = dynamic_cast<const IfCommand *>(c)) {
+      out += "if ";
+      inline_line_here(ic->cond.get());
+      out += "; then";
+      nl(I + 4);
+      list(ic->then_part.get(), I + 4);
+      clause_semi();
+      nl(I);
+      if (ic->else_part) {
+        out += "else";
+        nl(I + 4);
+        list(ic->else_part.get(), I + 4);
+        clause_semi();
+        nl(I);
+      }
+      out += "fi";
+      print_redirs(ic->redirects);
+      return;
+    }
+    if (const auto *lc = dynamic_cast<const LoopCommand *>(c)) {
+      out += lc->until ? "until " : "while ";
+      inline_line_here(lc->cond.get());
+      out += "; do";
+      nl(I + 4);
+      list(lc->body.get(), I + 4);
+      clause_semi();
+      nl(I);
+      out += "done";
+      print_redirs(lc->redirects);
+      return;
+    }
+    if (const auto *fc = dynamic_cast<const ForCommand *>(c)) {
+      if (fc->is_arith) {
+        out += "for ((";
+        out += fc->a_init;
+        out += "; ";
+        out += fc->a_cond;
+        out += "; ";
+        out += fc->a_update;
+        out += "))";
+      } else {
+        out += fc->is_select ? "select " : "for ";
+        out += fc->var;
+        out += " in ";
+        if (fc->words_present) {
+          for (size_t i = 0; i < fc->words.size(); i++) {
+            if (i) out += ' ';
+            out += canonical_word(fc->words[i].text);
+          }
+        } else {
+          out += "\"$@\"";  // bash canonicalizes a bare `for i'
+        }
+        out += ';';
+      }
+      nl(I);
+      out += "do";
+      nl(I + 4);
+      list(fc->body.get(), I + 4);
+      clause_semi();
+      nl(I);
+      out += "done";
+      print_redirs(fc->redirects);
+      return;
+    }
+    if (const auto *cc = dynamic_cast<const CaseCommand *>(c)) {
+      out += "case ";
+      out += cc->word.text;
+      out += " in ";
+      for (const CaseClause &cl : cc->clauses) {
+        nl(I + 4);
+        for (size_t i = 0; i < cl.patterns.size(); i++) {
+          if (i) out += " | ";
+          out += cl.patterns[i].text;
+        }
+        out += ')';
+        out += '\n';
+        if (cl.body) {
+          ind(I + 8);
+          list(cl.body.get(), I + 8);
+        }
+        out += '\n';
+        ind(I + 4);
+        out += cl.terminator == 1 ? ";&" : cl.terminator == 2 ? ";;&" : ";;";
+      }
+      nl(I);
+      out += "esac";
+      print_redirs(cc->redirects);
+      return;
+    }
+    if (const auto *fd = dynamic_cast<const FunctionDef *>(c)) {
+      out += fd->name;
+      out += " () ";
+      out += '\n';
+      ind(I);
+      inline_cmd(fd->body.get(), I);
+      return;
+    }
+    // [[ ]] / (( )) / coproc / anything else: the single-line rendering.
+    std::string one;
+    c->print(one);
+    out += one;
+  }
+
+  // A condition (if/while) or subshell body on one line.
+  void inline_line_here(const Command *c) {
+    MPrinter sub;
+    sub.inline_line(c);
+    out += sub.out;
+  }
+  void inline_line(const Command *c) {
+    std::string one;
+    if (c) c->print(one);
+    out += one;
+  }
+};
+
+// Re-render `$(...)' command substitutions in W through the parser, as bash
+// prints the parsed form ("$( echo hi )" becomes "$(echo hi)").  On any parse
+// trouble the original text is kept.
+std::string canonical_word(const std::string &w) {
+  size_t at = w.find("$(");
+  if (at == std::string::npos) return w;
+  std::string out;
+  size_t i = 0;
+  while (i < w.size()) {
+    if (w[i] == '\'') {  // skip single-quoted spans
+      size_t j = w.find('\'', i + 1);
+      out += w.substr(i, j == std::string::npos ? std::string::npos : j - i + 1);
+      if (j == std::string::npos) return w;
+      i = j + 1;
+      continue;
+    }
+    if (w[i] == '$' && i + 1 < w.size() && w[i + 1] == '(' &&
+        !(i + 2 < w.size() && w[i + 2] == '(')) {
+      int depth = 0;
+      size_t j = i + 1;
+      for (; j < w.size(); j++) {
+        if (w[j] == '(') depth++;
+        else if (w[j] == ')' && --depth == 0) break;
+      }
+      if (j >= w.size()) return w;
+      std::string inner = w.substr(i + 2, j - (i + 2));
+      ParseResult pr = parse(inner);
+      if (pr.ok && pr.command) {
+        out += "$(";
+        std::string one;
+        pr.command->print(one);
+        out += one;
+        out += ')';
+      } else {
+        out += w.substr(i, j - i + 1);
+      }
+      i = j + 1;
+      continue;
+    }
+    out += w[i++];
+  }
+  return out;
+}
+
+}  // namespace
+
+std::string named_function_string(const std::string &name, const Command *body) {
+  MPrinter p;
+  p.out = name + " () ";
+  p.out += '\n';
+  p.inline_cmd(body, 0);
+  return p.out;
 }
 
 }  // namespace gnash::core

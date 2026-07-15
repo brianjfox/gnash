@@ -1190,12 +1190,15 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
   bool mk_array = false, mk_assoc = false, integer = false, readonly = force_ro;
   bool exported = false, global = false, local = force_local, nameref = false;
   bool lcase = false, ucase = false;  // -l lowercase / -u uppercase attribute
+  bool funcs = false, funcnames = false;  // -f (definitions) / -F (names)
   size_t i = 1;
   for (; i < argv.size(); i++) {
     const std::string &a = argv[i];
     if (a.size() >= 2 && a[0] == '-') {
       for (size_t k = 1; k < a.size(); k++) {
         switch (a[k]) {
+          case 'f': funcs = true; break;
+          case 'F': funcnames = true; break;
           case 'a': mk_array = true; break;
           case 'A': mk_assoc = true; break;
           case 'i': integer = true; break;
@@ -1213,6 +1216,27 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
       break;
     }
   }
+  // -f / -F: display function definitions or names.  With -x, restrict to
+  // exported functions (gnash doesn't export functions, so none qualify).
+  if (funcs || funcnames) {
+    int st = 0;
+    if (exported) return i >= argv.size() ? 0 : 1;
+    if (i >= argv.size()) {  // all functions
+      for (const auto &kv : sh.functions) {
+        if (funcnames) std::printf("declare -f %s\n", kv.first.c_str());
+        else std::printf("%s\n", named_function_string(kv.first, kv.second).c_str());
+      }
+      return 0;
+    }
+    for (; i < argv.size(); i++) {
+      auto it = sh.functions.find(argv[i]);
+      if (it == sh.functions.end()) { st = 1; continue; }
+      if (funcnames) std::printf("%s\n", argv[i].c_str());
+      else std::printf("%s\n", named_function_string(argv[i], it->second).c_str());
+    }
+    return st;
+  }
+
   for (; i < argv.size(); i++) {
     const std::string &a = argv[i];
     size_t nend = a.find_first_of("[=");
@@ -1357,8 +1381,8 @@ int bi_type(Shell &sh, const std::vector<std::string> &argv) {
         switch (L.kind) {
           case 'k': std::printf("%s is a shell keyword\n", n.c_str()); break;
           case 'f':
-            std::printf("%s is a function\n%s () %s\n", n.c_str(), n.c_str(),
-                        to_string(sh.functions[n]).c_str());
+            std::printf("%s is a function\n%s\n", n.c_str(),
+                        named_function_string(n, sh.functions[n]).c_str());
             break;
           case 'b': std::printf("%s is a shell builtin\n", n.c_str()); break;
           case 'F': std::printf("%s is %s\n", n.c_str(), L.text.c_str()); break;
