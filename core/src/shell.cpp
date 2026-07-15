@@ -205,20 +205,21 @@ void Shell::set_signal_trap(int signo, bool active) {
   sigaction(signo, &sa, nullptr);
 }
 
-void Shell::run_debug_trap(const std::string &cmd_text) {
+int Shell::run_debug_trap(const std::string &cmd_text) {
   auto it = traps.find("DEBUG");
-  if (it == traps.end() || in_debug_trap) return;
+  if (it == traps.end() || in_debug_trap) return 0;
   // Without functrace, the DEBUG trap fires only outside functions.
-  if (!opt_functrace && in_function()) return;
+  if (!opt_functrace && in_function()) return 0;
   in_debug_trap = true;
   bash_command = cmd_text;
   int saved = last_status;  // $? inside the trap is the previous command's status
   int saved_line = cur_lineno;  // the trap must not leak its own line numbers
   std::string body = it->second;
-  run_string(body);
+  int st = run_string(body);
   last_status = saved;  // the trap does not alter $? for the upcoming command
   cur_lineno = saved_line;
   in_debug_trap = false;
+  return st;
 }
 
 void Shell::run_pending_traps() {
@@ -994,7 +995,19 @@ int Shell::run_string(const std::string &script) {
                       ? parse_with_aliases(script, aliases, global_aliases, suffix_aliases)
                       : parse(script);
   if (!r.ok) {
-    std::fprintf(stderr, "gnash: syntax error: %s\n", r.error.c_str());
+    // bash's format: `NAME: [-c: ]line N: syntax error: MSG' per message line.
+    std::string pfx = shell_name + ": " +
+                      (invocation_char == 'c' ? std::string("-c: ") : std::string()) +
+                      "line " + std::to_string(lineno_base + (r.error_line > 0 ? r.error_line : 1)) +
+                      ": ";
+    size_t p0 = 0;
+    while (p0 <= r.error.size()) {
+      size_t nl = r.error.find('\n', p0);
+      std::string line = r.error.substr(p0, nl == std::string::npos ? std::string::npos : nl - p0);
+      std::fprintf(stderr, "%ssyntax error: %s\n", pfx.c_str(), line.c_str());
+      if (nl == std::string::npos) break;
+      p0 = nl + 1;
+    }
     last_status = 2;
     return 2;
   }

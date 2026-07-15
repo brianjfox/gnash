@@ -350,9 +350,10 @@ int Executor::run_connection(const Connection *c) {
       }
       // Background the first command in its own process group.
       std::string cmd = to_string(c->first.get());
+      bool jc = sh_.job_control;
       pid_t pid = fork();
       if (pid == 0) {
-        setpgid(0, 0);
+        if (jc) setpgid(0, 0);
         signal(SIGINT, SIG_DFL);
         signal(SIGQUIT, SIG_DFL);
         signal(SIGTSTP, SIG_DFL);
@@ -363,7 +364,7 @@ int Executor::run_connection(const Connection *c) {
         std::fflush(nullptr);
         _exit(s & 0xff);
       }
-      setpgid(pid, pid);
+      if (jc) setpgid(pid, pid);
       sh_.last_bg_pid = pid;
       Shell::Job *j = sh_.add_job(pid, {pid}, cmd, true);
       if (sh_.interactive) std::fprintf(stderr, "[%d] %ld\n", j->id, static_cast<long>(pid));
@@ -395,7 +396,7 @@ int Executor::run_pipeline(const Connection *c) {
     pid_t pid = fork();
     if (pid == 0) {
       pid_t me = getpid();
-      setpgid(me, pgid == 0 ? me : static_cast<pid_t>(pgid));
+      if (sh_.job_control) setpgid(me, pgid == 0 ? me : static_cast<pid_t>(pgid));
       if (sh_.job_control) {
         signal(SIGINT, SIG_DFL);
         signal(SIGQUIT, SIG_DFL);
@@ -418,7 +419,7 @@ int Executor::run_pipeline(const Connection *c) {
       _exit(s & 0xff);
     }
     if (pgid == 0) pgid = pid;
-    setpgid(pid, static_cast<pid_t>(pgid));
+    if (sh_.job_control) setpgid(pid, static_cast<pid_t>(pgid));
     pids.push_back(pid);
     if (prev_read != -1) close(prev_read);
     if (i + 1 < n) { close(pipefd[1]); prev_read = pipefd[0]; }
@@ -467,8 +468,12 @@ int Executor::run_simple(const SimpleCommand *c) {
   // DEBUG trap: fires before the command, with $BASH_COMMAND set.  If the trap
   // runs `return'/`exit', skip the command and let the unwind propagate.
   if (sh_.traps.count("DEBUG") && !sh_.in_debug_trap) {
-    sh_.run_debug_trap(to_string(c));
+    int tst = sh_.run_debug_trap(to_string(c));
     if (unwinding()) return sh_.last_status;
+    // shopt -s extdebug: a non-zero DEBUG trap status skips the command.
+    auto ed = sh_.shopt_opts.find("extdebug");
+    if (tst != 0 && ed != sh_.shopt_opts.end() && ed->second)
+      return sh_.last_status;
   }
   Expander ex(sh_);
   // Reap any <(...) / >(...) set up for this command once it (and any function
@@ -681,7 +686,7 @@ int Executor::run_simple(const SimpleCommand *c) {
     // external command, in its own process group
     pid_t pid = fork();
     if (pid == 0) {
-      setpgid(0, 0);
+      if (sh_.job_control) setpgid(0, 0);
       if (sh_.job_control) {
         signal(SIGINT, SIG_DFL);
         signal(SIGQUIT, SIG_DFL);
@@ -707,7 +712,7 @@ int Executor::run_simple(const SimpleCommand *c) {
                      std::strerror(errno));
       _exit(errno == EACCES ? 126 : 127);
     }
-    setpgid(pid, pid);
+    if (sh_.job_control) setpgid(pid, pid);
     if (sh_.job_control) tcsetpgrp(sh_.job_terminal, pid);
     int wst = 0;
     waitpid(pid, &wst, WUNTRACED);
@@ -833,17 +838,39 @@ int Executor::run_for(const ForCommand *c) {
 int Executor::run_case(const CaseCommand *c) {
   Expander ex(sh_);
   std::string word = ex.expand_no_split(c->word.text);
-  for (const CaseClause &cl : c->clauses) {
+  int st = 0;
+  size_t i = 0;
+  while (i < c->clauses.size()) {
+    const CaseClause &cl = c->clauses[i];
+    bool m = false;
     for (const Word &pat : cl.patterns) {
-      std::string p = ex.expand_no_split(pat.text);
+      std::string p = ex.expand_pattern(pat.text);
       std::string pp = p, ww = word;
       if (strmatch(pp.data(), ww.data(), FNM_EXTMATCH) == 0) {
-        int st = cl.body ? run(cl.body.get()) : 0;
-        return st;
+        m = true;
+        break;
       }
     }
+    if (!m) {
+      i++;
+      continue;
+    }
+    st = cl.body ? run(cl.body.get()) : 0;
+    if (unwinding()) return st;
+    // `;&' falls through into the following clause's body (and keeps falling
+    // while those clauses also end in `;&').
+    while (c->clauses[i].terminator == 1 && i + 1 < c->clauses.size()) {
+      i++;
+      st = c->clauses[i].body ? run(c->clauses[i].body.get()) : 0;
+      if (unwinding()) return st;
+    }
+    if (c->clauses[i].terminator == 2) {  // `;;&': resume testing patterns
+      i++;
+      continue;
+    }
+    return st;
   }
-  return 0;
+  return st;
 }
 
 int Executor::run_funcdef(const FunctionDef *c) {

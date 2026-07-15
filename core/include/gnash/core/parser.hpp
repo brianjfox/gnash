@@ -20,7 +20,8 @@ namespace gnash::core {
 struct ParseResult {
   CommandPtr command;   // null for empty input
   bool ok = true;
-  std::string error;    // set when ok == false
+  std::string error;    // set when ok == false (may be multiple lines)
+  int error_line = 0;   // 1-based source line of the failure
   bool incomplete = false;  // input ended mid-construct (needs more lines)
   // A here-document body was delimited by end of input: ok stays true and the
   // command is runnable (bash runs it with a warning), but incomplete is also

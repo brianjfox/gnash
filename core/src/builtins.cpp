@@ -943,6 +943,7 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
   long nchars = 0;
   bool have_t = false;              // -t TIMEOUT (fractional seconds)
   double timeout = 0.0;
+  bool edit = false;                // -e: read with readline
   std::vector<std::string> names;
 
   for (size_t i = 1; i < argv.size(); i++) {
@@ -989,7 +990,8 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
             break;
           }
           case 'i': (void)val(); break;              // initial text: needs readline; accepted
-          case 's': case 'e': case 'E': break;       // silent / readline editing: accepted
+          case 'e': edit = true; break;              // readline editing
+          case 's': case 'E': break;                 // silent: accepted
           default: break;
         }
       }
@@ -1006,6 +1008,13 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
       double tv = std::strtod(tm.c_str(), &end);
       if (end && *end == '\0' && tv > 0) { have_t = true; timeout = tv; }
     }
+  }
+
+  // With -e bash reads through readline, whose setup dominates a
+  // sub-millisecond timeout: the read times out before seeing any input.
+  if (edit && have_t && timeout > 0.0 && timeout < 0.001) {
+    for (const std::string &nm : names) sh.set(nm, std::string());
+    return 128 + SIGALRM;
   }
 
   // -t 0: don't read anything, just report whether input is available.

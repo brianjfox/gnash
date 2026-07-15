@@ -29,6 +29,12 @@ class Expander {
   // expansion (used for redirect filenames).
   std::string expand_no_split(const std::string &text, bool do_glob = false);
 
+  // Expand a word that will be used as a match pattern (case patterns,
+  // [[ == ]] right sides): quoted characters are backslash-escaped in the
+  // result so the matcher treats them literally, while unquoted glob
+  // characters stay active.
+  std::string expand_pattern(const std::string &text);
+
   // Assignment RHS: tilde + parameter/command/arith + quote removal, no split,
   // no glob.
   std::string expand_assignment(const std::string &text);

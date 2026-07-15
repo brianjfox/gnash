@@ -123,7 +123,9 @@ class Shell {
   void run_pending_traps();                   // run traps for signals received
   // Run the DEBUG trap (if set) before a command, with $BASH_COMMAND set to
   // CMD_TEXT.  Only fires inside functions when functrace (-T) is enabled.
-  void run_debug_trap(const std::string &cmd_text);
+  // Run the DEBUG trap; returns its exit status (extdebug: non-zero skips
+  // the command about to run).
+  int run_debug_trap(const std::string &cmd_text);
 
   // --- job control -------------------------------------------------------
   struct Job {
