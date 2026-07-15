@@ -458,7 +458,7 @@ int Executor::run_pipeline(const Connection *c) {
 }
 
 int Executor::run_simple(const SimpleCommand *c) {
-  if (c->line > 0) sh_.cur_lineno = c->line;  // $LINENO
+  if (c->line > 0) sh_.cur_lineno = sh_.lineno_base + c->line;  // $LINENO
   // Consume the exec-in-place permission for *this* command up front, so it
   // applies only to a direct external here -- never to commands that a builtin
   // (eval/source) or function invoked by this command goes on to run.
@@ -560,7 +560,9 @@ int Executor::run_simple(const SimpleCommand *c) {
     apply_redirects(sh_, c->redirects, saved);
     for (const auto &a : assigns) sh_.set(a.first, a.second);
     restore_fds(saved);
-    return (sh_.last_status = sh_.cmdsub_ran ? sh_.last_cmdsub_status : 0);
+    int st = sh_.cmdsub_ran ? sh_.last_cmdsub_status : 0;
+    if (c->flags & CMD_INVERT_RETURN) st = st ? 0 : 1;  // a bare `!'
+    return (sh_.last_status = st);
   }
 
   // A bare job spec in command position (`%1', `%', `%%', `%-', `%name') is a

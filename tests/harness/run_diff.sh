@@ -289,6 +289,18 @@ source /tmp/gnrx3.$$; rm -f /tmp/gnrx3.$$'
   'LC_ALL=C printf "<%q>\n" "$(printf "tab\thigh\200")"'
   # printf %b arguments still handle \0NNN
   'printf "%b\n" "A\0101Z" | cat -v'
+  # ${!name} indirection, with operators, and ${!prefix*} name listing
+  'x=y; y=hello; echo "${!x}"'
+  'x=unset_zz; echo "${!x:-fallback}"'
+  'ab1=v1; ab2=v2; echo ${!ab*}'
+  'set -- one two; n=2; echo "${!n}"'
+  # a bare `!' negates the null command; `! cmd' inverts
+  '! ; echo $?'
+  '! true; echo $?'
+  '! false; echo $?'
+  # a here-document delimited by end-of-file still runs (with a warning)
+  'cat <<XEOF 2>/dev/null
+line1'
 )
 
 fails=0

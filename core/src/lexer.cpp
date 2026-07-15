@@ -59,6 +59,9 @@ struct Lexer {
   std::vector<Pending> pending;
   int awaiting = -1;  // -1 none, 0 <<, 1 <<-
   bool unterminated = false;
+  bool heredoc_eof = false;        // here-doc body delimited by end of input
+  std::string heredoc_eof_delim;
+  int heredoc_eof_line = 0;
   std::size_t line_scanned = 0;  // bytes already counted for line numbering
   int cur_line = 1;              // 1-based line at line_scanned
 
@@ -399,7 +402,13 @@ struct Lexer {
         body += '\n';
         if (!had_nl) break;  // EOF before delimiter
       }
-      if (!found) unterminated = true;  // delimiter never seen: need more input
+      if (!found && !heredoc_eof) {
+        // Delimiter never seen: end-of-input delimits the body (bash warns).
+        // Line readers treat this as incomplete and keep accumulating input.
+        heredoc_eof = true;
+        heredoc_eof_delim = pd.delim;
+        heredoc_eof_line = out[pd.index].line;
+      }
       out[pd.index].heredoc_body = body;
       out[pd.index].has_heredoc = true;
       out[pd.index].heredoc_quoted = pd.quoted;
@@ -457,9 +466,16 @@ struct Lexer {
         awaiting = -1;
       }
     }
+    // A here-doc redirection with no newline after it (input ended on the
+    // command line): collect now so the empty body and the end-of-input
+    // condition are recorded.
+    if (!pending.empty()) collect_heredocs();
     Token eof;
     eof.type = Tok::Eof;
     eof.lex_error = unterminated;
+    eof.heredoc_eof = heredoc_eof;
+    eof.heredoc_eof_delim = heredoc_eof_delim;
+    eof.heredoc_eof_line = heredoc_eof_line;
     out.push_back(eof);
   }
 };

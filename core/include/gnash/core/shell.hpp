@@ -241,6 +241,25 @@ class Shell {
   bool opt_noexec = false;    // -n: read/parse commands but don't execute them
   bool opt_pipefail = false;  // -o pipefail: pipeline status = last non-zero stage
   bool opt_functrace = false; // -T / -o functrace: DEBUG/RETURN traps inherited
+  bool opt_history = false;     // -o history: record command lines in the history
+  bool opt_histexpand = false;  // -H / -o histexpand: `!' history expansion
+  bool history_loaded = false;  // $HISTFILE has been read into the history list
+  int hist_new_entries = 0;     // entries added this session (for `history -a')
+  int lineno_base = 0;          // added to AST line numbers ($LINENO, errors) when
+                                // a script runs command-by-command
+
+  bool opt_posix = false;       // -o posix
+  // Turn on `-o history': the first enable loads $HISTFILE and applies the
+  // $HISTSIZE stifle, as bash does.
+  void enable_history();
+  // Point the history library's expansion characters at $histchars.
+  void sync_histchars();
+  // Add LINE to the history honoring $HISTCONTROL and $HISTIGNORE; true if
+  // it was saved.
+  bool add_history_line(const std::string &line);
+  // Append a continuation LINE of a multi-line command to the newest history
+  // entry (shopt cmdhist), joined with bash's delimiting rules.
+  void append_history_line(const std::string &line);
   int errexit_suppress = 0;   // >0 while a command's status is being checked
   std::string bash_command;   // $BASH_COMMAND: the command currently executing
   bool in_debug_trap = false; // guard: don't fire the DEBUG trap within itself
@@ -271,6 +290,9 @@ class Shell {
 
   // Parse and execute a script; returns the final exit status.
   int run_string(const std::string &script);
+  // Run a script buffer command-by-command (as bash reads scripts), so history
+  // recording/expansion and mid-script alias definitions behave like bash.
+  int run_script_lines(const std::string &text);
   // Command substitution: run SCRIPT, return its stdout (trailing newlines
   // stripped); *status gets the exit status.
   std::string run_and_capture(const std::string &script, int *status);

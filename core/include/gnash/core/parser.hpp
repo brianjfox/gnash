@@ -22,6 +22,12 @@ struct ParseResult {
   bool ok = true;
   std::string error;    // set when ok == false
   bool incomplete = false;  // input ended mid-construct (needs more lines)
+  // A here-document body was delimited by end of input: ok stays true and the
+  // command is runnable (bash runs it with a warning), but incomplete is also
+  // set so line-at-a-time readers keep accumulating input.
+  bool heredoc_eof = false;
+  std::string heredoc_eof_delim;
+  int heredoc_eof_line = 0;
 };
 
 // Parse a complete program.

@@ -267,6 +267,11 @@ int run_interactive(Shell &sh) {
   if (histfile.empty()) histfile = history_path();
   if (!histfile.empty()) read_history(histfile.c_str());
   using_history();
+  // Interactive shells default to `-o history' and `-H'; the file was loaded
+  // above, so a later `set -o history' must not reload it.
+  sh.opt_history = true;
+  sh.opt_histexpand = true;
+  sh.history_loaded = true;
   // Keep at most $HISTSIZE entries in memory (bash default 500).
   int histsize = std::atoi(sh.get("HISTSIZE").c_str());
   if (histsize > 0) stifle_history(histsize);
@@ -322,19 +327,23 @@ int run_interactive(Shell &sh) {
     std::free(line);
 
     // History (`!!', `!n', `^old^new^', ...) expansion.
-    char *expanded = nullptr;
-    int hr = history_expand(const_cast<char *>(input.c_str()), &expanded);
-    if (expanded) {
-      if (hr < 0) {
-        std::fprintf(stderr, "%s\n", expanded);
+    if (sh.opt_histexpand) {
+      sh.sync_histchars();
+      char *expanded = nullptr;
+      int hr = history_expand(const_cast<char *>(input.c_str()), &expanded);
+      if (expanded) {
+        if (hr < 0) {
+          std::fprintf(stderr, "%s\n", expanded);
+          std::free(expanded);
+          continue;
+        }
+        if (hr != 0) std::fprintf(stderr, "%s\n", expanded);  // echo the expansion
+        input = expanded;
         std::free(expanded);
-        continue;
-      }
-      input = expanded;
-      std::free(expanded);
-      if (hr == 2) {  // `:p' modifier -- print, don't execute
-        std::printf("%s\n", input.c_str());
-        continue;
+        if (hr == 2) {  // `:p' modifier -- print, don't execute (but record)
+          if (sh.opt_history) sh.add_history_line(input);
+          continue;
+        }
       }
     }
 
@@ -364,7 +373,8 @@ int run_interactive(Shell &sh) {
     }
     if (interrupted) continue;  // reprompt with PS1, discarding the partial command
 
-    if (input.find_first_not_of(" \t\n") != std::string::npos) add_history(input.c_str());
+    if (sh.opt_history && input.find_first_not_of(" \t\n") != std::string::npos)
+      sh.add_history_line(input);
     g_sigint_received = 0;  // start the command uninterrupted
     strmatch_set_interrupt(0);
     sh.run_string(input);

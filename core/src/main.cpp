@@ -392,7 +392,7 @@ int main(int argc, char **argv) {
     read_startup_files(sh, startup_prefix, login, false, sopts);
     // Base frame for BASH_SOURCE[0]/$0 = the script path, as bash reports it.
     sh.push_src_frame("main", args[idx], 0, false);
-    sh.run_string(ss.str());
+    sh.run_script_lines(ss.str());
   } else {
     // Read commands from standard input.
     sh.invocation_char = 's';  // $- includes `s' when reading from stdin
@@ -437,7 +437,7 @@ int main(int argc, char **argv) {
     read_startup_files(sh, startup_prefix, login, false, sopts);
     std::ostringstream ss;
     ss << std::cin.rdbuf();
-    sh.run_string(ss.str());
+    sh.run_script_lines(ss.str());
   }
 
   int rc = sh.exiting ? sh.exit_status : sh.last_status;

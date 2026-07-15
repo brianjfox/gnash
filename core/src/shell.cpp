@@ -17,6 +17,7 @@
 #include <sys/wait.h>
 
 #include "readline/history.h"
+#include "strmatch.h"
 
 #include "gnash/core/csh.hpp"
 #include "gnash/core/executor.hpp"
@@ -558,6 +559,11 @@ bool Shell::set(const std::string &n_in, const std::string &v) {
     return false;
   }
   var.value = v;
+  // Assigning HISTSIZE re-stifles the loaded history list, as bash does.
+  if (n == "HISTSIZE" && history_loaded) {
+    int hs = std::atoi(v.c_str());
+    if (hs >= 0) stifle_history(hs);
+  }
   return true;
 }
 
@@ -635,6 +641,311 @@ void Shell::set_personality(const std::string &name) {
   if (on_personality_change) on_personality_change();
 }
 
+// ---- history wiring (bash's bashhist.c equivalents) ------------------------
+
+namespace {
+
+Shell *g_hist_shell = nullptr;  // for the inhibit callback below
+
+// Port of bash's bash_history_inhibit_expansion(): the `!' at STRING[I] is
+// not a history expansion -- glob negation, ${!var}, $!, extglob !(...), or
+// shell-quoted (scanning with quote rules, including fresh quoting contexts
+// inside $(...) and backquotes; posix mode treats double quotes as quoting
+// the expansion character).
+int gnash_history_inhibit_expansion(char *string, int i) {
+  if (i > 0 && string[i - 1] == '[' && std::strchr(string + i + 1, ']')) return 1;
+  if (i > 1 && string[i - 1] == '{' && string[i - 2] == '$' &&
+      std::strchr(string + i + 1, '}'))
+    return 1;
+  if (i > 0 && string[i - 1] == '$') return 1;
+  if (string[i + 1] == '(' && std::strchr(string + i + 2, ')')) return 1;
+
+  bool posix = g_hist_shell && g_hist_shell->opt_posix;
+  int dquote = history_quoting_state == '"';
+  std::vector<int> saved_dq;  // dquote state saved at each $( / ` level
+  bool in_backq = false;
+  size_t p = 0;
+  const size_t target = static_cast<size_t>(i);
+  while (string[p] && p < target) {
+    char c = string[p];
+    if (c == '\\') {
+      p += string[p + 1] ? 2 : 1;
+      continue;
+    }
+    if (c == '\'' && !dquote) {  // skip the single-quoted section
+      p++;
+      while (string[p] && string[p] != '\'') p++;
+      if (string[p]) p++;
+      continue;
+    }
+    if (c == '"') {
+      if (posix) {  // posix: double quotes quote the expansion char entirely
+        p++;
+        while (string[p] && string[p] != '"') {
+          if (string[p] == '\\' && string[p + 1]) p++;
+          p++;
+        }
+        if (string[p]) p++;
+      } else {
+        dquote = 1 - dquote;
+        p++;
+      }
+      continue;
+    }
+    if (c == '$' && string[p + 1] == '(') {  // fresh quoting context
+      saved_dq.push_back(dquote);
+      dquote = 0;
+      p += 2;
+      continue;
+    }
+    if (c == ')' && !saved_dq.empty()) {
+      dquote = saved_dq.back();
+      saved_dq.pop_back();
+      p++;
+      continue;
+    }
+    if (c == '`') {
+      if (in_backq && !saved_dq.empty()) {
+        dquote = saved_dq.back();
+        saved_dq.pop_back();
+      } else {
+        saved_dq.push_back(dquote);
+        dquote = 0;
+      }
+      in_backq = !in_backq;
+      p++;
+      continue;
+    }
+    p++;
+  }
+  if (p != target) return 1;                    // quoted away: not an expansion
+  if (dquote && string[i + 1] == '"') return 1; // `!"' inside double quotes
+  return 0;
+}
+
+}  // namespace
+
+void Shell::enable_history() {
+  opt_history = true;
+  if (history_loaded) return;
+  history_loaded = true;
+  using_history();
+  std::string hf = get("HISTFILE");
+  if (!hf.empty()) read_history(hf.c_str());
+  if (is_set("HISTSIZE")) {
+    int hs = std::atoi(get("HISTSIZE").c_str());
+    if (hs >= 0) stifle_history(hs);
+  }
+  using_history();
+}
+
+void Shell::sync_histchars() {
+  history_quotes_inhibit_expansion = 1;
+  using_history();  // `!!' and relative events resolve from the end of the list
+  // bash's no-expand set and inhibition callback (globs, ${!var}, quoting).
+  history_no_expand_chars = const_cast<char *>(" \t\n\r=;&|()<>");
+  history_inhibit_expansion_function = gnash_history_inhibit_expansion;
+  g_hist_shell = this;
+  std::string hc = get("histchars");
+  history_expansion_char = hc.size() > 0 ? hc[0] : '!';
+  history_subst_char = hc.size() > 1 ? hc[1] : '^';
+  history_comment_char = hc.size() > 2 ? hc[2] : '#';
+}
+
+bool Shell::add_history_line(const std::string &line) {
+  // $HISTCONTROL: ignorespace / ignoredups / ignoreboth (erasedups not modeled).
+  std::string hc = get("HISTCONTROL");
+  bool ign_space = hc.find("ignorespace") != std::string::npos ||
+                   hc.find("ignoreboth") != std::string::npos;
+  bool ign_dups = hc.find("ignoredups") != std::string::npos ||
+                  hc.find("ignoreboth") != std::string::npos;
+  if (ign_space && !line.empty() && (line[0] == ' ' || line[0] == '\t')) return false;
+
+  const char *prev = nullptr;
+  if (history_length > 0) {
+    HIST_ENTRY *e = history_get(history_base + history_length - 1);
+    if (e) prev = e->line;
+  }
+  if (ign_dups && prev && line == prev) return false;
+
+  // $HISTIGNORE: colon-separated patterns; `&' matches the previous entry.
+  std::string hi = get("HISTIGNORE");
+  size_t p = 0;
+  while (p <= hi.size() && !hi.empty()) {
+    size_t q = hi.find(':', p);
+    std::string pat = hi.substr(p, q == std::string::npos ? std::string::npos : q - p);
+    if (pat == "&") {
+      if (prev && line == prev) return false;
+    } else if (!pat.empty() &&
+               strmatch(const_cast<char *>(pat.c_str()), const_cast<char *>(line.c_str()),
+                        FNM_EXTMATCH) == 0) {
+      return false;
+    }
+    if (q == std::string::npos) break;
+    p = q + 1;
+  }
+
+  add_history(line.c_str());
+  hist_new_entries++;
+  return true;
+}
+
+void Shell::append_history_line(const std::string &line) {
+  if (history_length == 0) return;
+  HIST_ENTRY *e = history_get(history_base + history_length - 1);
+  if (e == nullptr || e->line == nullptr) return;
+  std::string cur = e->line;
+
+  // Join with bash's history_delimiting_chars, approximately: no semicolon
+  // after an operator or after a keyword that a command follows directly.
+  std::string delim = "; ";
+  std::string t = cur;
+  while (!t.empty() && (t.back() == ' ' || t.back() == '\t')) t.pop_back();
+  if (!t.empty() && t.back() == '\\' && (t.size() < 2 || t[t.size() - 2] != '\\')) {
+    // The previous line ended in an escaped newline: splice directly.
+    t.pop_back();
+    cur = t;
+    delim = "";
+  } else if (!t.empty() && std::strchr(";&|({", t.back())) {
+    delim = " ";
+  } else {
+    size_t ws = t.find_last_of(" \t;");
+    std::string w = ws == std::string::npos ? t : t.substr(ws + 1);
+    if (w == "do" || w == "then" || w == "else" || w == "elif" || w == "in" ||
+        w == "while" || w == "until" || w == "if" || w == "for" || w == "case" ||
+        w == "select" || w == "function")
+      delim = " ";
+  }
+  if (line.find_first_not_of(" \t") == std::string::npos) return;  // blank line
+
+  std::string joined = cur + delim + line;
+  using_history();
+  HIST_ENTRY *old = replace_history_entry(history_length - 1, joined.c_str(),
+                                          e->data);
+  if (old) free_history_entry(old);
+}
+
+// True if TEXT ends inside a quoted string, command/process substitution, or
+// backquotes -- contexts where bash does not history-expand continuation lines.
+static bool in_open_context(const std::string &t) {
+  bool squote = false, dquote = false;
+  int depth = 0;
+  for (size_t i = 0; i < t.size(); i++) {
+    char c = t[i];
+    if (c == '\\' && !squote) { if (i + 1 < t.size()) i++; continue; }
+    if (squote) { if (c == '\'') squote = false; continue; }
+    if (c == '\'' && !dquote) { squote = true; continue; }
+    if (c == '"') { dquote = !dquote; continue; }
+    if (c == '`') { depth = depth ? depth - 1 : depth + 1; continue; }
+    if (c == '(' && i > 0 && (t[i - 1] == '$' || t[i - 1] == '<' || t[i - 1] == '>')) {
+      depth++;
+      continue;
+    }
+    if (c == ')' && depth > 0) depth--;
+  }
+  return squote || dquote || depth > 0;
+}
+
+int Shell::run_script_lines(const std::string &text) {
+  if (is_csh()) return run_string(text);  // csh runs whole-buffer
+
+  size_t pos = 0;
+  int lineno = 0;        // 1-based physical line being read
+  int pending_line = 1;  // first line of the accumulating command
+  std::string pending;
+  bool cont_bslash = false;  // previous line ended in a line continuation
+  bool first_line_saved = false;  // this command's first line is in the history
+  int st = last_status;
+
+  auto flush = [&]() {
+    cont_bslash = false;
+    first_line_saved = false;
+    if (pending.find_first_not_of(" \t\n") == std::string::npos) {
+      pending.clear();
+      return;
+    }
+    lineno_base = pending_line - 1;
+    st = run_string(pending);
+    lineno_base = 0;
+    pending.clear();
+  };
+
+  while (pos < text.size() && !exiting) {
+    size_t nl = text.find('\n', pos);
+    std::string line = (nl == std::string::npos) ? text.substr(pos) : text.substr(pos, nl - pos);
+    pos = (nl == std::string::npos) ? text.size() : nl + 1;
+    lineno++;
+
+    bool fresh = pending.empty();
+    if (fresh) pending_line = lineno;
+
+    // With `-o history' each line is preprocessed as it is read (bash's
+    // pre_process_line): `!' expansion with the expanded line echoed to
+    // stderr, then recorded in the history -- all before execution.
+    if (opt_history && line.find_first_not_of(" \t") != std::string::npos) {
+      if (opt_histexpand && (fresh || !in_open_context(pending))) {
+        sync_histchars();
+        cur_lineno = lineno;  // the expansion error prefix names this line
+        // Expanding a later line of a multi-line command: history references
+        // must resolve to the previous complete command, not the partial one,
+        // so lift the partial entry out for the duration of the expansion.
+        HIST_ENTRY *hidden = nullptr;
+        if (!fresh && first_line_saved && history_length > 0) {
+          hidden = remove_history(history_length - 1);
+          using_history();
+        }
+        char *hv = nullptr;
+        int hr = history_expand(const_cast<char *>(line.c_str()), &hv);
+        if (hidden) {
+          add_history(hidden->line);
+          free_history_entry(hidden);
+          using_history();
+        }
+        if (hr < 0) {
+          std::fprintf(stderr, "%s%s\n", err_prefix().c_str(), hv ? hv : "history expansion failed");
+          std::free(hv);
+          st = last_status = 1;
+          continue;  // the failed line is neither run nor recorded
+        }
+        if (hr != 0 && hv) std::fprintf(stderr, "%s\n", hv);  // echo the expansion
+        if (hv) { line = hv; std::free(hv); }
+        if (hr == 2) {  // `:p' modifier: print and record, don't execute
+          if (fresh) add_history_line(line);
+          continue;
+        }
+      }
+      if (fresh) {
+        first_line_saved = add_history_line(line);
+      } else if (first_line_saved &&
+                 !(line.find_first_not_of(" \t") != std::string::npos &&
+                   line[line.find_first_not_of(" \t")] == '#')) {
+        // shopt cmdhist: later lines of the command extend its history entry
+        // (pure comment lines are not appended).
+        append_history_line(line);
+      }
+    }
+
+    if (cont_bslash) pending += line;
+    else if (pending.empty()) pending = line;
+    else pending += "\n" + line;
+
+    // A trailing (unescaped) backslash continues onto the next line.
+    size_t nbs = 0;
+    while (nbs < pending.size() && pending[pending.size() - 1 - nbs] == '\\') nbs++;
+    if (nbs % 2 == 1) {
+      pending.pop_back();
+      cont_bslash = true;
+      continue;
+    }
+    cont_bslash = false;
+
+    if (pos < text.size() && parse(pending).incomplete) continue;
+    flush();
+  }
+  if (!exiting) flush();  // whatever remains (an incomplete tail still errors)
+  return st;
+}
+
 int Shell::run_string(const std::string &script) {
   if (is_csh()) return run_csh(*this, script);  // csh is a different language
   // Aliases are expanded only when interactive or `shopt -s expand_aliases'.
@@ -650,6 +961,11 @@ int Shell::run_string(const std::string &script) {
     last_status = 2;
     return 2;
   }
+  if (r.heredoc_eof)  // run anyway, with bash's warning
+    std::fprintf(stderr,
+                 "%swarning: here-document at line %d delimited by end-of-file (wanted `%s')\n",
+                 err_prefix().c_str(), lineno_base + r.heredoc_eof_line,
+                 r.heredoc_eof_delim.c_str());
   if (!r.command) { subshell_leaf = false; return last_status; }
   const Command *c = r.command.get();
   retained.push_back(std::move(r.command));

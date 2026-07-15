@@ -219,7 +219,7 @@ std::string Expander::param_value(const std::string &name, bool &set, bool defau
     if (sh_.opt_verbose) f += 'v';
     if (sh_.opt_xtrace) f += 'x';
     f += 'B';                       // braceexpand: on by default
-    if (sh_.interactive) f += 'H';  // histexpand: on for interactive shells
+    if (sh_.opt_histexpand) f += 'H';  // histexpand (set -H; interactive default)
     if (sh_.invocation_char) f += sh_.invocation_char;
     return f;
   }
@@ -919,6 +919,31 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
   bool length = false;
   std::string b = body;
   if (b.size() > 1 && b[0] == '#') { length = true; b = b.substr(1); }
+
+  // ${!name} indirection and ${!prefix*}/${!prefix@} name listing.  A `['
+  // after the name is the ${!arr[@]} keys form, handled by the array path.
+  if (b.size() > 1 && b[0] == '!' &&
+      (std::isalpha(static_cast<unsigned char>(b[1])) || b[1] == '_')) {
+    size_t q = 1;
+    while (q < b.size() && (std::isalnum(static_cast<unsigned char>(b[q])) || b[q] == '_')) q++;
+    std::string iname = b.substr(1, q - 1);
+    if (q == b.size() || b[q] != '[') {
+      if (q + 1 == b.size() && (b[q] == '*' || b[q] == '@')) {
+        std::string names;
+        for (const auto &kv : sh.vars) {
+          if (kv.first.compare(0, iname.size(), iname) != 0) continue;
+          if (!names.empty()) names += ' ';
+          names += kv.first;
+        }
+        return names;
+      }
+      // The value of INAME is the parameter to expand; any operator that
+      // follows applies to the indirected parameter.
+      std::string target = sh.get(iname);
+      if (length) return std::to_string(expand_brace_body(ex, sh, target + b.substr(q)).size());
+      return expand_brace_body(ex, sh, target + b.substr(q));
+    }
+  }
 
   size_t p = 0;
   std::string name;
