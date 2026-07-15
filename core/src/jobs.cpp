@@ -15,6 +15,7 @@
 #include <cerrno>
 #include <csignal>
 #include <cstdio>
+#include <cstring>
 #include <cstdlib>
 #include <sys/wait.h>
 #include <termios.h>
@@ -44,6 +45,15 @@ void Shell::init_job_control(bool interactive_shell) {
     tcsetpgrp(job_terminal, shell_pgid);
     job_control = true;
   } else {
+    static bool warned = false;
+    if (interactive_shell && !warned) {
+      warned = true;
+      // Forced interactive (-i) without a terminal, as bash reports it (once).
+      std::fprintf(stderr, "%s: cannot set terminal process group (%d): %s\n",
+                   shell_name.c_str(), static_cast<int>(getpgrp()),
+                   std::strerror(ENOTTY));
+      std::fprintf(stderr, "%s: no job control in this shell\n", shell_name.c_str());
+    }
     job_control = false;
     shell_pgid = getpgrp();
   }

@@ -263,8 +263,11 @@ int run_interactive(Shell &sh) {
 
   // The history file is $HISTFILE (set per-personality in main, e.g. the bash
   // persona defaults to ~/.bash_history), falling back to the built-in default.
+  // $HISTFILE set-but-empty means no history file at all; only an unset
+  // HISTFILE falls back to the default path.
   std::string histfile = sh.get("HISTFILE");
-  if (histfile.empty()) histfile = history_path();
+  if (!sh.is_set("HISTFILE")) histfile = history_path();
+  history_multiline_entries = sh.is_set("HISTTIMEFORMAT") ? 1 : 0;
   if (!histfile.empty()) read_history(histfile.c_str());
   using_history();
   // Interactive shells default to `-o history' and `-H'; the file was loaded
@@ -320,7 +323,7 @@ int run_interactive(Shell &sh) {
       continue;
     }
     if (!line) {  // Ctrl-D on an empty line
-      std::printf("exit\n");
+      std::fprintf(stderr, "exit\n");
       break;
     }
     std::string input(line);
@@ -374,10 +377,11 @@ int run_interactive(Shell &sh) {
     if (interrupted) continue;  // reprompt with PS1, discarding the partial command
 
     if (sh.opt_history && input.find_first_not_of(" \t\n") != std::string::npos)
-      sh.add_history_line(input);
+      sh.hist_cur_cmd_index = sh.add_history_line(input) ? history_length - 1 : -1;
     g_sigint_received = 0;  // start the command uninterrupted
     strmatch_set_interrupt(0);
     sh.run_string(input);
+    sh.hist_cur_cmd_index = -1;
     if (g_sigint_received) {  // C-c aborted the command mid-run: reprompt cleanly
       g_sigint_received = 0;
       strmatch_set_interrupt(0);
@@ -392,12 +396,19 @@ int run_interactive(Shell &sh) {
 
   // Save to the current $HISTFILE (a startup file may have changed it) and
   // truncate it to $HISTFILESIZE lines, as bash does on exit.
+  // bash saves only when $HISTFILE is set and non-empty at exit; an unset
+  // HISTFILE falls back to the startup default.
   std::string savefile = sh.get("HISTFILE");
-  if (savefile.empty()) savefile = histfile;
+  if (!sh.is_set("HISTFILE")) savefile = histfile;
   if (!savefile.empty()) {
+    // bash writes `#<epoch>' timestamp lines when HISTTIMEFORMAT is set.
+    history_write_timestamps = sh.is_set("HISTTIMEFORMAT") ? 1 : 0;
     write_history(savefile.c_str());
-    int hfs = std::atoi(sh.get("HISTFILESIZE").c_str());
-    if (hfs > 0) history_truncate_file(savefile.c_str(), hfs);
+    const std::string hfs_s = sh.get("HISTFILESIZE");
+    char *hfe = nullptr;
+    long hfs = std::strtol(hfs_s.c_str(), &hfe, 10);
+    if (!hfs_s.empty() && hfe && *hfe == '\0' && hfs >= 0)
+      history_truncate_file(savefile.c_str(), static_cast<int>(hfs));
   }
   int rc = sh.exiting ? sh.exit_status : sh.last_status;
 

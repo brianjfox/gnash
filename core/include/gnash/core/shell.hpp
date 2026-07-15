@@ -245,6 +245,9 @@ class Shell {
   bool opt_histexpand = false;  // -H / -o histexpand: `!' history expansion
   bool history_loaded = false;  // $HISTFILE has been read into the history list
   int hist_new_entries = 0;     // entries added this session (for `history -a')
+  // History index of the currently-executing command's own entry (so `fc'
+  // excludes and later replaces it), or -1 when it was not recorded.
+  int hist_cur_cmd_index = -1;
   int lineno_base = 0;          // added to AST line numbers ($LINENO, errors) when
                                 // a script runs command-by-command
 
@@ -258,8 +261,9 @@ class Shell {
   // it was saved.
   bool add_history_line(const std::string &line);
   // Append a continuation LINE of a multi-line command to the newest history
-  // entry (shopt cmdhist), joined with bash's delimiting rules.
-  void append_history_line(const std::string &line);
+  // entry (shopt cmdhist), joined with bash's delimiting rules (or a newline
+  // inside a here-document).
+  void append_history_line(const std::string &line, bool heredoc = false);
   int errexit_suppress = 0;   // >0 while a command's status is being checked
   std::string bash_command;   // $BASH_COMMAND: the command currently executing
   bool in_debug_trap = false; // guard: don't fire the DEBUG trap within itself
