@@ -118,7 +118,8 @@ std::string ansi_c(const std::string &s) {
       }
       case 'x': {
         // Hex: \xHH (1-2 digits) or brace form \x{HH...}.  A bare \x with no
-        // hex digit is passed through unchanged.
+        // hex digit is passed through unchanged; a brace form with no digits
+        // terminates the whole string (bash's ansicstr bails out).
         bool brace = i + 1 < s.size() && s[i + 1] == '{';
         if (brace) i++;
         int v = 0, k = 0;
@@ -129,7 +130,8 @@ std::string ansi_c(const std::string &s) {
           k++;
         }
         if (brace && i + 1 < s.size() && s[i + 1] == '}') i++;
-        if (k == 0) { out += '\\'; out += 'x'; if (brace) out += '{'; }
+        if (brace && k == 0) return out;  // \x{ with no digits: drop the rest
+        if (k == 0) { out += '\\'; out += 'x'; }
         else out += static_cast<char>(v & 0xff);
         break;
       }
@@ -226,6 +228,19 @@ std::string Expander::param_value(const std::string &name, bool &set, bool defau
     if (sh_.opt_histexpand) f += 'H';  // histexpand (set -H; interactive default)
     if (sh_.invocation_char) f += sh_.invocation_char;
     return f;
+  }
+  if (name == "*" || name == "@") {
+    // Unset exactly when there are no positional parameters (so ${*-x}
+    // defaults only for $# == 0); the value joins with the first IFS char.
+    set = !sh_.positional.empty();
+    std::string ifs = sh_.ifs();
+    char sep = ifs.empty() ? ' ' : ifs[0];
+    std::string r;
+    for (size_t k = 0; k < sh_.positional.size(); k++) {
+      if (k) r += sep;
+      r += sh_.positional[k];
+    }
+    return r;
   }
   if (!name.empty() && std::isdigit(static_cast<unsigned char>(name[0]))) {
     size_t idx = static_cast<size_t>(std::atoi(name.c_str()));
@@ -751,6 +766,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
         if (ssel == '*' && dq) {
           std::string is = sh_.ifs();
           std::string j = is.empty() ? std::string() : std::string(1, is[0]);
+          if (!slice.empty()) { out += QNULL; mask += MMARK; }  // "" stays a field
           for (size_t k = 0; k < slice.size(); k++) {
             if (k) for (char c : j) { out += c; mask += '1'; }
             for (char c : slice[k]) { out += c; mask += '1'; }
@@ -1153,7 +1169,11 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
 
   // ${name@op} -- parameter transformations.
   if (rest[0] == '@' && rest.size() >= 2) {
-    if (!set) return std::string();  // unset -> empty (even for @Q)
+    // @a/@A report the variable's attributes even when its scalar context
+    // (element 0) is unset -- an assoc array without ["0"] still has them.
+    if (!set && !(rest[1] == 'a' || rest[1] == 'A') )
+      return std::string();  // unset -> empty (even for @Q)
+    if (!set && sh.vars.find(name) == sh.vars.end()) return std::string();
     char t = rest[1];
     if (t == 'Q') return atq_quote(val);
     if (t == 'E') return ansic_expand(val);
@@ -1267,6 +1287,8 @@ void Expander::process(const std::string &text, std::string &out, std::string &m
         }
       }
       if (i < text.size()) i++;
+    } else if (!heredoc && c == '$' && i + 1 < text.size() && text[i + 1] == '"') {
+      i++;  // $"...": locale-translated string; treated as a plain "..."
     } else if (!heredoc && c == '$' && i + 1 < text.size() && text[i + 1] == '\'') {
       out += QNULL; mask += MMARK;
       size_t j = i + 2;
