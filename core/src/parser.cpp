@@ -389,7 +389,8 @@ struct Parser {
 
     // Reserved terminators here mean a misplaced keyword.
     if (reserved_in({"then", "do", "done", "fi", "elif", "else", "esac", "}"})) {
-      fail(std::string("unexpected `") + cur().text + "'");
+      fail(is(Tok::Eof) ? std::string("unexpected end of file")
+                        : std::string("near unexpected token `") + tok_to_text(cur()) + "'");
       return nullptr;
     }
 
@@ -515,23 +516,35 @@ struct Parser {
       parse_arith_for_header(*n);
     } else {
       if (cur().type != Tok::Word) {
-        fail("expected variable name after `for'");
+        fail(is(Tok::Eof) ? std::string("unexpected end of file")
+                          : std::string("near unexpected token `") + tok_to_text(cur()) + "'");
         return n;
       }
       n->var = cur().text;
       advance();
-      if (reserved("in")) {
+      if (is(Tok::Semi)) {
         advance();
-        n->words_present = true;
-        while (cur().type == Tok::Word && !reserved_in({"do"})) {
-          n->words.push_back(Word{cur().text, cur().quoted ? W_QUOTED : 0});
+        newline_list();
+      } else {
+        newline_list();  // POSIX allows a linebreak before `in'
+        if (reserved("in")) {
           advance();
+          n->words_present = true;
+          while (cur().type == Tok::Word && !reserved_in({"do"})) {
+            n->words.push_back(Word{cur().text, cur().quoted ? W_QUOTED : 0});
+            advance();
+          }
         }
       }
     }
     if (is(Tok::Semi) || is(Tok::Newline)) {
       advance();
       newline_list();
+    }
+    if (reserved("{")) {  // bash allows a brace group as the body
+      n->body = parse_command({});
+      parse_redirect_list(n->redirects);
+      return n;
     }
     expect_reserved("do");
     n->body = parse_list({"done"});
@@ -604,7 +617,12 @@ struct Parser {
     std::string expr;
     bool okexpr = true;
     for (;;) {
-      if (is(Tok::Eof) || is(Tok::Semi) || is(Tok::Newline)) {
+      if (is(Tok::Eof)) {  // bash reports the unbalanced (( at EOF directly
+        incomplete = true;
+        fail("unexpected EOF while looking for matching `)'");
+        return nullptr;
+      }
+      if (is(Tok::Semi) || is(Tok::Newline)) {
         okexpr = false;  // not an arithmetic expression -> nested subshell
         break;
       }
@@ -796,7 +814,14 @@ struct Parser {
     }
     n->word = Word{cur().text, cur().quoted ? W_QUOTED : 0};
     advance();
-    expect_reserved("in");
+    newline_list();  // POSIX allows a linebreak before `in'
+    if (reserved("in")) {
+      advance();
+    } else {
+      fail(is(Tok::Eof) ? std::string("unexpected end of file")
+                        : std::string("near unexpected token `") + tok_to_text(cur()) + "'");
+      return n;
+    }
     newline_list();
     while (!err && !reserved("esac")) {
       CaseClause clause;
@@ -869,7 +894,10 @@ struct Parser {
     if (!toks.empty() && toks.back().lex_error) {
       res.ok = false;
       res.incomplete = true;  // unterminated quote/substitution
-      res.error = "unterminated quoted string or substitution";
+      char cl = toks.back().lex_close;
+      res.error = cl ? std::string("unexpected EOF while looking for matching `") + cl + "'"
+                     : std::string("unterminated quoted string or substitution");
+      res.error_line = toks.back().line;
       return res;
     }
     newline_list();
@@ -877,7 +905,8 @@ struct Parser {
     res.command = parse_list({});
     newline_list();
     if (!err && !is(Tok::Eof))
-      fail(std::string("unexpected token `") + tok_name(cur().type) + "'");
+      fail(is(Tok::Eof) ? std::string("unexpected end of file")
+                        : std::string("near unexpected token `") + tok_to_text(cur()) + "'");
     if (err) {
       res.ok = false;
       res.error = errmsg;

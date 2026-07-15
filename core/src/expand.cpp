@@ -623,6 +623,54 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
     size_t end = scan_balanced(t, i + 1, '{', '}');
     if (end != std::string::npos) {
       std::string body = t.substr(i + 2, end - (i + 2));
+
+      // ${name-word} / ${name+word} (and the `:' forms) with the operator
+      // firing: expand WORD by re-processing it here, so an embedded "$@"
+      // keeps its field structure (a flat string would lose empty fields).
+      {
+        size_t q = 0;
+        std::string nm;
+        if (q < body.size() &&
+            (body[q] == '@' || body[q] == '*' || body[q] == '#' || body[q] == '?' ||
+             body[q] == '$' || body[q] == '!' || body[q] == '-')) {
+          nm = body.substr(q, 1);
+          q++;
+        } else {
+          while (q < body.size() &&
+                 (std::isalnum(static_cast<unsigned char>(body[q])) || body[q] == '_'))
+            q++;
+          nm = body.substr(0, q);
+        }
+        if (!nm.empty() && q < body.size()) {
+          bool colon = body[q] == ':';
+          size_t opq = q + (colon ? 1 : 0);
+          if (opq < body.size() && (body[opq] == '-' || body[opq] == '+') &&
+              !(nm == "-" && q == 1)) {
+            char op = body[opq];
+            bool set = false;
+            std::string val = param_value(nm, set, true);
+            bool fire = (op == '-') ? (!set || (colon && val.empty()))
+                                    : (set && !(colon && val.empty()));
+            if (fire) {
+              process(body.substr(opq + 1), out, mask, false);
+              i = end + 1;
+              return;
+            }
+            if (op == '-' || op == '+') {
+              // Operator does not fire: the parameter's own value (for `-')
+              // or nothing (for `+'); fall through for arrays/subscripts.
+              if (nm != "@" && nm != "*" && body.find('[') == std::string::npos) {
+                if (op == '-') {
+                  char qm2 = dq ? '1' : '0';
+                  for (char c : val) { out += c; mask += qm2; }
+                }
+                i = end + 1;
+                return;
+              }
+            }
+          }
+        }
+      }
       // zsh `${(flags)name}' expansion flags (join/split/sort/unique/case/...).
       if (sh_.is_zsh() && !body.empty() && body[0] == '(' &&
           emit_zsh_flags(body, dq, out, mask)) {
@@ -1462,11 +1510,26 @@ void Expander::extract_procsubs(std::string &word) {
   }
 }
 
+static std::string tilde_assign(Shell &sh, const std::string &text);
+
 std::vector<std::string> Expander::expand_args(const std::vector<Word> &words) {
   std::vector<std::string> result;
   for (const Word &w : words) {
     for (const std::string &braced : brace_expand(w.text)) {
-      std::string tilded = expand_leading_tilde(sh_, braced);
+      // A word shaped like an assignment (name=value) gets assignment-style
+      // tilde expansion -- after the `=' and after each `:' -- unless posix
+      // mode is on.  (bash's W_ASSIGNMENT tilde rule.)
+      std::string pre = braced;
+      if (!sh_.opt_posix) {
+        size_t q = 0;
+        while (q < pre.size() &&
+               (std::isalnum(static_cast<unsigned char>(pre[q])) || pre[q] == '_'))
+          q++;
+        if (q > 0 && q < pre.size() && pre[q] == '=' &&
+            std::isalpha(static_cast<unsigned char>(pre[0])))
+          pre = pre.substr(0, q + 1) + tilde_assign(sh_, pre.substr(q + 1));
+      }
+      std::string tilded = expand_leading_tilde(sh_, pre);
       extract_procsubs(tilded);  // <(cmd) / >(cmd) -> /dev/fd/N
       std::string out, mask;
       process(tilded, out, mask, false);
@@ -1493,7 +1556,7 @@ std::vector<std::string> Expander::expand_args(const std::vector<Word> &words) {
 }
 
 std::string Expander::expand_pattern(const std::string &text) {
-  std::string src = text;
+  std::string src = expand_leading_tilde(sh_, text);  // `case ~ in ~)' matches
   extract_procsubs(src);
   std::string out, mask;
   process(src, out, mask, false);
@@ -1512,7 +1575,7 @@ std::string Expander::expand_pattern(const std::string &text) {
 }
 
 std::string Expander::expand_no_split(const std::string &text, bool do_glob) {
-  std::string src = text;
+  std::string src = expand_leading_tilde(sh_, text);  // case subjects, redirects
   extract_procsubs(src);  // e.g. a redirect target: < <(cmd)
   std::string out, mask;
   process(src, out, mask, false);

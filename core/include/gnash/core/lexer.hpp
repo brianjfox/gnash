@@ -54,6 +54,7 @@ struct Token {
   bool quoted = false;          // word contained quoting
   bool glued = false;           // Lparen immediately followed by `(' (for `((')
   bool lex_error = false;       // set on the Eof token if a span was unterminated
+  char lex_close = 0;           // the closer we were scanning for at EOF
   // Set on the Eof token when a here-document ran to end-of-input without its
   // delimiter: the body is still attached (bash runs it with a warning), but
   // line-oriented readers treat the input as incomplete.
