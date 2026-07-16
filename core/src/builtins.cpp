@@ -879,7 +879,8 @@ void declare_print_var(const std::string &name, const Variable &v) {
       first = false;
       decl += "[" + k + "]=" + declare_quote(v.assoc.at(k));
     }
-    decl += ")";
+    // bash prints a space before the closing paren for a non-empty assoc.
+    decl += first ? ")" : " )";
   } else if (!v.value.empty() || v.integer) {
     decl += "=" + declare_quote(v.value);
   }
