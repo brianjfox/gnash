@@ -3163,7 +3163,12 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
   } else if (cmd == "eval") {
     std::string saved_ctx = sh.error_context;
     sh.error_context = "eval";  // parse errors report `NAME: eval: line N: ...'
+    // $LINENO inside eval continues from the eval command's line (bash), so an
+    // eval on line 42 whose body is `echo $LINENO' prints 42.
+    int saved_base = sh.lineno_base;
+    if (sh.cur_lineno > 0) sh.lineno_base = sh.cur_lineno - 1;
     st = sh.run_string(join(argv, 1));
+    sh.lineno_base = saved_base;
     sh.error_context = saved_ctx;
   } else if (cmd == "source" || cmd == ".") {
     if (argv.size() > 1 && sh.opt_restricted &&
