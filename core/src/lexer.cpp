@@ -161,6 +161,8 @@ struct Lexer {
         depth--;
         w += c;
         pos++;
+      } else if (c == '$' && pos + 1 < n && in[pos + 1] == '\'') {
+        scan_dollar_single(w);  // $'...' inside ${...}: backslash-aware
       } else if (c == '\'') {
         scan_single(w);
       } else if (c == '"') {
