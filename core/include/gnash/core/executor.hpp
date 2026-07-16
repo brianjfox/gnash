@@ -19,6 +19,7 @@ class Executor {
 
  private:
   Shell &sh_;
+  const Command *timed_cmd_ = nullptr;  // the command currently being `time'd
 
   int run_simple(const SimpleCommand *c);
   int run_connection(const Connection *c);
