@@ -848,23 +848,18 @@ std::string declare_quote(const std::string &v) {
 
 // `declare -p NAME': the attribute flags plus the reproducible assignment.
 void declare_print_var(const std::string &name, const Variable &v) {
-  std::string flags = "--";
-  if (v.kind == VarKind::Indexed) flags = "-a";
-  else if (v.kind == VarKind::Assoc) flags = "-A";
-  else {
-    flags.clear();
-    if (v.integer) flags += 'i';
-    if (v.nameref) flags += 'n';
-    flags = flags.empty() ? "--" : ("-" + flags);
-  }
-  std::string extra;  // r/x appended after the type flag, in bash's order
-  if (v.readonly) extra += 'r';
-  if (v.exported) extra += 'x';
-  std::string decl = "declare " + flags;
-  if (!extra.empty()) {
-    if (flags == "--") decl = "declare -" + extra;
-    else decl += extra;
-  }
+  // Attribute letters in bash's fixed order (var_attribute_string):
+  // a A f i n r t x c l u.  gnash models the subset a A i n r x l u.
+  std::string f;
+  if (v.kind == VarKind::Indexed) f += 'a';
+  if (v.kind == VarKind::Assoc) f += 'A';
+  if (v.integer) f += 'i';
+  if (v.nameref) f += 'n';
+  if (v.readonly) f += 'r';
+  if (v.exported) f += 'x';
+  if (v.lcase) f += 'l';
+  if (v.ucase) f += 'u';
+  std::string decl = "declare -" + (f.empty() ? std::string("-") : f);
   decl += ' ' + name;
   if (v.kind == VarKind::Indexed) {
     decl += "=(";
@@ -1388,6 +1383,8 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     if (readonly) v.readonly = true;
     if (exported) v.exported = true;
     if (integer) v.integer = true;
+    if (ucase) v.ucase = true;
+    if (lcase) v.lcase = true;
     // Mark the nameref last, so the assignment above stored the *target name*
     // as this variable's value rather than being redirected through it.
     if (nameref) v.nameref = true;

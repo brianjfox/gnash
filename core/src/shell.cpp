@@ -690,6 +690,11 @@ bool Shell::set(const std::string &n_in, const std::string &v) {
     return false;
   }
   var.value = v;
+  // `declare -u' / `-l' fold the value's case on every assignment.
+  if (var.ucase)
+    for (char &c : var.value) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+  else if (var.lcase)
+    for (char &c : var.value) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
   // Assigning HISTSIZE re-stifles the loaded history list, as bash does; a
   // non-numeric or empty value leaves the list unbounded.
   if (n == "HISTSIZE" && history_loaded) {
