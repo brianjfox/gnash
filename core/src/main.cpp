@@ -269,6 +269,13 @@ int main(int argc, char **argv) {
   // $0 defaults to argv[0] (as bash: `bash -c' shows "bash", "/bin/bash", etc.);
   // a script path or a -c name argument overrides it below.
   sh.arg0 = prog;
+  // Invoked as rbash / rsh / rksh (a leading `r'): a restricted shell.
+  {
+    auto sl = base.rfind('/');
+    std::string nm = sl == std::string::npos ? base : base.substr(sl + 1);
+    if (nm == "rbash" || nm == "rsh" || nm == "rksh" || nm == "rgnash")
+      sh.opt_restricted = true;
+  }
   const std::string prefix = base;
 
   // $SHELL is the execution path of the current shell (persona-independent).
@@ -331,7 +338,8 @@ int main(int argc, char **argv) {
         case 'f': sh.opt_noglob = set; break;
         case 'v': sh.opt_verbose = set; break;
         case 'n': sh.opt_noexec = set; break;  // read but don't execute
-        case 'r': case 'm': case 'B': case 'h': case 'H':
+        case 'r': if (set) sh.opt_restricted = true; break;  // restricted shell
+        case 'm': case 'B': case 'h': case 'H':
           break;  // accepted, not (yet) acted on
         case 'c': have_c = true; stop_after = true; break;
         case 'o': {

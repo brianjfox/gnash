@@ -63,6 +63,26 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved) {
     dup2(newfd, fd);
   };
 
+  // A restricted shell forbids output redirections (creating/truncating/
+  // appending files, and fd duplication that writes).
+  if (sh.opt_restricted) {
+    switch (r.op) {
+      case RedirOp::OutputRedir:
+      case RedirOp::Clobber:
+      case RedirOp::AppendOutput:
+      case RedirOp::InputOutput:
+      case RedirOp::AndOutput:
+      case RedirOp::AndAppend: {
+        Expander rex(sh);
+        std::string fn = rex.expand_no_split(r.target.text, true);
+        std::fprintf(stderr, "%s%s: restricted: cannot redirect output\n",
+                     sh.err_prefix().c_str(), fn.c_str());
+        return false;
+      }
+      default: break;
+    }
+  }
+
   switch (r.op) {
     case RedirOp::InputRedir: {
       std::string fn = ex.expand_no_split(r.target.text, true);
@@ -547,7 +567,12 @@ int Executor::run_simple(const SimpleCommand *c) {
       if (o.size() < 2 || o[0] != '-') break;
       for (size_t j = 1; j < o.size(); j++) {
         if (o[j] == 'v' || o[j] == 'V') describe = true;
-        else if (o[j] == 'p') { /* use a default PATH: accepted, no-op here */ }
+        else if (o[j] == 'p') {  // default PATH; forbidden in a restricted shell
+          if (sh_.opt_restricted) {
+            std::fprintf(stderr, "%scommand: -p: restricted\n", sh_.err_prefix().c_str());
+            return (sh_.last_status = 2);
+          }
+        }
         else { bad = true; break; }
       }
       if (bad) break;
@@ -578,6 +603,15 @@ int Executor::run_simple(const SimpleCommand *c) {
     int status = 0;
     run_builtin(sh_, fgargv, &status);
     return (sh_.last_status = status);
+  }
+
+  // A restricted shell forbids a command name containing `/' (a builtin or
+  // function of that literal name would already have matched by exact name).
+  if (sh_.opt_restricted && argv[0].find('/') != std::string::npos &&
+      sh_.functions.find(argv[0]) == sh_.functions.end()) {
+    std::fprintf(stderr, "%s%s: restricted: cannot specify `/' in command names\n",
+                 sh_.err_prefix().c_str(), argv[0].c_str());
+    return (sh_.last_status = 126);
   }
 
   // Builtins and functions run in-process (with redirects applied/restored).
@@ -672,6 +706,20 @@ int Executor::run_simple(const SimpleCommand *c) {
     undo_temp();
   } else {
     undo_temp();  // not a builtin after all: the external path sets its own env
+    // A command name without `/' that has been hashed (`hash -p', BASH_CMDS)
+    // execs the remembered path, as bash does; execvp() still falls back to a
+    // $PATH search for the (unhashed) common case.
+    std::string exec_file = argv[0];
+    if (argv[0].find('/') == std::string::npos) {
+      auto h = sh_.hashed.find(argv[0]);
+      if (h != sh_.hashed.end()) exec_file = h->second;
+    }
+    // execvp searches $PATH for a name without `/', or uses a `/' path
+    // directly; a hashed name execs its remembered value, and reports that
+    // value's name on failure (bash's behavior for `hash'/BASH_CMDS entries).
+    auto do_exec = [&](std::vector<char *> &cargv) {
+      execvp(exec_file.c_str(), cargv.data());
+    };
     // external command.  If we are a disposable subshell child whose sole
     // command this is, exec it in place -- become the command with no second
     // fork/wait (exec_replace was consumed at the top of run_simple).
@@ -686,11 +734,12 @@ int Executor::run_simple(const SimpleCommand *c) {
       for (auto &a : argv) cargv.push_back(const_cast<char *>(a.c_str()));
       cargv.push_back(nullptr);
       std::fflush(nullptr);
-      execvp(cargv[0], cargv.data());
-      if (errno == ENOENT && argv[0].find('/') == std::string::npos)
-        std::fprintf(stderr, "%s%s: command not found\n", sh_.err_prefix().c_str(), argv[0].c_str());
+      do_exec(cargv);
+      if (errno == ENOENT && exec_file.find('/') == std::string::npos)
+        std::fprintf(stderr, "%s%s: %s\n", sh_.err_prefix().c_str(), exec_file.c_str(),
+                     exec_file == argv[0] ? "command not found" : "not found");
       else
-        std::fprintf(stderr, "%s%s: %s\n", sh_.err_prefix().c_str(), argv[0].c_str(), std::strerror(errno));
+        std::fprintf(stderr, "%s%s: %s\n", sh_.err_prefix().c_str(), exec_file.c_str(), std::strerror(errno));
       _exit(errno == EACCES ? 126 : 127);
     }
     // external command, in its own process group
@@ -713,12 +762,12 @@ int Executor::run_simple(const SimpleCommand *c) {
       std::vector<char *> cargv;
       for (auto &a : argv) cargv.push_back(const_cast<char *>(a.c_str()));
       cargv.push_back(nullptr);
-      execvp(cargv[0], cargv.data());
-      if (errno == ENOENT && argv[0].find('/') == std::string::npos)
-        std::fprintf(stderr, "%s%s: command not found\n", sh_.err_prefix().c_str(),
-                     argv[0].c_str());
+      do_exec(cargv);
+      if (errno == ENOENT && exec_file.find('/') == std::string::npos)
+        std::fprintf(stderr, "%s%s: %s\n", sh_.err_prefix().c_str(), exec_file.c_str(),
+                     exec_file == argv[0] ? "command not found" : "not found");
       else
-        std::fprintf(stderr, "%s%s: %s\n", sh_.err_prefix().c_str(), argv[0].c_str(),
+        std::fprintf(stderr, "%s%s: %s\n", sh_.err_prefix().c_str(), exec_file.c_str(),
                      std::strerror(errno));
       _exit(errno == EACCES ? 126 : 127);
     }

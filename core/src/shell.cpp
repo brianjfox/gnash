@@ -366,6 +366,36 @@ std::string Shell::array_get(const std::string &n_in, const std::string &sub) co
 
 void Shell::array_set(const std::string &n_in, const std::string &sub, const std::string &val) {
   std::string n = deref(n_in);
+  // BASH_CMDS is the live command hash: BASH_CMDS[name]=value adds a hash
+  // entry.  A `/' value is rejected in a restricted shell; a value without a
+  // `/' is resolved through $PATH (and must be found) before it is stored.
+  if (n == "BASH_CMDS") {
+    if (val.find('/') != std::string::npos) {
+      if (opt_restricted) {
+        std::fprintf(stderr, "%s%s: restricted\n", err_prefix().c_str(), val.c_str());
+        return;
+      }
+      hashed[sub] = val;
+      return;
+    }
+    std::string path = get("PATH"), full;
+    size_t p = 0;
+    while (p <= path.size()) {
+      size_t q = path.find(':', p);
+      std::string dir = path.substr(p, q == std::string::npos ? std::string::npos : q - p);
+      if (dir.empty()) dir = ".";
+      std::string cand = dir + "/" + val;
+      if (access(cand.c_str(), X_OK) == 0) { full = cand; break; }
+      if (q == std::string::npos) break;
+      p = q + 1;
+    }
+    if (full.empty()) {
+      std::fprintf(stderr, "%s%s: not found\n", err_prefix().c_str(), val.c_str());
+      return;
+    }
+    hashed[sub] = full;
+    return;
+  }
   Variable &v = vars[n];
   if (v.readonly) return;
   if (v.kind == VarKind::Assoc) {
@@ -598,6 +628,11 @@ bool Shell::set(const std::string &n_in, const std::string &v) {
     seconds_base = static_cast<long long>(std::time(nullptr)) -
                    std::strtoll(v.c_str(), nullptr, 10);
     return true;
+  }
+  if (opt_restricted &&
+      (n == "PATH" || n == "SHELL" || n == "ENV" || n == "BASH_ENV")) {
+    std::fprintf(stderr, "%s%s: readonly variable\n", err_prefix().c_str(), n.c_str());
+    return false;
   }
   Variable &var = vars[n];
   if (var.readonly) {
