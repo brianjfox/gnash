@@ -1597,10 +1597,17 @@ std::vector<std::string> Expander::glob_field(const std::string &field, const st
   // backslash-escaped; also produce the literal (quotes already removed).
   std::string pattern;
   bool magic = false;
+  // Under `shopt -s extglob', the operators +( !( @( *( ?( also make a word a
+  // pattern (the `*('/`?(' forms are already caught by the `*'/`?' below).
+  auto eg = sh_.shopt_opts.find("extglob");
+  bool extglob = eg != sh_.shopt_opts.end() && eg->second;
   for (size_t i = 0; i < field.size(); i++) {
     char c = field[i];
     bool q = mask[i] == '1';
     if (!q && (c == '*' || c == '?' || c == '[')) magic = true;
+    if (!q && extglob && (c == '+' || c == '!' || c == '@' || c == '*' || c == '?') &&
+        i + 1 < field.size() && field[i + 1] == '(')
+      magic = true;
     if (q && (c == '*' || c == '?' || c == '[' || c == '\\' || c == ']')) pattern += '\\';
     pattern += c;
   }
@@ -1613,6 +1620,10 @@ std::vector<std::string> Expander::glob_field(const std::string &field, const st
   bool globstar = (gs != sh_.shopt_opts.end() && gs->second) || sh_.is_zsh() ||
                   !sh_.get("zsh_globbing").empty();
   if (globstar) gflags |= GX_GLOBSTAR;
+  // `shopt -s dotglob': a leading `.' is matched by ordinary patterns too
+  // (except the `.'/`..' entries, which are always skipped).
+  auto dg = sh_.shopt_opts.find("dotglob");
+  if (dg != sh_.shopt_opts.end() && dg->second) gflags |= GX_MATCHDOT;
   auto matches = gnash::glob::glob(pattern, gflags);
   if (matches.empty()) {
     auto it = sh_.shopt_opts.find("nullglob");
