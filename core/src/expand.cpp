@@ -575,7 +575,7 @@ void Expander::emit_zsh_subscript(const std::string &name, const std::string &su
 }
 
 void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::string &out,
-                             std::string &mask) {
+                             std::string &mask, bool heredoc) {
   char qm = dq ? '1' : '0';
   // i is at '$'
   char n1 = i + 1 < t.size() ? t[i + 1] : '\0';
@@ -702,7 +702,9 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
                 for (char c : ex) { out += c; mask += '1'; }
               } else {
                 // Unquoted default word: a leading `~' tilde-expands (bash).
-                process(expand_leading_tilde(sh_, word), out, mask, false);
+                // In a here-document the word keeps here-document quoting
+                // (e.g. $'...' stays literal), so pass the flag through.
+                process(expand_leading_tilde(sh_, word), out, mask, false, heredoc);
               }
               i = end + 1;
               return;
@@ -1512,7 +1514,7 @@ void Expander::process(const std::string &text, std::string &out, std::string &m
       } else if (i + 1 < text.size()) { out += text[i + 1]; mask += '1'; i += 2; }
       else i++;
     } else if (c == '$') {
-      expand_dollar(text, i, false, out, mask);
+      expand_dollar(text, i, false, out, mask, heredoc);
     } else if (c == '`') {
       size_t j = i + 1;
       std::string inner;
