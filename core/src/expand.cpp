@@ -800,6 +800,35 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
         i = end + 1;
         return;
       }
+      // ${@OP} / ${*OP}: apply a per-element operator (pattern removal #/%,
+      // substitution /, case-mod ^/,, transform @) to each positional param.
+      if ((body[0] == '@' || body[0] == '*') && body.size() > 1 &&
+          (body[1] == '#' || body[1] == '%' || body[1] == '/' || body[1] == '^' ||
+           body[1] == ',' || body[1] == '@')) {
+        char psel = body[0];
+        std::string prest = body.substr(1);
+        std::vector<std::string> items = sh_.positional;
+        for (std::string &it : items)
+          it = apply_param_op(*this, sh_, std::string(1, psel), it, true, prest, dq);
+        if (psel == '*' && dq) {
+          std::string is = sh_.ifs();
+          std::string j = is.empty() ? std::string() : std::string(1, is[0]);
+          for (size_t k = 0; k < items.size(); k++) {
+            if (k) for (char c : j) { out += c; mask += '1'; }
+            for (char c : items[k]) { out += c; mask += '1'; }
+          }
+        } else {
+          char m = (psel == '@' && dq) ? '1' : '0';
+          if (psel == '@' && dq) absorb_qnull();
+          for (size_t k = 0; k < items.size(); k++) {
+            if (k) { out += FIELD_SEP; mask += MMARK; }
+            if (psel == '@' && dq) { out += QNULL; mask += MMARK; }
+            for (char c : items[k]) { out += c; mask += m; }
+          }
+        }
+        i = end + 1;
+        return;
+      }
       // ${a[@]OP} / ${a[*]OP}: apply OP to each element.
       std::string aoname, arest;
       char asel;
