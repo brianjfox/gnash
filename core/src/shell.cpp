@@ -163,6 +163,11 @@ bool Shell::virtual_array(const std::string &name,
     for (const auto &kv : hashed) pairs.emplace_back(kv.first, kv.second);
     return true;
   }
+  if (name == "DIRSTACK") {
+    auto v = dirstack();
+    for (size_t i = 0; i < v.size(); i++) pairs.emplace_back(std::to_string(i), v[i]);
+    return true;
+  }
   if (name == "BASH_ARGC" || name == "BASH_ARGV") {
     auto v = (name == "BASH_ARGC") ? bash_argc_view() : bash_argv_view();
     for (size_t i = 0; i < v.size(); i++) pairs.emplace_back(std::to_string(i), v[i]);
@@ -335,6 +340,13 @@ std::string Shell::array_get(const std::string &n_in, const std::string &sub) co
   }
   if (n_in == "BASH_ARGC" || n_in == "BASH_ARGV") {  // numeric-indexed views
     auto v = (n_in == "BASH_ARGC") ? bash_argc_view() : bash_argv_view();
+    bool ok = true;
+    long long k = eval_arith(const_cast<Shell &>(*this), sub, &ok);
+    if (!ok) k = 0;
+    return (k >= 0 && k < static_cast<long long>(v.size())) ? v[k] : std::string();
+  }
+  if (n_in == "DIRSTACK") {  // numeric-indexed live directory stack
+    auto v = dirstack();
     bool ok = true;
     long long k = eval_arith(const_cast<Shell &>(*this), sub, &ok);
     if (!ok) k = 0;

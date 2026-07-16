@@ -588,12 +588,20 @@ int bi_pwd(Shell &sh, const std::vector<std::string> &argv) {
 
 // The full stack as bash presents it: current (logical) directory on top, then
 // the saved entries.
-std::vector<std::string> full_dirstack(Shell &sh) {
+}  // namespace (reopened below)
+}  // namespace gnash::core
+namespace gnash::core {
+std::vector<std::string> Shell::dirstack() const {
   std::vector<std::string> v;
-  v.push_back(logical_pwd(sh));
-  for (const std::string &d : sh.dir_stack) v.push_back(d);
+  std::string pwd = get("PWD");
+  char cwd[4096];
+  if (pwd.empty() && getcwd(cwd, sizeof cwd)) pwd = cwd;
+  v.push_back(pwd);
+  for (const std::string &d : dir_stack) v.push_back(d);
   return v;
 }
+namespace {
+std::vector<std::string> full_dirstack(Shell &sh) { return sh.dirstack(); }
 
 std::string tilde_abbrev(Shell &sh, const std::string &path, bool longform) {
   std::string home = sh.get("HOME");
@@ -606,10 +614,19 @@ std::string tilde_abbrev(Shell &sh, const std::string &path, bool longform) {
 
 int do_chdir(Shell &sh, const std::string &dir) { return change_dir(sh, dir, false); }
 
+int rot_index(const std::string &spec, size_t n);  // forward
+
 int bi_dirs(Shell &sh, const std::vector<std::string> &argv) {
   bool longform = false, oneline = false, verbose = false;
+  std::string select;  // a +N / -N argument: print only that entry
   for (size_t i = 1; i < argv.size(); i++) {
     const std::string &a = argv[i];
+    // A `+N' / `-N' selector (a dash/plus followed by a digit) is not an option.
+    if (a.size() >= 2 && (a[0] == '+' || a[0] == '-') &&
+        std::isdigit(static_cast<unsigned char>(a[1]))) {
+      select = a;
+      continue;
+    }
     if (a.empty() || a[0] != '-') break;
     for (size_t k = 1; k < a.size(); k++) {
       if (a[k] == 'c') { sh.dir_stack.clear(); return 0; }
@@ -620,6 +637,18 @@ int bi_dirs(Shell &sh, const std::vector<std::string> &argv) {
     }
   }
   std::vector<std::string> v = full_dirstack(sh);
+  if (!select.empty()) {  // print a single entry
+    int idx = rot_index(select, v.size());
+    if (idx < 0) {
+      std::fprintf(stderr, "gnash: dirs: %s: directory stack index out of range\n",
+                   select.c_str());
+      return 1;
+    }
+    std::string s = tilde_abbrev(sh, v[static_cast<size_t>(idx)], longform);
+    if (verbose) std::printf("%2d  %s\n", idx, s.c_str());
+    else std::printf("%s\n", s.c_str());
+    return 0;
+  }
   for (size_t i = 0; i < v.size(); i++) {
     std::string s = tilde_abbrev(sh, v[i], longform);
     if (verbose) std::printf("%2zu  %s\n", i, s.c_str());
