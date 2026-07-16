@@ -756,7 +756,41 @@ std::vector<std::string> Shell::environ_block() const {
   std::vector<std::string> out;
   for (const auto &kv : vars)
     if (kv.second.exported) out.push_back(kv.first + "=" + kv.second.value);
+  // Exported functions travel as BASH_FUNC_<name>%%=() {  body  }, which a
+  // child bash/gnash re-imports at startup.
+  for (const auto &name : exported_functions) {
+    auto it = functions.find(name);
+    if (it == functions.end()) continue;
+    std::string s = named_function_string(name, it->second);  // "name () \n{...}"
+    size_t br = s.find('(');  // drop the leading "name " so the value is "() {...}"
+    if (br == std::string::npos) continue;
+    out.push_back("BASH_FUNC_" + name + "%%=" + s.substr(br));
+  }
   return out;
+}
+
+void Shell::import_env_functions() {
+  // Collect first, then mutate `vars' (we erase the BASH_FUNC_ entries).
+  std::vector<std::pair<std::string, std::string>> found;
+  for (const auto &kv : vars) {
+    const std::string &k = kv.first;
+    if (k.compare(0, 10, "BASH_FUNC_") == 0 && k.size() > 12 &&
+        k.compare(k.size() - 2, 2, "%%") == 0)
+      found.emplace_back(k.substr(10, k.size() - 12), kv.second.value);
+  }
+  for (const auto &f : found) {
+    const std::string &name = f.first;
+    // Parse `name value' (value is "() {...}").  Accept only a lone function
+    // definition -- any trailing command (a Shellshock payload) is rejected.
+    ParseResult r = parse(name + " " + f.second);
+    if (r.ok && r.command && dynamic_cast<const FunctionDef *>(r.command.get())) {
+      const auto *fd = static_cast<const FunctionDef *>(r.command.get());
+      functions[fd->name] = fd->body.get();
+      func_lineno_base[fd->name] = 0;
+      retained.push_back(std::move(r.command));
+    }
+    vars.erase("BASH_FUNC_" + name + "%%");  // not a real environment variable
+  }
 }
 
 void Shell::set_personality(const std::string &name) {
