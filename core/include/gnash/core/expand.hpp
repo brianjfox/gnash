@@ -35,6 +35,12 @@ class Expander {
   // characters stay active.
   std::string expand_pattern(const std::string &text);
 
+  // Expand a word as if inside double quotes (bash-family default words after
+  // ${x:-w}/${x:+w}): `$'/backquote expand, backslash escapes the shell
+  // specials, single quotes are literal.  Not used under the zsh personality,
+  // whose quoting rules differ.
+  std::string expand_dq_word(const std::string &w);
+
   // Assignment RHS: tilde + parameter/command/arith + quote removal, no split,
   // no glob.
   std::string expand_assignment(const std::string &text);
@@ -60,6 +66,9 @@ class Expander {
   // `\x01' field-separator markers inserted for "$@" splitting.
   void process(const std::string &text, std::string &out, std::string &mask,
                bool assignment_rhs, bool heredoc = false);
+  // Process double-quoted content (no surrounding quotes) from text[i] into
+  // out/mask, stopping at an unescaped closing quote or end of string.
+  void process_dq(const std::string &text, size_t &i, std::string &out, std::string &mask);
 
   // Expand a ${...} / $name / $(...) / $((...)) starting at text[i] (i at `$').
   void expand_dollar(const std::string &text, size_t &i, bool dq, std::string &out,
