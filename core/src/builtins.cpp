@@ -1494,7 +1494,10 @@ int bi_type(Shell &sh, const std::vector<std::string> &argv) {
         case 'P': fP = true; break;
         case 'a': fa = true; break;
         case 'f': ff = true; break;
-        default: ok = false; break;
+        default:
+          std::fprintf(stderr, "%stype: -%c: invalid option\n", sh.err_prefix().c_str(), a[k]);
+          std::fprintf(stderr, "type: usage: type [-afptP] name [name ...]\n");
+          return 2;
       }
     }
     if (!ok) break;
@@ -1514,8 +1517,9 @@ int bi_type(Shell &sh, const std::vector<std::string> &argv) {
     }
 
     // Ordered candidate locations: keyword, function, builtin, then files.
-    struct Loc { char kind; std::string text; };  // k/f/b/F
+    struct Loc { char kind; std::string text; };  // a/k/f/b/F
     std::vector<Loc> locs;
+    if (sh.aliases.count(n)) locs.push_back({'a', sh.aliases.at(n)});
     if (is_reserved_word(n)) locs.push_back({'k', {}});
     if (!ff && sh.functions.count(n)) locs.push_back({'f', {}});
     if (is_builtin_name(n)) locs.push_back({'b', {}});
@@ -1534,7 +1538,8 @@ int bi_type(Shell &sh, const std::vector<std::string> &argv) {
     for (size_t li = 0; li < count; li++) {
       const Loc &L = locs[li];
       if (ft) {
-        std::printf("%s\n", L.kind == 'k' ? "keyword"
+        std::printf("%s\n", L.kind == 'a' ? "alias"
+                          : L.kind == 'k' ? "keyword"
                           : L.kind == 'f' ? "function"
                           : L.kind == 'b' ? "builtin"
                                           : "file");
@@ -1542,6 +1547,9 @@ int bi_type(Shell &sh, const std::vector<std::string> &argv) {
         if (L.kind == 'F') std::printf("%s\n", L.text.c_str());
       } else {
         switch (L.kind) {
+          case 'a':
+            std::printf("%s is aliased to `%s'\n", n.c_str(), L.text.c_str());
+            break;
           case 'k': std::printf("%s is a shell keyword\n", n.c_str()); break;
           case 'f':
             std::printf("%s is a function\n%s\n", n.c_str(),
