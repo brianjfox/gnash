@@ -668,7 +668,6 @@ int Executor::run_simple(const SimpleCommand *c) {
   if (is_func) {
     apply_temp();
     std::vector<std::string> saved_pos = sh_.positional;
-    std::string saved_arg0 = sh_.arg0;
     sh_.positional.assign(argv.begin() + 1, argv.end());
     // Record the call for `caller': line of the call site, the function name,
     // and the source.
@@ -698,7 +697,6 @@ int Executor::run_simple(const SimpleCommand *c) {
     sh_.pop_src_frame();
     sh_.call_stack.pop_back();
     sh_.positional = saved_pos;
-    sh_.arg0 = saved_arg0;
     if (sh_.returning) { sh_.returning = false; status = sh_.exit_status; }
     // In posix mode, assignments preceding a function call persist.
     if (sh_.opt_posix) restore.clear();
