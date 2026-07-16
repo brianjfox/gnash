@@ -484,6 +484,9 @@ int Executor::run_pipeline(const Connection *c) {
 
 int Executor::run_simple(const SimpleCommand *c) {
   if (c->line > 0) sh_.cur_lineno = sh_.lineno_base + c->line;  // $LINENO
+  // $BASH_COMMAND tracks the command currently executing (bash sets it before
+  // every command, not only inside a DEBUG trap).
+  sh_.bash_command = to_string(c);
   // Consume the exec-in-place permission for *this* command up front, so it
   // applies only to a direct external here -- never to commands that a builtin
   // (eval/source) or function invoked by this command goes on to run.
@@ -668,7 +671,6 @@ int Executor::run_simple(const SimpleCommand *c) {
   if (is_func) {
     apply_temp();
     std::vector<std::string> saved_pos = sh_.positional;
-    std::string saved_arg0 = sh_.arg0;
     sh_.positional.assign(argv.begin() + 1, argv.end());
     // Record the call for `caller': line of the call site, the function name,
     // and the source.
@@ -688,7 +690,13 @@ int Executor::run_simple(const SimpleCommand *c) {
     }
     sh_.push_scope();
     sh_.persona_restore.push_back(std::nullopt);  // for `personality -L' / `emulate -L'
+    // Run the body under the lineno_base captured at definition time so $LINENO
+    // reports absolute source lines regardless of the caller's input block.
+    int saved_lineno_base = sh_.lineno_base;
+    auto lbit = sh_.func_lineno_base.find(argv[0]);
+    if (lbit != sh_.func_lineno_base.end()) sh_.lineno_base = lbit->second;
     status = run(fit->second);
+    sh_.lineno_base = saved_lineno_base;
     if (!sh_.persona_restore.empty()) {
       if (sh_.persona_restore.back()) sh_.set_personality(*sh_.persona_restore.back());
       sh_.persona_restore.pop_back();
@@ -698,7 +706,6 @@ int Executor::run_simple(const SimpleCommand *c) {
     sh_.pop_src_frame();
     sh_.call_stack.pop_back();
     sh_.positional = saved_pos;
-    sh_.arg0 = saved_arg0;
     if (sh_.returning) { sh_.returning = false; status = sh_.exit_status; }
     // In posix mode, assignments preceding a function call persist.
     if (sh_.opt_posix) restore.clear();
@@ -961,6 +968,7 @@ int Executor::run_case(const CaseCommand *c) {
 int Executor::run_funcdef(const FunctionDef *c) {
   sh_.functions[c->name] = c->body.get();
   sh_.func_src[c->name] = sh_.current_source();  // file it was defined in, for BASH_SOURCE
+  sh_.func_lineno_base[c->name] = sh_.lineno_base;  // for $LINENO inside the body
   return 0;
 }
 

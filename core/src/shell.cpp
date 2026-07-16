@@ -415,6 +415,10 @@ std::string Shell::array_get(const std::string &n_in, const std::string &sub) co
 
 void Shell::array_set(const std::string &n_in, const std::string &sub, const std::string &val) {
   std::string n = deref(n_in);
+  // GROUPS/FUNCNAME carry bash's att_noassign: an assignment is silently
+  // discarded (and does not fail).  Only in the bash family -- zsh has no such
+  // dynamic variables, so an assignment there is ordinary.
+  if ((n == "GROUPS" || n == "FUNCNAME") && !is_zsh()) return;
   // BASH_CMDS is the live command hash: BASH_CMDS[name]=value adds a hash
   // entry.  A `/' value is rejected in a restricted shell; a value without a
   // `/' is resolved through $PATH (and must be found) before it is stored.
@@ -684,6 +688,9 @@ bool Shell::set(const std::string &n_in, const std::string &v) {
     std::fprintf(stderr, "%s%s: readonly variable\n", err_prefix().c_str(), n.c_str());
     return false;
   }
+  // GROUPS/FUNCNAME carry bash's att_noassign: a scalar assignment is silently
+  // discarded without error (bash family only; zsh has no such variables).
+  if ((n == "GROUPS" || n == "FUNCNAME") && !is_zsh()) return true;
   Variable &var = vars[n];
   if (var.readonly) {
     std::fprintf(stderr, "%s%s: readonly variable\n", err_prefix().c_str(), n.c_str());
