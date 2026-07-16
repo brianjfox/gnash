@@ -691,7 +691,8 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
                 std::string ex = expand_dq_word(word);
                 for (char c : ex) { out += c; mask += '1'; }
               } else {
-                process(word, out, mask, false);
+                // Unquoted default word: a leading `~' tilde-expands (bash).
+                process(expand_leading_tilde(sh_, word), out, mask, false);
               }
               i = end + 1;
               return;
