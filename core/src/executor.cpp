@@ -492,10 +492,33 @@ int Executor::run_pipeline(const Connection *c) {
   int prev_read = -1;
   std::vector<pid_t> pids;
   long pgid = 0;
+  // `shopt -s lastpipe' (with job control off) runs the final stage in the
+  // current shell, so its assignments and other side effects persist.
+  bool do_lastpipe = n > 1 && !sh_.job_control &&
+                     sh_.shopt_opts.count("lastpipe") && sh_.shopt_opts.at("lastpipe");
+  bool ran_lastpipe = false;
+  int lastpipe_status = 0;
   for (size_t i = 0; i < n; i++) {
     int pipefd[2] = {-1, -1};
     if (i + 1 < n) {
       if (pipe(pipefd) != 0) break;
+    }
+    if (i == n - 1 && do_lastpipe) {
+      // Final stage in-process: read from the previous pipe on stdin, run, then
+      // restore stdin.  Not added to `pids' -- it is not a child.
+      int saved_in = dup(0);
+      // When stdin was closed, the pipe's read end may itself be fd 0; in that
+      // case it is already in place, so must not be dup'd-then-closed.
+      if (prev_read != -1 && prev_read != 0) {
+        dup2(prev_read, 0);
+        close(prev_read);
+      }
+      prev_read = -1;
+      lastpipe_status = run(stages[i]);
+      ran_lastpipe = true;
+      if (saved_in != -1) { dup2(saved_in, 0); close(saved_in); }
+      else close(0);  // restore the closed-stdin state
+      break;
     }
     pid_t pid = fork();
     if (pid == 0) {
@@ -533,13 +556,28 @@ int Executor::run_pipeline(const Connection *c) {
   if (sh_.job_control) tcsetpgrp(sh_.job_terminal, static_cast<pid_t>(pgid));
   int last_st = 0, pipefail_st = 0;
   bool any_stopped = false;
+  std::vector<int> pstat;  // per-stage status, in pipeline order, for $PIPESTATUS
   for (size_t i = 0; i < pids.size(); i++) {
     int wst = 0;
     waitpid(pids[i], &wst, WUNTRACED);
-    if (WIFSTOPPED(wst)) { any_stopped = true; continue; }
+    if (WIFSTOPPED(wst)) { any_stopped = true; pstat.push_back(128 + WSTOPSIG(wst)); continue; }
     int s = WIFEXITED(wst) ? WEXITSTATUS(wst) : (128 + WTERMSIG(wst));
+    pstat.push_back(s);
     if (i == pids.size() - 1) last_st = s;
     if (s != 0) pipefail_st = s;  // track the last (rightmost) non-zero stage
+  }
+  // The in-process last stage is the rightmost of all: it sets the pipeline
+  // status, and (for pipefail) overrides only when it too failed.
+  if (ran_lastpipe) {
+    pstat.push_back(lastpipe_status);
+    last_st = lastpipe_status;
+    if (lastpipe_status != 0) pipefail_st = lastpipe_status;
+  }
+  // Publish $PIPESTATUS (one element per stage, left to right).
+  {
+    std::vector<std::pair<std::optional<std::string>, std::string>> elems;
+    for (int s : pstat) elems.emplace_back(std::nullopt, std::to_string(s));
+    sh_.array_assign("PIPESTATUS", elems, false, false);
   }
   // Normally the pipeline's status is the last stage's; under `set -o pipefail'
   // it is the last stage to exit non-zero (0 if all succeeded), so an upstream
