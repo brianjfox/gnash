@@ -403,7 +403,8 @@ long long ref_get(const Node *n, Ctx &ctx) {
 void ref_set(const Node *n, long long val, Ctx &ctx) {
   if (n->has_sub)
     ctx.sh.array_set(n->name, ctx.sh.zsh_subscript(n->name, n->sub), std::to_string(val));
-  else ctx.sh.set(n->name, std::to_string(val));
+  else if (!ctx.sh.set(n->name, std::to_string(val)))
+    ctx.ok = false;  // assignment to a readonly variable: the expansion fails
 }
 
 long long eval_node(const Node *n, Ctx &ctx) {
