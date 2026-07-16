@@ -130,6 +130,10 @@ class Shell {
   struct SrcFrame { std::string name; std::string source; int line; bool is_func; };
   std::vector<SrcFrame> src_frames;
   std::map<std::string, std::string> func_src;  // function name -> defining file
+  // Function name -> the lineno_base in effect where it was defined, so $LINENO
+  // inside the body reports absolute source lines even when the function is
+  // called from a different input block (which has its own lineno_base).
+  std::map<std::string, int> func_lineno_base;
   std::string current_source() const {          // file of the innermost frame
     return src_frames.empty() ? std::string() : src_frames.back().source;
   }

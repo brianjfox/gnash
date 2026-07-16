@@ -687,7 +687,13 @@ int Executor::run_simple(const SimpleCommand *c) {
     }
     sh_.push_scope();
     sh_.persona_restore.push_back(std::nullopt);  // for `personality -L' / `emulate -L'
+    // Run the body under the lineno_base captured at definition time so $LINENO
+    // reports absolute source lines regardless of the caller's input block.
+    int saved_lineno_base = sh_.lineno_base;
+    auto lbit = sh_.func_lineno_base.find(argv[0]);
+    if (lbit != sh_.func_lineno_base.end()) sh_.lineno_base = lbit->second;
     status = run(fit->second);
+    sh_.lineno_base = saved_lineno_base;
     if (!sh_.persona_restore.empty()) {
       if (sh_.persona_restore.back()) sh_.set_personality(*sh_.persona_restore.back());
       sh_.persona_restore.pop_back();
@@ -959,6 +965,7 @@ int Executor::run_case(const CaseCommand *c) {
 int Executor::run_funcdef(const FunctionDef *c) {
   sh_.functions[c->name] = c->body.get();
   sh_.func_src[c->name] = sh_.current_source();  // file it was defined in, for BASH_SOURCE
+  sh_.func_lineno_base[c->name] = sh_.lineno_base;  // for $LINENO inside the body
   return 0;
 }
 
