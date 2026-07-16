@@ -997,9 +997,14 @@ static void expand_alias_tokens(std::vector<Token> &toks,
     if ((cmd_pos || next_also) && !quoted && aliases.count(text) && !active.count(text)) {
       const std::string &val = aliases.at(text);
       active.insert(text);
+      // Alias expansion is a textual substitution: the replacement tokens all
+      // report the line where the alias was invoked, even when the body itself
+      // contains newlines (bash does not advance $LINENO across an alias body).
+      int inv_line = toks[i].line;
       bool trailing = !val.empty() && (val.back() == ' ' || val.back() == '\t');
       std::vector<Token> rep = tokenize(val);
       if (!rep.empty() && rep.back().type == Tok::Eof) rep.pop_back();
+      for (Token &t : rep) t.line = inv_line;
       toks.erase(toks.begin() + static_cast<long>(i));
       toks.insert(toks.begin() + static_cast<long>(i), rep.begin(), rep.end());
       guard++;
@@ -1011,8 +1016,10 @@ static void expand_alias_tokens(std::vector<Token> &toks,
         const std::string &v2 = aliases.at(toks[np].text);
         active.insert(toks[np].text);
         trailing = !v2.empty() && (v2.back() == ' ' || v2.back() == '\t');
+        int np_line = toks[np].line;
         std::vector<Token> r2 = tokenize(v2);
         if (!r2.empty() && r2.back().type == Tok::Eof) r2.pop_back();
+        for (Token &t : r2) t.line = np_line;
         toks.erase(toks.begin() + static_cast<long>(np));
         toks.insert(toks.begin() + static_cast<long>(np), r2.begin(), r2.end());
         guard++;
