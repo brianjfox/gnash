@@ -1533,29 +1533,137 @@ int bi_umask(const std::vector<std::string> &argv) {
 }
 
 int bi_getopts(Shell &sh, const std::vector<std::string> &argv) {
-  if (argv.size() < 3) return 2;
-  const std::string &optstring = argv[1];
+  static const char *kUsage = "getopts: usage: getopts optstring name [arg ...]";
+  // Character-scan state lives on the shell (bash's sh_charindex/nextchar) so
+  // it is saved and restored around a function's `local OPTIND'.
+  int &s_optind = sh.getopt_optind;
+  size_t &s_charidx = sh.getopt_charidx;
+  std::string &s_curarg = sh.getopt_curarg;
+
+  if (argv.size() >= 2 && argv[1].size() >= 2 && argv[1][0] == '-' && argv[1] != "--") {
+    std::fprintf(stderr, "%sgetopts: -%c: invalid option\n", sh.err_prefix().c_str(),
+                 argv[1][1]);
+    std::fprintf(stderr, "%s\n", kUsage);
+    return 2;
+  }
+  if (argv.size() < 3) {
+    std::fprintf(stderr, "%s\n", kUsage);
+    return 2;
+  }
+  std::string optstring = argv[1];
   const std::string &name = argv[2];
+  {
+    bool ok = !name.empty() &&
+              (std::isalpha(static_cast<unsigned char>(name[0])) || name[0] == '_');
+    for (char c : name)
+      if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '_')) ok = false;
+    if (!ok) {
+      std::fprintf(stderr, "%sgetopts: `%s': not a valid identifier\n",
+                   sh.err_prefix().c_str(), name.c_str());
+      // bash has already consumed the current option-argument at this point,
+      // so advance OPTIND past a leading option so `shift $((OPTIND-1))' works.
+      int oi = 1;
+      { std::string v; if (sh.get_if_set("OPTIND", v)) oi = std::atoi(v.c_str()); }
+      std::vector<std::string> a = argv.size() > 3
+          ? std::vector<std::string>(argv.begin() + 3, argv.end())
+          : sh.positional;
+      if (oi - 1 >= 0 && oi - 1 < static_cast<int>(a.size()) &&
+          !a[static_cast<size_t>(oi - 1)].empty() && a[static_cast<size_t>(oi - 1)][0] == '-' &&
+          a[static_cast<size_t>(oi - 1)] != "--")
+        sh.set("OPTIND", std::to_string(oi + 1));
+      return 2;
+    }
+  }
   std::vector<std::string> args;
   if (argv.size() > 3) args.assign(argv.begin() + 3, argv.end());
   else args = sh.positional;
 
+  bool silent = !optstring.empty() && optstring[0] == ':';
+  if (silent) optstring.erase(0, 1);
+  // The `opterr' shell variable (default 1) also enables silent mode when 0.
+  { std::string v; if (sh.get_if_set("OPTERR", v) && v == "0") silent = true; }
+
   int optind = 1;
   { std::string v; if (sh.get_if_set("OPTIND", v)) optind = std::atoi(v.c_str()); }
   if (optind < 1) optind = 1;
-  if (optind - 1 >= static_cast<int>(args.size())) { sh.set(name, "?"); return 1; }
-  const std::string &arg = args[static_cast<size_t>(optind - 1)];
-  if (arg.empty() || arg[0] != '-' || arg == "-") { sh.set(name, "?"); return 1; }
-  // simple: one option char per argument element (no bundling/OPTARG parsing offset)
-  char opt = arg.size() > 1 ? arg[1] : '?';
-  size_t pos = optstring.find(opt);
-  if (pos == std::string::npos) { sh.set(name, "?"); sh.set("OPTARG", std::string(1, opt)); sh.set("OPTIND", std::to_string(optind + 1)); return 0; }
-  sh.set(name, std::string(1, opt));
-  if (pos + 1 < optstring.size() && optstring[pos + 1] == ':') {
-    if (optind < static_cast<int>(args.size())) { sh.set("OPTARG", args[static_cast<size_t>(optind)]); optind++; }
+  // Restart at the first character when OPTIND moved out from under us, or when
+  // the argument we thought we were decoding isn't the current one (a fresh or
+  // recursive `local OPTIND' invocation with a different argv).
+  int cur_ai = optind - 1;
+  bool arg_matches = cur_ai >= 0 && cur_ai < static_cast<int>(args.size()) &&
+                     args[static_cast<size_t>(cur_ai)] == s_curarg;
+  if (optind != s_optind || !arg_matches) { s_charidx = 1; s_optind = optind; }
+
+  auto badopt = [&](char c) {
+    if (silent) { sh.set(name, "?"); sh.set("OPTARG", std::string(1, c)); }
+    else {
+      sh.unset("OPTARG");
+      sh.set(name, "?");
+      std::fprintf(stderr, "%s: illegal option -- %c\n", sh.arg0.c_str(), c);
+    }
+  };
+  auto needarg = [&](char c) {
+    if (silent) { sh.set(name, ":"); sh.set("OPTARG", std::string(1, c)); }
+    else {
+      sh.unset("OPTARG");
+      sh.set(name, "?");
+      std::fprintf(stderr, "%s: option requires an argument -- %c\n", sh.arg0.c_str(), c);
+    }
+  };
+
+  for (;;) {
+    int ai = optind - 1;  // 0-based index into args
+    if (ai >= static_cast<int>(args.size())) { sh.set(name, "?"); return 1; }
+    const std::string &arg = args[static_cast<size_t>(ai)];
+
+    // Start of a fresh argument.
+    if (s_charidx <= 1) {
+      if (arg == "--") {  // end of options; consume it
+        optind++;
+        s_optind = optind;
+        s_charidx = 1;
+        sh.set("OPTIND", std::to_string(optind));
+        sh.set(name, "?");
+        return 1;
+      }
+      if (arg.empty() || arg[0] != '-' || arg == "-") { sh.set(name, "?"); return 1; }
+      s_charidx = 1;
+      s_curarg = arg;
+    }
+
+    char c = (s_charidx < arg.size()) ? arg[s_charidx] : '\0';
+    s_charidx++;
+    bool last_char = s_charidx >= arg.size();
+    if (last_char) { optind++; s_charidx = 1; }  // advance to the next argument
+
+    if (c == ':' || optstring.find(c) == std::string::npos) {
+      badopt(c);
+      s_optind = optind;
+      sh.set("OPTIND", std::to_string(optind));
+      return 0;
+    }
+    size_t pos = optstring.find(c);
+    if (pos + 1 < optstring.size() && optstring[pos + 1] == ':') {
+      // Option takes an argument: rest of this arg, else the next arg.
+      if (!last_char) {
+        sh.set("OPTARG", arg.substr(s_charidx));
+        optind++;
+        s_charidx = 1;
+      } else if (ai + 1 < static_cast<int>(args.size())) {
+        sh.set("OPTARG", args[static_cast<size_t>(ai + 1)]);
+        optind++;
+      } else {
+        needarg(c);
+        s_optind = optind;
+        sh.set("OPTIND", std::to_string(optind));
+        return 0;
+      }
+    }
+    sh.set(name, std::string(1, c));
+    s_optind = optind;
+    sh.set("OPTIND", std::to_string(optind));
+    return 0;
   }
-  sh.set("OPTIND", std::to_string(optind + 1));
-  return 0;
 }
 
 int signame_to_num(const std::string &s) {

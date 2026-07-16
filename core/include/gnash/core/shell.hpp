@@ -12,6 +12,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include "gnash/core/ast.hpp"
@@ -85,9 +86,18 @@ class Shell {
   // --- local scopes (for functions / `local' / `declare') ----------------
   void push_scope();
   void pop_scope();
+
+  // getopts character-scan state (bash's sh_charindex/nextchar), kept here so
+  // it is saved and restored around a function's `local OPTIND', matching
+  // bash's per-scope getopt state.
+  size_t getopt_charidx = 1;
+  std::string getopt_curarg;
+  int getopt_optind = 0;
   void make_local(const std::string &n);  // save outer binding, create fresh local
   bool in_function() const { return !local_stack.empty(); }
   std::vector<std::vector<std::pair<std::string, std::optional<Variable>>>> local_stack;
+  // Per-scope saved getopt state, set when that scope localizes OPTIND.
+  std::vector<std::optional<std::tuple<size_t, std::string, int>>> getopt_scope_saves;
 
   // --- shell state for builtins -----------------------------------------
   bool login_shell = false;                  // logout only works in a login shell
