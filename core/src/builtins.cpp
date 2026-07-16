@@ -842,9 +842,22 @@ int bi_export(Shell &sh, const std::vector<std::string> &argv) {
       continue;
     }
     size_t eq = a.find('=');
-    if (eq != std::string::npos)
-      sh.set_exported(a.substr(0, eq), a.substr(eq + 1));
-    else
+    if (eq != std::string::npos) {
+      // `export name+=value' appends to the current value.
+      bool append = eq > 0 && a[eq - 1] == '+';
+      std::string nm = a.substr(0, append ? eq - 1 : eq);
+      std::string val = a.substr(eq + 1);
+      auto exv = sh.vars.find(nm);
+      if (exv != sh.vars.end() && exv->second.integer) {
+        bool ok = true;
+        long long rhs = eval_arith(sh, val, &ok);
+        long long base = append ? eval_arith(sh, sh.get(nm), &ok) : 0;
+        val = std::to_string(base + rhs);
+      } else if (append) {
+        val = sh.get(nm) + val;
+      }
+      sh.set_exported(nm, val);
+    } else
       sh.export_name(a);
   }
   return st;
@@ -1431,7 +1444,11 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
       } else {
         Expander ex(sh);
         val = ex.expand_assignment(val);  // arg arrives raw (assignment builtin)
-        if (integer) {
+        // Honor a pre-existing integer attribute too (e.g. `readonly x+=7' on a
+        // variable already declared `-i'), not just an `-i' on this command.
+        auto exv = sh.vars.find(name);
+        bool eff_integer = integer || (exv != sh.vars.end() && exv->second.integer);
+        if (eff_integer) {
           bool ok = true;
           long long rhs = eval_arith(sh, val, &ok);
           long long base = append ? eval_arith(sh, sh.get(name), &ok) : 0;
