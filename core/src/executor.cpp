@@ -246,16 +246,33 @@ parse_array_elems(Expander &ex, const std::string &parenval) {
 }
 
 void apply_array_assign(Shell &sh, Expander &ex, const Assign &a) {
+  // An integer-attributed array (`declare -i') evaluates each element value as
+  // an arithmetic expression, and `+=' adds rather than string-appends.
+  auto vit = sh.vars.find(a.name);
+  bool integer = vit != sh.vars.end() && vit->second.integer;
   if (a.sub) {
     // zsh array subscripts are 1-based; translate to the internal 0-based index
     // (a no-op under other personalities / for associative arrays).
     std::string sub = sh.zsh_subscript(a.name, ex.expand_no_split(*a.sub));
     std::string val = ex.expand_assignment(a.value);
-    if (a.append) val = sh.array_get(a.name, sub) + val;
+    if (integer) {
+      bool ok = true;
+      long long rhs = eval_arith(sh, val, &ok);
+      long long base = a.append ? eval_arith(sh, sh.array_get(a.name, sub), &ok) : 0;
+      val = std::to_string(base + rhs);
+    } else if (a.append) {
+      val = sh.array_get(a.name, sub) + val;
+    }
     sh.array_set(a.name, sub, val);
   } else {  // is_array
     bool assoc = sh.vars.count(a.name) && sh.vars[a.name].kind == VarKind::Assoc;
-    sh.array_assign(a.name, parse_array_elems(ex, a.value), a.append, assoc);
+    auto elems = parse_array_elems(ex, a.value);
+    if (integer)
+      for (auto &e : elems) {
+        bool ok = true;
+        e.second = std::to_string(eval_arith(sh, e.second, &ok));
+      }
+    sh.array_assign(a.name, elems, a.append, assoc);
   }
 }
 
