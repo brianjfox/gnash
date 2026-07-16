@@ -180,6 +180,25 @@ static std::string expand_leading_tilde(Shell &sh, const std::string &w) {
     home = sh.get("PWD");
   } else if (prefix == "-") {
     home = sh.get("OLDPWD");
+  } else if (prefix[0] == '+' || prefix[0] == '-' ||
+             std::isdigit(static_cast<unsigned char>(prefix[0]))) {
+    // ~N / ~+N / ~-N: the Nth directory-stack entry (bash's DIRSTACK).
+    const char *dp = prefix.c_str();
+    bool from_end = (*dp == '-');
+    if (*dp == '+' || *dp == '-') dp++;
+    bool alldig = *dp != '\0';
+    for (const char *q = dp; *q; q++)
+      if (!std::isdigit(static_cast<unsigned char>(*q))) alldig = false;
+    if (alldig) {
+      std::vector<std::string> ds = sh.dirstack();
+      long k = std::atol(dp);
+      long idx = from_end ? static_cast<long>(ds.size()) - 1 - k : k;
+      if (idx >= 0 && static_cast<size_t>(idx) < ds.size()) home = ds[static_cast<size_t>(idx)];
+      else return w;  // out of range: leave literal
+    } else {
+      struct passwd *pw = getpwnam(prefix.c_str());
+      if (pw) home = pw->pw_dir;
+    }
   } else {
     struct passwd *pw = getpwnam(prefix.c_str());
     if (pw) home = pw->pw_dir;

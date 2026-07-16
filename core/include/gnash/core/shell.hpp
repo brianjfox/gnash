@@ -216,6 +216,9 @@ class Shell {
 
   // --- directory stack (pushd/popd/dirs); entries below the current dir ---
   std::vector<std::string> dir_stack;
+  // The full stack as $DIRSTACK / ~N sees it: logical $PWD at [0], then
+  // dir_stack.  Defined in builtins.cpp (uses logical_pwd).
+  std::vector<std::string> dirstack() const;
 
   // --- process substitutions <(...) / >(...) live for one command ---------
   struct ProcSub { long pid; int fd; };
