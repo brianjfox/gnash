@@ -313,6 +313,10 @@ int Executor::run(const Command *c) {
 
   sh_.run_pending_traps();  // deliver any signals received between commands
 
+  // $LINENO / error line for compound commands (run_simple sets its own).
+  if (c->line > 0 && !dynamic_cast<const SimpleCommand *>(c))
+    sh_.cur_lineno = sh_.lineno_base + c->line;
+
   if (auto *p = dynamic_cast<const SimpleCommand *>(c)) return run_simple(p);
   if (auto *p = dynamic_cast<const Connection *>(c)) return run_connection(p);
 
