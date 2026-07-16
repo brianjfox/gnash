@@ -1429,7 +1429,28 @@ void Expander::process_dq(const std::string &text, size_t &i, std::string &out,
   }
 }
 
-std::string Expander::expand_dq_word(const std::string &w) {
+std::string Expander::expand_dq_word(const std::string &w_in) {
+  // bash recognizes $'...' ANSI-C quoting in the replacement word of
+  // ${var:-word} (etc.) even when the whole expansion is double quoted, though
+  // ordinary single quotes there stay literal.  Pre-decode each $'...' and
+  // escape the resulting bytes so the double-quote pass below keeps them
+  // literal.
+  std::string w;
+  for (size_t k = 0; k < w_in.size(); k++) {
+    if (w_in[k] == '\\' && k + 1 < w_in.size()) { w += w_in[k]; w += w_in[k + 1]; k++; continue; }
+    if (w_in[k] == '$' && k + 1 < w_in.size() && w_in[k + 1] == '\'') {
+      size_t j = k + 2;
+      while (j < w_in.size() && w_in[j] != '\'') { if (w_in[j] == '\\' && j + 1 < w_in.size()) j++; j++; }
+      std::string decoded = ansi_c(w_in.substr(k + 2, j - (k + 2)));
+      for (char c : decoded) {
+        if (c == '"' || c == '\\' || c == '$' || c == '`') w += '\\';
+        w += c;
+      }
+      k = j;  // the loop's ++ steps past the closing quote
+      continue;
+    }
+    w += w_in[k];
+  }
   // A synthetic leading quote starts the double-quote span; embedded quotes in
   // W toggle context normally (an unterminated span at the end is fine).
   std::string out, mask;
