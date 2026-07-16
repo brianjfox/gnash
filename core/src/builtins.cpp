@@ -878,10 +878,10 @@ void declare_print_var(const std::string &name, const Variable &v) {
   } else if (v.kind == VarKind::Assoc) {
     decl += "=(";
     bool first = true;
-    for (const auto &kv : v.assoc) {
+    for (const auto &k : Shell::assoc_order(v)) {
       if (!first) decl += ' ';
       first = false;
-      decl += "[" + kv.first + "]=" + declare_quote(kv.second);
+      decl += "[" + k + "]=" + declare_quote(v.assoc.at(k));
     }
     decl += ")";
   } else if (!v.value.empty() || v.integer) {
@@ -903,10 +903,10 @@ void set_print_var(const std::string &name, const Variable &v) {
   } else if (v.kind == VarKind::Assoc) {
     std::string s = name + "=(";
     bool first = true;
-    for (const auto &kv : v.assoc) {
+    for (const auto &k : Shell::assoc_order(v)) {
       if (!first) s += ' ';
       first = false;
-      s += "[" + kv.first + "]=" + set_elem(kv.second);
+      s += "[" + k + "]=" + set_elem(v.assoc.at(k));
     }
     std::printf("%s)\n", s.c_str());
   } else {

@@ -31,6 +31,8 @@ struct Variable {
   std::string value;                          // scalar value
   std::map<long long, std::string> idx;        // indexed array
   std::map<std::string, std::string> assoc;    // associative array
+  std::vector<std::string> assoc_seq;          // assoc key insertion order (for
+                                               // bash-compatible hash iteration)
   bool exported = false;
   bool readonly = false;
   bool integer = false;
@@ -60,6 +62,10 @@ class Shell {
   // --- arrays ------------------------------------------------------------
   std::vector<std::string> array_values(const std::string &n) const;
   std::vector<std::string> array_keys(const std::string &n) const;
+  // Associative-array keys in bash's hash-table iteration order (bucket 0..N,
+  // and within a bucket newest-first), so `${a[@]}' etc. match bash byte for
+  // byte.  Public so `declare -p' can print in the same order.
+  static std::vector<std::string> assoc_order(const Variable &v);
   std::string array_get(const std::string &n, const std::string &sub) const;
   // $BASH_ARGC / $BASH_ARGV views (only non-empty inside a function under
   // `shopt -s extdebug'); see bash_argc_view/bash_argv_view in shell.cpp.
