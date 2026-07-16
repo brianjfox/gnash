@@ -479,6 +479,9 @@ struct Lexer {
     if (!pending.empty()) collect_heredocs();
     Token eof;
     eof.type = Tok::Eof;
+    // bash parses input with a guaranteed trailing newline, so EOF falls on the
+    // line after the last content -- add one when the input has no final newline.
+    eof.line = line_for(n) + ((n > 0 && in[n - 1] != '\n') ? 1 : 0);
     eof.lex_error = unterminated;
     eof.lex_close = unterm_close;
     eof.heredoc_eof = heredoc_eof;

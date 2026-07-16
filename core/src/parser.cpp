@@ -79,6 +79,20 @@ struct Parser {
   bool incomplete = false;
   std::string errmsg;
   int err_line = 0;  // source line of the first failure
+  // Stack of open compound commands (opener word/char + its line), so an EOF
+  // before the matching closer reports "unexpected end of file from `X'
+  // command on line N", as bash does.
+  std::vector<std::pair<std::string, int>> open_cmds;
+  void push_open(const std::string &w) { open_cmds.emplace_back(w, cur().line); }
+  void pop_open() { if (!open_cmds.empty()) open_cmds.pop_back(); }
+  // At EOF with an open compound, produce bash's grammar-level message.
+  bool eof_from_open() {
+    if (!is(Tok::Eof) || open_cmds.empty()) return false;
+    incomplete = true;
+    fail("unexpected end of file from `" + open_cmds.back().first +
+         "' command on line " + std::to_string(open_cmds.back().second));
+    return true;
+  }
 
   explicit Parser(std::vector<Token> t) : toks(std::move(t)) {}
 
@@ -160,6 +174,7 @@ struct Parser {
     if (reserved(w))
       advance();
     else {
+      if (eof_from_open()) return;
       if (is(Tok::Eof)) incomplete = true;
       fail(std::string("expected `") + w + "'");
     }
@@ -168,6 +183,7 @@ struct Parser {
     if (is(t))
       advance();
     else {
+      if (eof_from_open()) return;
       if (is(Tok::Eof)) incomplete = true;
       fail(std::string("expected `") + name + "'");
     }
@@ -456,27 +472,33 @@ struct Parser {
   }
 
   CommandPtr parse_subshell() {
+    push_open("(");
     expect(Tok::Lparen, "(");
     auto s = std::make_unique<Subshell>();
     s->body = parse_list({});
     expect(Tok::Rparen, ")");
+    pop_open();
     parse_redirect_list(s->redirects);
     return s;
   }
 
   CommandPtr parse_group() {
+    push_open("{");
     expect_reserved("{");
     auto g = std::make_unique<Group>();
     g->body = parse_list({"}"});
     expect_reserved("}");
+    pop_open();
     parse_redirect_list(g->redirects);
     return g;
   }
 
   CommandPtr parse_if() {
+    push_open("if");
     expect_reserved("if");
     CommandPtr node = parse_if_arm();
     expect_reserved("fi");
+    pop_open();
     if (auto *ic = dynamic_cast<IfCommand *>(node.get())) parse_redirect_list(ic->redirects);
     return node;
   }
@@ -498,6 +520,7 @@ struct Parser {
 
   CommandPtr parse_loop() {
     bool until = reserved("until");
+    push_open(until ? "until" : "while");
     advance();  // while/until
     auto n = std::make_unique<LoopCommand>();
     n->until = until;
@@ -505,12 +528,14 @@ struct Parser {
     expect_reserved("do");
     n->body = parse_list({"done"});
     expect_reserved("done");
+    pop_open();
     parse_redirect_list(n->redirects);
     return n;
   }
 
   CommandPtr parse_for() {
     bool select = reserved("select");
+    push_open(select ? "select" : "for");
     advance();  // for / select
     auto n = std::make_unique<ForCommand>();
     n->is_select = select;
@@ -552,6 +577,7 @@ struct Parser {
     expect_reserved("do");
     n->body = parse_list({"done"});
     expect_reserved("done");
+    pop_open();
     parse_redirect_list(n->redirects);
     return n;
   }
@@ -810,6 +836,7 @@ struct Parser {
 
   CommandPtr parse_case() {
     int case_line = cur().line;  // $LINENO / error line of the case command
+    push_open("case");
     expect_reserved("case");
     auto n = std::make_unique<CaseCommand>();
     n->line = case_line;
@@ -835,7 +862,7 @@ struct Parser {
       // pattern list: word ( '|' word )* ')'
       for (;;) {
         if (cur().type != Tok::Word) {
-          fail("expected pattern in case");
+          if (!eof_from_open()) fail("expected pattern in case");
           break;
         }
         clause.patterns.push_back(Word{cur().text, cur().quoted ? W_QUOTED : 0});
@@ -862,6 +889,7 @@ struct Parser {
       n->clauses.push_back(std::move(clause));
     }
     expect_reserved("esac");
+    pop_open();
     parse_redirect_list(n->redirects);
     return n;
   }
