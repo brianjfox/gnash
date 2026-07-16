@@ -270,6 +270,7 @@ class Shell {
                                 // a script runs command-by-command
 
   bool opt_posix = false;       // -o posix
+  bool opt_restricted = false;  // -r / -o restricted / rbash: restricted shell
   // Turn on `-o history': the first enable loads $HISTFILE and applies the
   // $HISTSIZE stifle, as bash does.
   void enable_history();

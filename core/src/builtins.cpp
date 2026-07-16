@@ -553,6 +553,10 @@ int change_dir(Shell &sh, const std::string &dir, bool physical) {
 }
 
 int bi_cd(Shell &sh, const std::vector<std::string> &argv) {
+  if (sh.opt_restricted) {
+    std::fprintf(stderr, "%scd: restricted\n", sh.err_prefix().c_str());
+    return 1;
+  }
   bool physical = false;
   size_t i = 1;
   for (; i < argv.size(); i++) {
@@ -923,6 +927,10 @@ bool set_o_option(Shell &sh, const std::string &o, bool on) {
   else if (o == "history") { if (on) sh.enable_history(); else sh.opt_history = false; }
   else if (o == "histexpand") sh.opt_histexpand = on;
   else if (o == "posix") sh.opt_posix = on;
+  else if (o == "restricted") {
+    if (on) sh.opt_restricted = true;
+    else return false;  // cannot clear restricted; caller reports the error
+  }
   // `set -o vi'/`set -o emacs' switch the readline editing mode (they are
   // mutually exclusive); `+o' flips to the other.
   else if (o == "vi") { if (on) rl_vi_editing_mode(0, 0); else rl_emacs_editing_mode(0, 0); }
@@ -981,6 +989,15 @@ int bi_set(Shell &sh, const std::vector<std::string> &argv) {
           case 'n': if (!sh.interactive) sh.opt_noexec = on; break;  // ignored when interactive
           case 'T': sh.opt_functrace = on; break;  // DEBUG/RETURN trap inheritance
           case 'H': sh.opt_histexpand = on; break;  // `!' history expansion
+          case 'r':  // restricted: can be turned on, never off
+            if (on) sh.opt_restricted = true;
+            else {
+              std::fprintf(stderr, "%sset: +r: invalid option\n", sh.err_prefix().c_str());
+              std::fprintf(stderr, "set: usage: set [-abefhkmnptuvxBCEHPT] [-o option-name] "
+                                   "[--] [-] [arg ...]\n");
+              return 2;
+            }
+            break;
           case 'o': {
             if (i + 1 >= argv.size()) {
               // `set -o' lists states; `set +o' reproduces as commands.
@@ -989,7 +1006,12 @@ int bi_set(Shell &sh, const std::vector<std::string> &argv) {
                 else std::printf("set %co %s\n", o.second ? '-' : '+', o.first.c_str());
               }
             } else {
-              set_o_option(sh, argv[++i], on);
+              std::string oname = argv[++i];
+              if (!set_o_option(sh, oname, on) && oname == "restricted" && !on) {
+                std::fprintf(stderr, "%sset: restricted: invalid option name\n",
+                             sh.err_prefix().c_str());
+                return 2;
+              }
             }
             k = a.size();  // -o consumes the rest of the word
             break;
@@ -1904,7 +1926,21 @@ int bi_hash(Shell &sh, const std::vector<std::string> &argv) {
     }
     if (consumed) continue;
   }
-  if (!ppath.empty() && i < argv.size()) { sh.hashed[argv[i]] = ppath; return 0; }
+  if (!ppath.empty() && i < argv.size()) {
+    // Under a restricted shell, a hashed pathname may not contain `/', and a
+    // relative one cannot be resolved, so neither can be hashed.
+    if (sh.opt_restricted) {
+      if (ppath.find('/') != std::string::npos)
+        std::fprintf(stderr, "%shash: %s: restricted\n", sh.err_prefix().c_str(),
+                     ppath.c_str());
+      else
+        std::fprintf(stderr, "%shash: %s: not found\n", sh.err_prefix().c_str(),
+                     ppath.c_str());
+      return 1;
+    }
+    sh.hashed[argv[i]] = ppath;
+    return 0;
+  }
   if (i >= argv.size()) {
     if (sh.hashed.empty()) {
       if (!list_l) std::printf("hash: hash table empty\n");
@@ -3046,6 +3082,12 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
     st = sh.run_string(join(argv, 1));
     sh.error_context = saved_ctx;
   } else if (cmd == "source" || cmd == ".") {
+    if (argv.size() > 1 && sh.opt_restricted &&
+        argv[1].find('/') != std::string::npos) {
+      std::fprintf(stderr, "%s%s: %s: restricted\n", sh.err_prefix().c_str(),
+                   cmd.c_str(), argv[1].c_str());
+      return 1;
+    }
     if (argv.size() > 1) {
       // Like bash: a filename without a slash is looked up on PATH first, then
       // (as a fallback) in the current directory.
@@ -3200,7 +3242,12 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
       for (size_t k = 1; k < o.size(); k++) {
         if (o[k] == 'v') desc_v = true;
         else if (o[k] == 'V') desc_V = true;
-        else if (o[k] == 'p') { /* default PATH: accepted, no-op */ }
+        else if (o[k] == 'p') {  // default PATH; disallowed under restricted
+          if (sh.opt_restricted) {
+            std::fprintf(stderr, "%scommand: -p: restricted\n", sh.err_prefix().c_str());
+            return 2;
+          }
+        }
         else { bad = true; badopt = std::string("-") + o[k]; break; }
       }
       if (bad) break;
@@ -3236,6 +3283,10 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
       else st = 0;
     }
   } else if (cmd == "exec") {
+    if (sh.opt_restricted) {
+      std::fprintf(stderr, "%sexec: restricted\n", sh.err_prefix().c_str());
+      return 2;
+    }
     // Options: -a NAME (argv[0] for the command), -c (empty environment),
     // -l (login: prefix argv[0] with '-').
     size_t i = 1;
