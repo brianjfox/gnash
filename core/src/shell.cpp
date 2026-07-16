@@ -661,13 +661,15 @@ void Shell::set_exported(const std::string &n_in, const std::string &v) {
 
 void Shell::export_name(const std::string &n) { vars[n].exported = true; }
 
-void Shell::unset(const std::string &n_in) {
+void Shell::unset(const std::string &n_in, bool force) {
   if (n_in == "HISTSIZE" && history_loaded) unstifle_history();
   // `unset name' on a nameref removes the target; only `unset -n' (not modeled
   // here) removes the nameref itself.  Following the ref matches common usage.
-  std::string n = deref(n_in);
+  // FORCE mirrors bash's unbind_variable_noref: remove the named variable
+  // itself (no nameref following) even when it is readonly.
+  std::string n = force ? n_in : deref(n_in);
   auto it = vars.find(n);
-  if (it != vars.end() && !it->second.readonly) vars.erase(it);
+  if (it != vars.end() && (force || !it->second.readonly)) vars.erase(it);
 }
 
 std::string Shell::ifs() const {
