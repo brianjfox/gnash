@@ -536,14 +536,14 @@ std::string canon_logical(const std::string &path) {
 // Change directory, updating $OLDPWD/$PWD.  In logical (default) mode $PWD
 // becomes the lexically-canonicalized path the user named; in physical mode
 // (`cd -P') it becomes the resolved getcwd().
-int change_dir(Shell &sh, const std::string &dir, bool physical) {
+int change_dir(Shell &sh, const std::string &dir, bool physical, const char *caller = "cd") {
   if (dir.empty()) return 1;
   std::string oldpwd = logical_pwd(sh);
   std::string logical = (dir[0] == '/') ? dir : oldpwd + "/" + dir;
   logical = canon_logical(logical);
   const std::string &target = physical ? dir : logical;
   if (chdir(target.c_str()) != 0) {
-    std::fprintf(stderr, "%scd: %s: %s\n", sh.err_prefix().c_str(), dir.c_str(),
+    std::fprintf(stderr, "%s%s: %s: %s\n", sh.err_prefix().c_str(), caller, dir.c_str(),
                  std::strerror(errno));
     return 1;
   }
@@ -631,21 +631,34 @@ int bi_dirs(Shell &sh, const std::vector<std::string> &argv) {
       select = a;
       continue;
     }
-    if (a.empty() || a[0] != '-') break;
-    for (size_t k = 1; k < a.size(); k++) {
+    // A `-<non-digit>' is read as a bad `-N' index (invalid number); a bare
+    // argument with no leading dash is an invalid option.
+    if (a.empty() || a[0] != '-') {
+      std::fprintf(stderr, "%sdirs: %s: invalid option\n", sh.err_prefix().c_str(), a.c_str());
+      std::fprintf(stderr, "dirs: usage: dirs [-clpv] [+N] [-N]\n");
+      return 2;
+    }
+    bool bad = false;
+    for (size_t k = 1; k < a.size() && !bad; k++) {
       if (a[k] == 'c') { sh.dir_stack.clear(); return 0; }
       else if (a[k] == 'l') longform = true;
       else if (a[k] == 'p') oneline = true;
       else if (a[k] == 'v') { oneline = true; verbose = true; }
-      else { std::fprintf(stderr, "gnash: dirs: -%c: invalid option\n", a[k]); return 2; }
+      else bad = true;
+    }
+    if (bad) {
+      std::fprintf(stderr, "%sdirs: %s: invalid number\n", sh.err_prefix().c_str(), a.c_str());
+      std::fprintf(stderr, "dirs: usage: dirs [-clpv] [+N] [-N]\n");
+      return 2;
     }
   }
   std::vector<std::string> v = full_dirstack(sh);
   if (!select.empty()) {  // print a single entry
     int idx = rot_index(select, v.size());
     if (idx < 0) {
-      std::fprintf(stderr, "gnash: dirs: %s: directory stack index out of range\n",
-                   select.c_str());
+      // dirs reports the bare number (bash strips the +/- here, unlike pushd/popd).
+      std::fprintf(stderr, "%sdirs: %s: directory stack index out of range\n",
+                   sh.err_prefix().c_str(), select.substr(1).c_str());
       return 1;
     }
     std::string s = tilde_abbrev(sh, v[static_cast<size_t>(idx)], longform);
@@ -676,26 +689,38 @@ int rot_index(const std::string &spec, size_t n) {
 }
 
 int bi_pushd(Shell &sh, const std::vector<std::string> &argv) {
-  if (argv.size() > 1 && (argv[1][0] == '+' || argv[1][0] == '-') && argv[1].size() > 1 &&
-      std::isdigit(static_cast<unsigned char>(argv[1][1]))) {
+  // A leading `-n' suppresses the directory change (only the stack is touched).
+  std::vector<std::string> a(argv.begin(), argv.end());
+  bool no_cd = false;
+  if (a.size() > 1 && a[1] == "-n") { no_cd = true; a.erase(a.begin() + 1); }
+  if (a.size() > 1 && (a[1][0] == '+' || a[1][0] == '-') && a[1].size() > 1 &&
+      std::isdigit(static_cast<unsigned char>(a[1][1]))) {
     // Rotate so the Nth entry becomes the top.
     std::vector<std::string> v = full_dirstack(sh);
-    int idx = rot_index(argv[1], v.size());
-    if (idx < 0) { std::fprintf(stderr, "gnash: pushd: %s: directory stack index out of range\n", argv[1].c_str()); return 1; }
+    int idx = rot_index(a[1], v.size());
+    if (idx < 0) { std::fprintf(stderr, "%spushd: %s: directory stack index out of range\n", sh.err_prefix().c_str(), a[1].c_str()); return 1; }
     std::rotate(v.begin(), v.begin() + idx, v.end());
-    if (do_chdir(sh, v[0]) != 0) return 1;
+    if (!no_cd && change_dir(sh, v[0], false, "pushd") != 0) return 1;
     sh.dir_stack.assign(v.begin() + 1, v.end());
     return bi_dirs(sh, {"dirs"});
   }
-  if (argv.size() > 1) {
+  // A `+'/`-' argument that isn't a numeric index is a malformed rotation count.
+  if (a.size() > 1 && (a[1][0] == '+' || a[1][0] == '-')) {
+    std::fprintf(stderr, "%spushd: %s: invalid number\n", sh.err_prefix().c_str(),
+                 a[1].c_str());
+    std::fprintf(stderr, "pushd: usage: pushd [-n] [+N | -N | dir]\n");
+    return 2;
+  }
+  if (a.size() > 1) {
     std::string old = logical_pwd(sh);
-    if (do_chdir(sh, argv[1]) != 0) return 1;
+    if (no_cd) { sh.dir_stack.insert(sh.dir_stack.begin(), a[1]); return bi_dirs(sh, {"dirs"}); }
+    if (change_dir(sh, a[1], false, "pushd") != 0) return 1;
     sh.dir_stack.insert(sh.dir_stack.begin(), old);
     return bi_dirs(sh, {"dirs"});
   }
   // No argument: swap the top two directories.
   if (sh.dir_stack.empty()) {
-    std::fprintf(stderr, "gnash: pushd: no other directory\n");
+    std::fprintf(stderr, "%spushd: no other directory\n", sh.err_prefix().c_str());
     return 1;
   }
   std::string target = sh.dir_stack.front();
@@ -710,24 +735,31 @@ int bi_popd(Shell &sh, const std::vector<std::string> &argv) {
       std::isdigit(static_cast<unsigned char>(argv[1][1]))) {
     std::vector<std::string> v = full_dirstack(sh);
     int idx = rot_index(argv[1], v.size());
-    if (idx < 0) { std::fprintf(stderr, "gnash: popd: %s: directory stack index out of range\n", argv[1].c_str()); return 1; }
+    if (idx < 0) { std::fprintf(stderr, "%spopd: %s: directory stack index out of range\n", sh.err_prefix().c_str(), argv[1].c_str()); return 1; }
     if (idx == 0) {  // removing the top: cd to the next entry
-      if (sh.dir_stack.empty()) { std::fprintf(stderr, "gnash: popd: directory stack empty\n"); return 1; }
+      if (sh.dir_stack.empty()) { std::fprintf(stderr, "%spopd: directory stack empty\n", sh.err_prefix().c_str()); return 1; }
       std::string target = sh.dir_stack.front();
       sh.dir_stack.erase(sh.dir_stack.begin());
-      if (do_chdir(sh, target) != 0) return 1;
+      if (change_dir(sh, target, false, "popd") != 0) return 1;
     } else {
       sh.dir_stack.erase(sh.dir_stack.begin() + (idx - 1));
     }
     return bi_dirs(sh, {"dirs"});
   }
+  // A `+'/`-' argument that isn't a numeric index (and isn't the `-n' option).
+  if (argv.size() > 1 && (argv[1][0] == '+' || argv[1][0] == '-') && argv[1] != "-n") {
+    std::fprintf(stderr, "%spopd: %s: invalid number\n", sh.err_prefix().c_str(),
+                 argv[1].c_str());
+    std::fprintf(stderr, "popd: usage: popd [-n] [+N | -N]\n");
+    return 2;
+  }
   if (sh.dir_stack.empty()) {
-    std::fprintf(stderr, "gnash: popd: directory stack empty\n");
+    std::fprintf(stderr, "%spopd: directory stack empty\n", sh.err_prefix().c_str());
     return 1;
   }
   std::string target = sh.dir_stack.front();
   sh.dir_stack.erase(sh.dir_stack.begin());
-  if (do_chdir(sh, target) != 0) return 1;
+  if (change_dir(sh, target, false, "popd") != 0) return 1;
   return bi_dirs(sh, {"dirs"});
 }
 
