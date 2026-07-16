@@ -15,6 +15,8 @@
 #include <optional>
 #include <termios.h>
 #include <unistd.h>
+#include <sys/time.h>
+#include <sys/times.h>
 #include <sys/wait.h>
 
 #include "gnash/core/builtins.hpp"
@@ -300,8 +302,86 @@ void apply_assignment_word(Shell &sh, const std::string &word) {
     sh.set(a.name, ex.expand_assignment(a.value));
 }
 
+// Format one %-directive value for `time' (bash's TIMEFORMAT).  A plain form
+// prints total seconds with PREC decimals; the long form ("l") prints
+// MINUTESmSECONDSs.
+static std::string time_value(double sec, int prec, bool longfmt) {
+  if (sec < 0) sec = 0;
+  char buf[64];
+  if (longfmt) {
+    long m = static_cast<long>(sec / 60);
+    double s = sec - static_cast<double>(m) * 60.0;
+    std::snprintf(buf, sizeof buf, "%ldm%.*fs", m, prec, s);
+  } else {
+    std::snprintf(buf, sizeof buf, "%.*f", prec, sec);
+  }
+  return buf;
+}
+
+// Render a `time' report from the elapsed real/user/sys seconds, following
+// bash's TIMEFORMAT grammar (%[p][l]{R|U|S|P}, %%); `time -p' forces the POSIX
+// format.  A trailing newline terminates the report.
+static std::string time_report(Shell &sh, bool posix, double real, double user,
+                               double sys) {
+  std::string fmt;
+  if (posix) {
+    fmt = "real %2R\nuser %2U\nsys %2S";
+  } else if (!sh.get_if_set("TIMEFORMAT", fmt)) {
+    fmt = "\nreal\t%3lR\nuser\t%3lU\nsys\t%3lS";
+  }
+  std::string out;
+  for (size_t i = 0; i < fmt.size(); i++) {
+    if (fmt[i] != '%') { out += fmt[i]; continue; }
+    if (++i >= fmt.size()) { out += '%'; break; }
+    if (fmt[i] == '%') { out += '%'; continue; }
+    int prec = 3;
+    if (std::isdigit(static_cast<unsigned char>(fmt[i]))) { prec = fmt[i] - '0'; i++; }
+    bool longfmt = false;
+    if (i < fmt.size() && fmt[i] == 'l') { longfmt = true; i++; }
+    if (i >= fmt.size()) break;
+    switch (fmt[i]) {
+      case 'R': out += time_value(real, prec, longfmt); break;
+      case 'U': out += time_value(user, prec, longfmt); break;
+      case 'S': out += time_value(sys, prec, longfmt); break;
+      case 'P': {  // %CPU = (user+sys)/real, never long form
+        double p = real > 0 ? (user + sys) / real * 100.0 : 0.0;
+        out += time_value(p, prec, false);
+        break;
+      }
+      default: out += '%'; out += fmt[i]; break;
+    }
+  }
+  out += '\n';
+  return out;
+}
+
 int Executor::run(const Command *c) {
   if (!c || unwinding()) return sh_.last_status;
+
+  // `time PIPELINE': measure and report real/user/sys time.  Re-enter run() with
+  // the flag suppressed for this node so the body runs exactly once.
+  if ((c->flags & CMD_TIME) && c != timed_cmd_) {
+    const Command *prev = timed_cmd_;
+    timed_cmd_ = c;
+    struct timeval w0, w1;
+    struct tms t0, t1;
+    gettimeofday(&w0, nullptr);
+    times(&t0);
+    int st = run(c);
+    times(&t1);
+    gettimeofday(&w1, nullptr);
+    timed_cmd_ = prev;
+    long hz = sysconf(_SC_CLK_TCK);
+    if (hz <= 0) hz = 100;
+    double real = (w1.tv_sec - w0.tv_sec) + (w1.tv_usec - w0.tv_usec) / 1e6;
+    double user = static_cast<double>((t1.tms_utime - t0.tms_utime) +
+                                      (t1.tms_cutime - t0.tms_cutime)) / hz;
+    double sys = static_cast<double>((t1.tms_stime - t0.tms_stime) +
+                                     (t1.tms_cstime - t0.tms_cstime)) / hz;
+    std::string rep = time_report(sh_, (c->flags & CMD_TIME_POSIX) != 0, real, user, sys);
+    std::fputs(rep.c_str(), stderr);
+    return st;
+  }
 
   // `-n' (noexec): parse commands but never run them, so a script can be
   // syntax-checked without side effects.  Gating each command here -- rather

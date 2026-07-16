@@ -334,9 +334,12 @@ struct Parser {
         cmdflags |= CMD_TIME;
         had_prefix = true;
         advance();
-        if (reserved("-p")) {
-          cmdflags |= CMD_TIME_POSIX;
-          advance();
+        // `time' accepts `-p' (POSIX output) and `--' (end of options), in that
+        // order, before the pipeline.
+        while (true) {
+          if (reserved("-p")) { cmdflags |= CMD_TIME_POSIX; advance(); continue; }
+          if (reserved("--")) { advance(); break; }
+          break;
         }
         continue;
       }
