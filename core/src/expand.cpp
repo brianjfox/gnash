@@ -1502,7 +1502,14 @@ void Expander::process(const std::string &text, std::string &out, std::string &m
       for (char ch : dec) { out += ch; mask += '1'; }
       i = (j < text.size()) ? j + 1 : j;
     } else if (c == '\\') {
-      if (i + 1 < text.size()) { out += text[i + 1]; mask += '1'; i += 2; }
+      if (heredoc) {
+        // In a here-document, a backslash escapes only $, `, \, and newline;
+        // before anything else it is a literal character.
+        char nx = (i + 1 < text.size()) ? text[i + 1] : '\0';
+        if (nx == '$' || nx == '`' || nx == '\\') { out += nx; mask += '2'; i += 2; }
+        else if (nx == '\n') { i += 2; }  // line continuation
+        else { out += c; mask += '2'; i++; }
+      } else if (i + 1 < text.size()) { out += text[i + 1]; mask += '1'; i += 2; }
       else i++;
     } else if (c == '$') {
       expand_dollar(text, i, false, out, mask);
