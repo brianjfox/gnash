@@ -660,16 +660,23 @@ int Executor::run_simple(const SimpleCommand *c) {
       } else {
         auto vit = sh_.vars.find(a.name);
         bool integer = vit != sh_.vars.end() && vit->second.integer;
+        // A plain `name=value' / `name+=value' where name is already an array
+        // targets element 0 (bash), so read/write that element rather than the
+        // scalar field.
+        bool is_arr = vit != sh_.vars.end() &&
+                      (vit->second.kind == VarKind::Indexed || vit->second.kind == VarKind::Assoc);
         std::string v = ex.expand_assignment(a.value);
+        std::string cur = is_arr ? sh_.array_get(a.name, "0") : sh_.get(a.name);
         if (integer) {
           bool ok = true;
           long long rv = eval_arith(sh_, v, &ok);
-          if (a.append) rv = eval_arith(sh_, sh_.get(a.name), &ok) + rv;
+          if (a.append) rv = eval_arith(sh_, cur, &ok) + rv;
           v = std::to_string(rv);
         } else if (a.append) {
-          v = sh_.get(a.name) + v;
+          v = cur + v;
         }
-        assigns.emplace_back(a.name, v);
+        if (is_arr) sh_.array_set(a.name, "0", v);
+        else assigns.emplace_back(a.name, v);
       }
     } else {
       prefix = false;
