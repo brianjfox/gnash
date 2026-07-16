@@ -49,6 +49,13 @@ size_t scan_balanced(const std::string &t, size_t i, char open, char close) {
   for (; i < t.size(); i++) {
     char c = t[i];
     if (c == '\\') { i++; continue; }
+    if (c == '$' && i + 1 < t.size() && t[i + 1] == '\'') {
+      // $'...': ANSI-C quoting, where a backslash escapes the next character
+      // (so \' is not a terminator).
+      i += 2;
+      while (i < t.size() && t[i] != '\'') { if (t[i] == '\\' && i + 1 < t.size()) i++; i++; }
+      continue;
+    }
     if (c == '\'') { while (++i < t.size() && t[i] != '\'') {} continue; }
     if (c == '"') {
       while (++i < t.size() && t[i] != '"')
