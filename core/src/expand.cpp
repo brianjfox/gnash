@@ -600,7 +600,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
     if (end != std::string::npos) {
       std::string expr = t.substr(i + 3, (end - 1) - (i + 3));
       bool ok = true;
-      long long v = eval_arith(sh_, expand_no_split(expr), &ok);
+      long long v = eval_arith_msg(sh_, expand_no_split(expr), "", &ok);
       if (!ok) { sh_.arith_error = true; i = end + 1; return; }
       std::string s = std::to_string(v);
       for (char c : s) { out += c; mask += qm; }
@@ -614,7 +614,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
     if (end != std::string::npos) {
       std::string expr = t.substr(i + 2, end - (i + 2));
       bool ok = true;
-      long long v = eval_arith(sh_, expand_no_split(expr), &ok);
+      long long v = eval_arith_msg(sh_, expand_no_split(expr), "", &ok);
       if (!ok) { sh_.arith_error = true; i = end + 1; return; }
       std::string s = std::to_string(v);
       for (char c : s) { out += c; mask += qm; }
