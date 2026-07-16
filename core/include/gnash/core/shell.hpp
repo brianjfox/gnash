@@ -345,6 +345,9 @@ class Shell {
 
 // Arithmetic evaluation (arith.cpp): evaluate EXPR in the context of SH.
 long long eval_arith(Shell &sh, const std::string &expr, bool *ok);
+// eval_arith plus bash's error diagnostics; cmd_name selects the prefix:
+// "" for $((...)), "((" for the (( )) command, "let" for the let builtin.
+long long eval_arith_msg(Shell &sh, const std::string &expr, const char *cmd_name, bool *ok);
 
 // Expand a PS1/PS2-style prompt string (prompt.cpp).
 std::string expand_prompt(Shell &sh, const std::string &ps);

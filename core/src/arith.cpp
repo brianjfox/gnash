@@ -46,7 +46,25 @@ struct Node {
   std::string sub;            // raw subscript text (evaluated by array_get/set)
   const char *aop = nullptr;  // Assign operator ("=", "+=", ...)
   NodeP a, b, c;              // operands
+  size_t src = 0;             // start offset in the source expression (for errors)
 };
+
+// bash's arithmetic error messages, keyed for reuse by the parser/evaluator.
+namespace arith_err {
+constexpr const char *kOperand = "arithmetic syntax error: operand expected";
+constexpr const char *kExpr = "arithmetic syntax error in expression";
+constexpr const char *kDiv0 = "division by 0";
+constexpr const char *kExponent = "exponent less than 0";
+constexpr const char *kNonVar = "attempted assignment to non-variable";
+constexpr const char *kMissingParen = "missing `)'";
+constexpr const char *kExprExpected = "expression expected";
+constexpr const char *kColonExpected = "`:' expected for conditional expression";
+constexpr const char *kBadBase = "invalid arithmetic base";
+constexpr const char *kBadConst = "invalid integer constant";
+constexpr const char *kBadNumber = "invalid number";
+constexpr const char *kTooGreat = "value too great for base";
+constexpr const char *kLvalue = "assignment requires lvalue";
+}  // namespace arith_err
 
 NodeP mk(K k) { auto n = std::make_unique<Node>(); n->k = k; return n; }
 
@@ -77,7 +95,17 @@ struct Parser {
   const std::string &s;
   size_t pos = 0;
   bool ok = true;
+  size_t last_tok = 0;                      // start of the most recently read token
+  size_t err_pos = std::string::npos;       // start of the first error's token
+  std::string err_msg;                      // first error's message
   explicit Parser(const std::string &str) : s(str) {}
+
+  // Record the first error only (bash reports the earliest); P is the offset of
+  // the error token, whose text is the remainder s.substr(P).
+  void note(const std::string &m, size_t p) {
+    if (err_pos == std::string::npos) { err_pos = p; err_msg = m; }
+    ok = false;
+  }
 
   // Bound recursion so a deeply nested expression -- e.g. thousands of nested
   // parentheses or unary operators in $(( ... )) -- fails to parse instead of
@@ -99,9 +127,11 @@ struct Parser {
   bool eat(const char *op) {
     skip();
     size_t n = std::strlen(op);
-    if (s.compare(pos, n, op) == 0) { pos += n; return true; }
+    if (s.compare(pos, n, op) == 0) { last_tok = pos; pos += n; return true; }
     return false;
   }
+  // Record that a single-character operator at the current position is consumed.
+  void mark_op() { last_tok = pos; }
 
   std::string read_name() {
     skip();
@@ -116,8 +146,12 @@ struct Parser {
 
   // NAME or NAME[subscript]; fills the lvalue fields of `n'.
   bool read_ref(Node &n) {
+    skip();
+    size_t start = pos;
     n.name = read_name();
     if (n.name.empty()) return false;
+    last_tok = start;
+    n.src = start;
     skip();
     if (pos < s.size() && s[pos] == '[') {
       pos++;
@@ -139,7 +173,7 @@ struct Parser {
 
   NodeP comma() {
     NodeP v = assignment();
-    while (peek() == ',') { pos++; v = binary(K::Comma, std::move(v), assignment()); }
+    while (peek() == ',') { mark_op(); pos++; v = binary(K::Comma, std::move(v), assignment()); }
     return v;
   }
 
@@ -154,6 +188,7 @@ struct Parser {
         size_t n = std::strlen(ops[i]);
         if (s.compare(pos, n, ops[i]) == 0 &&
             !(ops[i][0] == '=' && pos + 1 < s.size() && s[pos + 1] == '=')) {
+          mark_op();
           pos += n;
           lv->aop = ops[i];
           lv->a = assignment();  // right-associative
@@ -168,12 +203,19 @@ struct Parser {
   NodeP ternary() {
     NodeP c = logic_or();
     if (peek() == '?') {
-      pos++;
+      mark_op(); pos++;
       auto n = mk(K::Ternary);
       n->a = std::move(c);
+      skip();
+      if (peek() == ':' || peek() == '\0')  // empty true branch
+        note(arith_err::kExprExpected, pos);
       n->b = assignment();
       skip();
-      if (peek() == ':') pos++; else ok = false;
+      if (peek() == ':') { mark_op(); pos++; }
+      else note(arith_err::kColonExpected, last_tok);
+      skip();
+      if (peek() == '\0')  // empty false branch: report the ':'
+        note(arith_err::kExprExpected, last_tok);
       n->c = ternary();
       return n;
     }
@@ -193,20 +235,20 @@ struct Parser {
   NodeP bit_or() {
     NodeP v = bit_xor();
     for (;;) { skip();
-      if (peek() == '|' && s.compare(pos, 2, "||") != 0) { pos++; v = binary(K::BOr, std::move(v), bit_xor()); }
+      if (peek() == '|' && s.compare(pos, 2, "||") != 0) { mark_op(); pos++; v = binary(K::BOr, std::move(v), bit_xor()); }
       else break;
     }
     return v;
   }
   NodeP bit_xor() {
     NodeP v = bit_and();
-    while (peek() == '^') { pos++; v = binary(K::BXor, std::move(v), bit_and()); }
+    while (peek() == '^') { mark_op(); pos++; v = binary(K::BXor, std::move(v), bit_and()); }
     return v;
   }
   NodeP bit_and() {
     NodeP v = equality();
     for (;;) { skip();
-      if (peek() == '&' && s.compare(pos, 2, "&&") != 0) { pos++; v = binary(K::BAnd, std::move(v), equality()); }
+      if (peek() == '&' && s.compare(pos, 2, "&&") != 0) { mark_op(); pos++; v = binary(K::BAnd, std::move(v), equality()); }
       else break;
     }
     return v;
@@ -243,8 +285,11 @@ struct Parser {
   NodeP additive() {
     NodeP v = multiplicative();
     for (;;) { skip(); char c = peek();
-      if (c == '+' && s.compare(pos, 2, "++") != 0) { pos++; v = binary(K::Add, std::move(v), multiplicative()); }
-      else if (c == '-' && s.compare(pos, 2, "--") != 0) { pos++; v = binary(K::Sub, std::move(v), multiplicative()); }
+      // A `+'/`-' after an operand is a binary operator even when another sign
+      // follows (`4+++a' is `4 + ++a'); the trailing sign is handled as a unary
+      // operator by the right operand.
+      if (c == '+') { mark_op(); pos++; v = binary(K::Add, std::move(v), multiplicative()); }
+      else if (c == '-') { mark_op(); pos++; v = binary(K::Sub, std::move(v), multiplicative()); }
       else break;
     }
     return v;
@@ -252,9 +297,9 @@ struct Parser {
   NodeP multiplicative() {
     NodeP v = power();
     for (;;) { skip(); char c = peek();
-      if (c == '*' && s.compare(pos, 2, "**") != 0) { pos++; v = binary(K::Mul, std::move(v), power()); }
-      else if (c == '/') { pos++; v = binary(K::Div, std::move(v), power()); }
-      else if (c == '%') { pos++; v = binary(K::Mod, std::move(v), power()); }
+      if (c == '*' && s.compare(pos, 2, "**") != 0) { mark_op(); pos++; v = binary(K::Mul, std::move(v), power()); }
+      else if (c == '/') { mark_op(); pos++; v = binary(K::Div, std::move(v), power()); }
+      else if (c == '%') { mark_op(); pos++; v = binary(K::Mod, std::move(v), power()); }
       else break;
     }
     return v;
@@ -271,24 +316,28 @@ struct Parser {
     if (eat("++")) return preincr(K::PreInc);
     if (eat("--")) return preincr(K::PreDec);
     char c = peek();
-    if (c == '+') { pos++; return unary(); }
-    if (c == '-') { pos++; auto n = mk(K::Neg); n->a = unary(); return n; }
-    if (c == '!') { pos++; auto n = mk(K::LNot); n->a = unary(); return n; }
-    if (c == '~') { pos++; auto n = mk(K::BNot); n->a = unary(); return n; }
+    if (c == '+') { mark_op(); pos++; return unary(); }
+    if (c == '-') { mark_op(); pos++; auto n = mk(K::Neg); n->a = unary(); n->src = n->a->src; return n; }
+    if (c == '!') { mark_op(); pos++; auto n = mk(K::LNot); n->a = unary(); n->src = n->a->src; return n; }
+    if (c == '~') { mark_op(); pos++; auto n = mk(K::BNot); n->a = unary(); n->src = n->a->src; return n; }
     return postfix();
   }
   NodeP preincr(K k) {
+    size_t save = pos;
     auto n = mk(k);
-    if (!read_ref(*n)) { ok = false; }
-    return n;
+    if (read_ref(*n)) return n;
+    // `++'/`--' before a non-lvalue (e.g. ++7): bash evaluates the operand and
+    // applies no increment, without error.
+    pos = save;
+    return unary();
   }
   NodeP postfix() {
     size_t save = pos;
     auto ref = mk(K::Var);
     if (read_ref(*ref)) {
       skip();
-      if (s.compare(pos, 2, "++") == 0) { pos += 2; ref->k = K::PostInc; return ref; }
-      if (s.compare(pos, 2, "--") == 0) { pos += 2; ref->k = K::PostDec; return ref; }
+      if (s.compare(pos, 2, "++") == 0) { mark_op(); pos += 2; ref->k = K::PostInc; return ref; }
+      if (s.compare(pos, 2, "--") == 0) { mark_op(); pos += 2; ref->k = K::PostDec; return ref; }
       pos = save;  // not a postfix; re-read as a primary
     } else {
       pos = save;
@@ -298,13 +347,16 @@ struct Parser {
   NodeP primary() {
     skip();
     if (peek() == '(') {
-      pos++;
+      mark_op(); pos++;
       NodeP v = comma();
       skip();
-      if (peek() == ')') pos++; else ok = false;
+      if (peek() == ')') { mark_op(); pos++; }
+      else note(arith_err::kMissingParen, last_tok);  // token = last token before EOF
       return v;
     }
     if (pos < s.size() && std::isdigit(static_cast<unsigned char>(s[pos]))) {
+      size_t numstart = pos;
+      last_tok = pos;
       // bash `base#digits': a decimal base (2..64) followed by '#' and digits in
       // that base.  Detected by looking past the leading run of decimal digits.
       size_t p = pos;
@@ -320,20 +372,41 @@ struct Parser {
           v = v * base + d;
           any = true;
         }
-        if (base >= 2 && base <= 64 && any) {
+        if (base >= 2 && base <= 64 && any &&
+            !(q < s.size() && (std::isalnum(static_cast<unsigned char>(s[q])) || s[q] == '#' ||
+                               s[q] == '@' || s[q] == '_'))) {
           pos = q;
-          auto n = mk(K::Num); n->num = v; return n;
+          auto n = mk(K::Num); n->num = v; n->src = numstart; return n;
         }
-        // malformed base spec: fall through to the ordinary integer parse
+        // Malformed base#constant: classify the error the way bash does.
+        const char *m;
+        if (base > 64) m = arith_err::kBadBase;
+        else if (base < 2) m = arith_err::kBadNumber;
+        else if (!any)
+          m = (q < s.size() && std::isalnum(static_cast<unsigned char>(s[q])))
+                  ? arith_err::kTooGreat
+                  : arith_err::kBadConst;
+        else m = arith_err::kBadNumber;
+        note(m, numstart);
+        // Consume the whole token so parsing terminates.
+        while (q < s.size() && (std::isalnum(static_cast<unsigned char>(s[q])) || s[q] == '#' ||
+                                s[q] == '@' || s[q] == '_'))
+          q++;
+        pos = q;
+        auto n = mk(K::Num); n->src = numstart; return n;
       }
       char *end = nullptr;
       long long v = std::strtoll(s.c_str() + pos, &end, 0);  // 0x/0 prefixes honored
       pos = static_cast<size_t>(end - s.c_str());
-      auto n = mk(K::Num); n->num = v; return n;
+      auto n = mk(K::Num); n->num = v; n->src = numstart; return n;
     }
+    size_t start = pos;
     auto ref = mk(K::Var);
-    if (read_ref(*ref)) return ref;
-    ok = false;
+    if (read_ref(*ref)) { ref->src = start; last_tok = start; return ref; }
+    // Nothing parseable here: an operand was expected.  At end of input the
+    // offending token is the dangling operator (last_tok); otherwise it is the
+    // invalid token at the current position.
+    note(arith_err::kOperand, pos >= s.size() ? last_tok : pos);
     return mk(K::Num);  // placeholder 0
   }
 };
@@ -342,7 +415,12 @@ struct Parser {
 // evaluates to a value but reports failure, matching the old behavior).  The
 // AST is held by shared_ptr and returned BY VALUE, so a caller keeps it alive
 // even if a nested evaluation clears the cache mid-walk.
-struct Parsed { std::shared_ptr<Node> root; bool ok; };
+struct Parsed {
+  std::shared_ptr<Node> root;
+  bool ok;
+  size_t err_pos = std::string::npos;
+  std::string err_msg;
+};
 
 Parsed parse_cached(const std::string &expr) {
   static std::map<std::string, Parsed> cache;
@@ -352,7 +430,23 @@ Parsed parse_cached(const std::string &expr) {
   Parser p(expr);
   std::shared_ptr<Node> root = p.comma();
   p.skip();
-  Parsed parsed{std::move(root), p.ok && p.pos == expr.size()};
+  // Tokens left after a complete expression: an assignment operator applied to a
+  // non-lvalue, a bare ++/-- needing an lvalue, or a plain syntax error.
+  if (p.err_pos == std::string::npos && p.pos < expr.size()) {
+    size_t q = p.pos;
+    auto two = expr.compare(q, 2, "==") == 0;  // not an assignment
+    if (!two && expr[q] == '=')
+      p.note(arith_err::kNonVar, q);
+    else if (expr.compare(q, 2, "++") == 0 || expr.compare(q, 2, "--") == 0)
+      p.note(expr.substr(q, 2) + ": " + arith_err::kLvalue, q);
+    else if (q + 1 < expr.size() && expr[q + 1] == '=' &&
+             std::strchr("+-*/%&^|", expr[q]) && expr.compare(q, 2, "&&") != 0 &&
+             expr.compare(q, 2, "||") != 0)
+      p.note(arith_err::kNonVar, q);  // +=, -=, ...: assign to non-lvalue
+    else
+      p.note(arith_err::kExpr, q);
+  }
+  Parsed parsed{std::move(root), p.ok && p.pos == expr.size(), p.err_pos, p.err_msg};
   cache.emplace(expr, parsed);
   return parsed;
 }
@@ -374,15 +468,32 @@ bool try_int(const std::string &s, long long &out) {
 
 // ---- evaluation over the AST ----------------------------------------------
 
-struct Ctx { Shell &sh; bool ok = true; int depth = 0; };
+struct Ctx {
+  Shell &sh;
+  bool ok = true;
+  int depth = 0;
+  size_t err_pos = std::string::npos;  // offset of the error token (see Parser)
+  std::string err_msg;
+  void note(const std::string &m, size_t p) {
+    if (err_pos == std::string::npos) { err_pos = p; err_msg = m; }
+    ok = false;
+  }
+};
 
 long long eval_node(const Node *n, Ctx &ctx);  // fwd
 
+// True when the expression is empty or all whitespace (bash treats it as 0).
+static bool blank_expr(const std::string &s) {
+  for (char c : s) if (!std::isspace(static_cast<unsigned char>(c))) return false;
+  return true;
+}
+
 long long eval_string(Shell &sh, const std::string &str, int depth, bool *ok) {
   long long iv;
+  if (blank_expr(str)) { if (ok) *ok = true; return 0; }
   if (try_int(str, iv)) { if (ok) *ok = true; return iv; }
   Parsed p = parse_cached(str);
-  Ctx ctx{sh, p.ok, depth};
+  Ctx ctx{sh, p.ok, depth, p.err_pos, p.err_msg};  // carry any parse error forward
   long long v = eval_node(p.root.get(), ctx);
   if (ok) *ok = ctx.ok;
   return v;
@@ -423,14 +534,14 @@ long long eval_node(const Node *n, Ctx &ctx) {
     case K::PostInc: { long long v = ref_get(n, ctx); ref_set(n, v + 1, ctx); return v; }
     case K::PostDec: { long long v = ref_get(n, ctx); ref_set(n, v - 1, ctx); return v; }
     case K::Mul: { long long l = A(); return l * eval_node(n->b.get(), ctx); }
-    case K::Div: { long long l = A(), r = eval_node(n->b.get(), ctx); if (r == 0) { ctx.ok = false; return 0; } if (l == LLONG_MIN && r == -1) return LLONG_MIN; return l / r; }
-    case K::Mod: { long long l = A(), r = eval_node(n->b.get(), ctx); if (r == 0) { ctx.ok = false; return 0; } if (l == LLONG_MIN && r == -1) return 0; return l % r; }
+    case K::Div: { long long l = A(), r = eval_node(n->b.get(), ctx); if (r == 0) { ctx.note(arith_err::kDiv0, n->b->src); return 0; } if (l == LLONG_MIN && r == -1) return LLONG_MIN; return l / r; }
+    case K::Mod: { long long l = A(), r = eval_node(n->b.get(), ctx); if (r == 0) { ctx.note(arith_err::kDiv0, n->b->src); return 0; } if (l == LLONG_MIN && r == -1) return 0; return l % r; }
     // Exponentiation by squaring (like bash's ipow), so the cost is O(log e)
     // rather than O(e); a huge exponent no longer spins.  bash rejects a
     // negative exponent ("exponent less than 0") and defines e==0 as 1.
     case K::Pow: {
       long long base = A(), e = eval_node(n->b.get(), ctx), r = 1;
-      if (e < 0) { ctx.ok = false; return 0; }
+      if (e < 0) { ctx.note(arith_err::kExponent, n->b->src); return 0; }
       while (e) { if (e & 1) r *= base; e >>= 1; if (e) base *= base; }
       return r;
     }
@@ -462,8 +573,8 @@ long long eval_node(const Node *n, Ctx &ctx) {
         if (o == "+=") res = cur + rhs;
         else if (o == "-=") res = cur - rhs;
         else if (o == "*=") res = cur * rhs;
-        else if (o == "/=") { if (rhs == 0) { ctx.ok = false; res = 0; } else if (cur == LLONG_MIN && rhs == -1) res = LLONG_MIN; else res = cur / rhs; }
-        else if (o == "%=") { if (rhs == 0) { ctx.ok = false; res = 0; } else if (cur == LLONG_MIN && rhs == -1) res = 0; else res = cur % rhs; }
+        else if (o == "/=") { if (rhs == 0) { ctx.note(arith_err::kDiv0, n->a->src); res = 0; } else if (cur == LLONG_MIN && rhs == -1) res = LLONG_MIN; else res = cur / rhs; }
+        else if (o == "%=") { if (rhs == 0) { ctx.note(arith_err::kDiv0, n->a->src); res = 0; } else if (cur == LLONG_MIN && rhs == -1) res = 0; else res = cur % rhs; }
         else if (o == "<<=") res = cur << (rhs & 63);
         else if (o == ">>=") res = cur >> (rhs & 63);
         else if (o == "&=") res = cur & rhs;
@@ -481,6 +592,30 @@ long long eval_node(const Node *n, Ctx &ctx) {
 
 long long eval_arith(Shell &sh, const std::string &expr, bool *ok) {
   return eval_string(sh, expr, 0, ok);
+}
+
+// Like eval_arith, but on a syntax/evaluation error prints bash's diagnostic:
+//   [SHELL: line N: ][CMD_NAME: ]EXPR: MESSAGE (error token is "TOKEN")
+// CMD_NAME is "" for $((...)), "((" for the (( )) command, "let" for `let'.
+long long eval_arith_msg(Shell &sh, const std::string &expr, const char *cmd_name,
+                         bool *ok) {
+  long long iv;
+  if (blank_expr(expr)) { if (ok) *ok = true; return 0; }
+  if (try_int(expr, iv)) { if (ok) *ok = true; return iv; }
+  Parsed p = parse_cached(expr);
+  Ctx ctx{sh, p.ok, 0, p.err_pos, p.err_msg};
+  long long v = eval_node(p.root.get(), ctx);
+  if (ok) *ok = ctx.ok;
+  if (!ctx.ok && ctx.err_pos != std::string::npos && ctx.err_pos <= expr.size()) {
+    size_t lead = 0;
+    while (lead < expr.size() && std::isspace(static_cast<unsigned char>(expr[lead]))) lead++;
+    std::string display = expr.substr(lead);
+    std::string token = expr.substr(ctx.err_pos);
+    std::string prefix = (cmd_name && cmd_name[0]) ? std::string(cmd_name) + ": " : "";
+    std::fprintf(stderr, "%s%s%s: %s (error token is \"%s\")\n", sh.err_prefix().c_str(),
+                 prefix.c_str(), display.c_str(), ctx.err_msg.c_str(), token.c_str());
+  }
+  return v;
 }
 
 }  // namespace gnash::core

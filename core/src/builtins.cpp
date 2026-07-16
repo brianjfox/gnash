@@ -1419,7 +1419,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
 int bi_let(Shell &sh, const std::vector<std::string> &argv) {
   long long last = 0;
   bool ok = true;
-  for (size_t i = 1; i < argv.size(); i++) last = eval_arith(sh, argv[i], &ok);
+  for (size_t i = 1; i < argv.size(); i++) last = eval_arith_msg(sh, argv[i], "let", &ok);
   return (ok && last != 0) ? 0 : 1;
 }
 
