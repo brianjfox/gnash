@@ -291,9 +291,9 @@ std::string Expander::param_value(const std::string &name, bool &set, bool defau
 
 // Expand a ${...} body (without the braces).  Returns the value; sets `split`
 // if the result is subject to word splitting (always, for consistency here).
-static std::string expand_brace_body(Expander &, Shell &, const std::string &);
+static std::string expand_brace_body(Expander &, Shell &, const std::string &, bool dq);
 static std::string apply_param_op(Expander &, Shell &, const std::string &name,
-                                  std::string val, bool set, const std::string &rest);
+                                  std::string val, bool set, const std::string &rest, bool dq);
 
 // Detect NAME[@] / NAME[*] with an optional leading `#' (count) or `!' (keys).
 static bool array_ref(const std::string &body, char &lead, std::string &name, char &sel) {
@@ -681,7 +681,18 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
             bool fire = (op == '-') ? (!set || (colon && val.empty()))
                                     : (set && !(colon && val.empty()));
             if (fire) {
-              process(body.substr(opq + 1), out, mask, false);
+              std::string word = body.substr(opq + 1);
+              bool has_at = word.find("$@") != std::string::npos ||
+                            word.find("$*") != std::string::npos;
+              // In double quotes (bash-family), expand the word in double-quote
+              // context so backslash escapes and literal quotes behave right;
+              // a word with "$@"/"$*" keeps its field structure via process().
+              if (dq && !sh_.is_zsh() && !has_at) {
+                std::string ex = expand_dq_word(word);
+                for (char c : ex) { out += c; mask += '1'; }
+              } else {
+                process(word, out, mask, false);
+              }
               i = end + 1;
               return;
             }
@@ -708,7 +719,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
       }
       // zsh `${=name}': force IFS word-splitting of the value, even in quotes.
       if (sh_.is_zsh() && body.size() > 1 && body[0] == '=') {
-        std::string val = expand_brace_body(*this, sh_, body.substr(1));
+        std::string val = expand_brace_body(*this, sh_, body.substr(1), dq);
         std::string ifs = sh_.ifs();
         auto is_ifs = [&](char c) { return ifs.find(c) != std::string::npos; };
         auto is_ws = [&](char c) { return c == ' ' || c == '\t' || c == '\n'; };
@@ -794,7 +805,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
       char asel;
       if (array_op_ref(body, aoname, asel, arest)) {
         std::vector<std::string> items = sh_.array_values(aoname);
-        for (std::string &it : items) it = apply_param_op(*this, sh_, aoname, it, true, arest);
+        for (std::string &it : items) it = apply_param_op(*this, sh_, aoname, it, true, arest, dq);
         if (asel == '*' && dq) {
           std::string is = sh_.ifs();
           std::string j = is.empty() ? std::string() : std::string(1, is[0]);
@@ -860,7 +871,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
         i = end + 1;
         return;
       }
-      std::string val = expand_brace_body(*this, sh_, body);
+      std::string val = expand_brace_body(*this, sh_, body, dq);
       for (char c : val) { out += c; mask += qm; }
       i = end + 1;
       return;
@@ -1014,7 +1025,8 @@ static std::string ansic_expand(const std::string &s) {
   return out;
 }
 
-static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string &body) {
+static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string &body,
+                                    bool dq) {
   // Leading `#' means length-of.
   bool length = false;
   std::string b = body;
@@ -1040,8 +1052,8 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
       // The value of INAME is the parameter to expand; any operator that
       // follows applies to the indirected parameter.
       std::string target = sh.get(iname);
-      if (length) return std::to_string(expand_brace_body(ex, sh, target + b.substr(q)).size());
-      return expand_brace_body(ex, sh, target + b.substr(q));
+      if (length) return std::to_string(expand_brace_body(ex, sh, target + b.substr(q), dq).size());
+      return expand_brace_body(ex, sh, target + b.substr(q), dq);
     }
   }
 
@@ -1107,17 +1119,26 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
     val = ex.param_value(name, set, defaulting_op);
   }
   if (length) return std::to_string(val.size());
-  return apply_param_op(ex, sh, name, val, set, rest);
+  return apply_param_op(ex, sh, name, val, set, rest, dq);
 }
 
 // Apply the operator suffix `rest' (everything after the name/subscript) of a
 // ${...} expansion to a single value.  Factored out of expand_brace_body so
 // array expansions can apply it to each element of ${a[@]} / ${a[*]}.
 static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &name,
-                                  std::string val, bool set, const std::string &rest) {
+                                  std::string val, bool set, const std::string &rest,
+                                  bool dq) {
   if (rest.empty()) return val;
 
-  auto expand_word = [&](const std::string &w) { return ex.expand_no_split(w); };
+  // In a double-quoted context the alternative word is expanded in double-quote
+  // context so backslash escapes and literal quotes behave correctly.  Skipped
+  // under the zsh personality (different quoting rules) and for words that
+  // contain "$@"/"$*" (which carry field structure the dq path would flatten).
+  auto expand_word = [&](const std::string &w) {
+    bool has_at = w.find("$@") != std::string::npos || w.find("$*") != std::string::npos;
+    if (dq && !sh.is_zsh() && !has_at) return ex.expand_dq_word(w);
+    return ex.expand_no_split(w);
+  };
 
   // ${name:-word} etc.
   char op = rest[0];
@@ -1163,7 +1184,7 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
   // ${name#pat} ${name##pat} ${name%pat} ${name%%pat}
   if (rest[0] == '#' || rest[0] == '%') {
     bool longest = rest.size() > 1 && rest[1] == rest[0];
-    std::string pat = ex.expand_no_split(rest.substr(longest ? 2 : 1));
+    std::string pat = ex.expand_pattern(rest.substr(longest ? 2 : 1));
     if (rest[0] == '#') {  // prefix removal
       if (longest) {
         for (size_t k = val.size(); k + 1 > 0; k--) {
@@ -1197,7 +1218,7 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
       if (body2[k] == '\\') { k++; continue; }
       if (body2[k] == '/') { slash = k; break; }
     }
-    std::string pat = ex.expand_no_split(slash == std::string::npos ? body2 : body2.substr(0, slash));
+    std::string pat = ex.expand_pattern(slash == std::string::npos ? body2 : body2.substr(0, slash));
     std::string rep = slash == std::string::npos ? std::string()
                                                  : ex.expand_no_split(body2.substr(slash + 1));
     if (pat.empty()) return val;
@@ -1227,7 +1248,7 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
   // ${name^} ${name^^} ${name,} ${name,,}  (case modification)
   if (rest[0] == '^' || rest[0] == ',') {
     bool all = rest.size() > 1 && rest[1] == rest[0];
-    std::string pat = ex.expand_no_split(rest.substr(all ? 2 : 1));
+    std::string pat = ex.expand_pattern(rest.substr(all ? 2 : 1));
     bool up = rest[0] == '^';
     std::string out;
     bool first = true;
@@ -1311,6 +1332,58 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
   return val;
 }
 
+void Expander::process_dq(const std::string &text, size_t &i, std::string &out,
+                          std::string &mask) {
+  while (i < text.size() && text[i] != '"') {
+    if (text[i] == '\\' && i + 1 < text.size() &&
+        (text[i + 1] == '$' || text[i + 1] == '`' || text[i + 1] == '"' ||
+         text[i + 1] == '\\')) {
+      out += text[i + 1];
+      mask += '1';
+      i += 2;
+    } else if (text[i] == '$') {
+      expand_dollar(text, i, true, out, mask);
+    } else if (text[i] == '`') {
+      size_t j = i + 1;
+      std::string inner;
+      while (j < text.size() && text[j] != '`') {
+        if (text[j] == '\\' && j + 1 < text.size() &&
+            (text[j + 1] == '`' || text[j + 1] == '\\' || text[j + 1] == '$')) {
+          inner += text[j + 1];
+          j += 2;
+        } else {
+          inner += text[j++];
+        }
+      }
+      int st = 0;
+      std::string res = sh_.run_and_capture(inner, &st);
+      sh_.note_cmdsub(st);
+      for (char ch : res) { out += ch; mask += '1'; }
+      i = (j < text.size()) ? j + 1 : j;
+    } else {
+      out += text[i];
+      mask += '1';
+      i++;
+    }
+  }
+}
+
+std::string Expander::expand_dq_word(const std::string &w) {
+  // A synthetic leading quote starts the double-quote span; embedded quotes in
+  // W toggle context normally (an unterminated span at the end is fine).
+  std::string out, mask;
+  process('"' + w, out, mask, false);
+  std::string joined;
+  for (size_t k = 0; k < out.size(); k++) {
+    if (k < mask.size() && mask[k] == MMARK) {
+      if (out[k] == FIELD_SEP) joined += ' ';
+      continue;
+    }
+    joined += out[k];
+  }
+  return joined;
+}
+
 void Expander::process(const std::string &text, std::string &out, std::string &mask,
                        bool /*assignment_rhs*/, bool heredoc) {
   // Most output is about as long as the input; reserve to avoid reallocating
@@ -1331,38 +1404,7 @@ void Expander::process(const std::string &text, std::string &out, std::string &m
     } else if (c == '"') {
       out += QNULL; mask += MMARK;
       i++;
-      while (i < text.size() && text[i] != '"') {
-        if (text[i] == '\\' && i + 1 < text.size() &&
-            (text[i + 1] == '$' || text[i + 1] == '`' || text[i + 1] == '"' ||
-             text[i + 1] == '\\')) {
-          out += text[i + 1];
-          mask += '1';
-          i += 2;
-        } else if (text[i] == '$') {
-          expand_dollar(text, i, true, out, mask);
-        } else if (text[i] == '`') {
-          size_t j = i + 1;
-          std::string inner;
-          while (j < text.size() && text[j] != '`') {
-            if (text[j] == '\\' && j + 1 < text.size() &&
-                (text[j + 1] == '`' || text[j + 1] == '\\' || text[j + 1] == '$')) {
-              inner += text[j + 1];
-              j += 2;
-            } else {
-              inner += text[j++];
-            }
-          }
-          int st = 0;
-          std::string res = sh_.run_and_capture(inner, &st);
-          sh_.note_cmdsub(st);
-          for (char ch : res) { out += ch; mask += '1'; }
-          i = (j < text.size()) ? j + 1 : j;
-        } else {
-          out += text[i];
-          mask += '1';
-          i++;
-        }
-      }
+      process_dq(text, i, out, mask);
       if (i < text.size()) i++;
     } else if (!heredoc && c == '$' && i + 1 < text.size() && text[i + 1] == '"') {
       i++;  // $"...": locale-translated string; treated as a plain "..."
