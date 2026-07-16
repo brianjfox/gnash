@@ -5,6 +5,7 @@
 
 #include "gnash/core/shell.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
@@ -288,6 +289,54 @@ std::string Shell::get(const std::string &n_in) const {
 
 // ---- arrays ---------------------------------------------------------------
 
+// bash's string hash (hashlib.c hash_string): a 32-bit FNV-1-style mix.
+static unsigned assoc_hash_string(const std::string &s) {
+  unsigned i = 2166136261u;  // FNV_OFFSET
+  for (unsigned char c : s) {
+    i += (i << 1) + (i << 4) + (i << 7) + (i << 8) + (i << 24);
+    i ^= c;
+  }
+  return i;
+}
+
+// Set assoc[key]=val, recording insertion order for a key seen for the first
+// time (re-assigning an existing key keeps its original position, as bash's
+// hash_search does).
+static void assoc_put(Variable &v, const std::string &key, const std::string &val) {
+  if (!v.assoc.count(key)) v.assoc_seq.push_back(key);
+  v.assoc[key] = val;
+}
+
+// Order an associative array's keys the way bash walks its hash table: by
+// bucket index (hash & (nbuckets-1)), then, within a bucket, newest key first
+// (bash prepends on insert).  Associative arrays use ASSOC_HASH_BUCKETS=1024.
+std::vector<std::string> Shell::assoc_order(const Variable &v) {
+  const unsigned kBuckets = 1024;
+  std::vector<std::string> keys;
+  keys.reserve(v.assoc.size());
+  // Insertion order: keys recorded in assoc_seq, then any stragglers not yet
+  // tracked (defensive, so a missed seq update never drops a key).
+  std::vector<const std::string *> ins;
+  for (const auto &k : v.assoc_seq)
+    if (v.assoc.count(k)) ins.push_back(&k);
+  for (const auto &kv : v.assoc) {
+    bool seen = false;
+    for (const auto *p : ins) if (*p == kv.first) { seen = true; break; }
+    if (!seen) ins.push_back(&kv.first);
+  }
+  struct E { unsigned bucket; size_t seq; const std::string *key; };
+  std::vector<E> es;
+  es.reserve(ins.size());
+  for (size_t s = 0; s < ins.size(); s++)
+    es.push_back({assoc_hash_string(*ins[s]) & (kBuckets - 1), s, ins[s]});
+  std::stable_sort(es.begin(), es.end(), [](const E &a, const E &b) {
+    if (a.bucket != b.bucket) return a.bucket < b.bucket;
+    return a.seq > b.seq;  // newest-first within a bucket
+  });
+  for (const auto &e : es) keys.push_back(*e.key);
+  return keys;
+}
+
 std::vector<std::string> Shell::array_values(const std::string &n_in) const {
   std::vector<std::string> out;
   {
@@ -304,7 +353,7 @@ std::vector<std::string> Shell::array_values(const std::string &n_in) const {
   if (v.kind == VarKind::Indexed)
     for (const auto &kv : v.idx) out.push_back(kv.second);
   else if (v.kind == VarKind::Assoc)
-    for (const auto &kv : v.assoc) out.push_back(kv.second);
+    for (const auto &k : assoc_order(v)) out.push_back(v.assoc.at(k));
   else
     out.push_back(v.value);
   return out;
@@ -326,7 +375,7 @@ std::vector<std::string> Shell::array_keys(const std::string &n_in) const {
   if (v.kind == VarKind::Indexed)
     for (const auto &kv : v.idx) out.push_back(std::to_string(kv.first));
   else if (v.kind == VarKind::Assoc)
-    for (const auto &kv : v.assoc) out.push_back(kv.first);
+    out = assoc_order(v);
   else if (!v.value.empty() || vars.count(n))
     out.push_back("0");
   return out;
@@ -399,7 +448,7 @@ void Shell::array_set(const std::string &n_in, const std::string &sub, const std
   Variable &v = vars[n];
   if (v.readonly) return;
   if (v.kind == VarKind::Assoc) {
-    v.assoc[sub] = val;
+    assoc_put(v, sub, val);
     return;
   }
   v.kind = VarKind::Indexed;
@@ -461,6 +510,7 @@ void Shell::array_assign(
   if (!append) {
     v.idx.clear();
     v.assoc.clear();
+    v.assoc_seq.clear();
     v.value.clear();
   }
   v.kind = (assoc || v.kind == VarKind::Assoc) ? VarKind::Assoc : VarKind::Indexed;
@@ -471,16 +521,16 @@ void Shell::array_assign(
   // to explicit `([k]=v)' pairs (which keep their subscript below).
   if (v.kind == VarKind::Assoc) {
     for (size_t x = 0; x < elems.size(); x++) {
-      if (elems[x].first) { v.assoc[*elems[x].first] = elems[x].second; continue; }
+      if (elems[x].first) { assoc_put(v, *elems[x].first, elems[x].second); continue; }
       const std::string &key = elems[x].second;
-      v.assoc[key] = (x + 1 < elems.size()) ? elems[x + 1].second : std::string();
+      assoc_put(v, key, (x + 1 < elems.size()) ? elems[x + 1].second : std::string());
       x++;  // consumed the paired value
     }
     return;
   }
   for (const auto &e : elems) {
     if (v.kind == VarKind::Assoc) {
-      if (e.first) v.assoc[*e.first] = e.second;
+      if (e.first) assoc_put(v, *e.first, e.second);
     } else if (e.first) {
       bool ok = true;
       long long k = eval_arith(*this, *e.first, &ok);
