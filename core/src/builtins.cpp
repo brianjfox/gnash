@@ -857,6 +857,7 @@ void declare_print_var(const std::string &name, const Variable &v) {
   if (v.nameref) f += 'n';
   if (v.readonly) f += 'r';
   if (v.exported) f += 'x';
+  if (v.capcase) f += 'c';
   if (v.lcase) f += 'l';
   if (v.ucase) f += 'u';
   std::string decl = "declare -" + (f.empty() ? std::string("-") : f);
@@ -1289,6 +1290,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
   bool mk_array = false, mk_assoc = false, integer = false, readonly = force_ro;
   bool exported = false, global = false, local = force_local, nameref = false;
   bool lcase = false, ucase = false;  // -l lowercase / -u uppercase attribute
+  bool capcase = false;               // -c capitalize-first attribute
   bool funcs = false, funcnames = false;  // -f (definitions) / -F (names)
   bool fp = false;                        // -p (display reproducibly)
   size_t i = 1;
@@ -1308,6 +1310,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
           case 'n': nameref = true; break;
           case 'l': lcase = true; break;
           case 'u': ucase = true; break;
+          case 'c': capcase = true; break;
           case 'p': fp = true; break;
           default: break;
         }
@@ -1376,6 +1379,14 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
         if (integer) { bool ok = true; val = std::to_string(eval_arith(sh, val, &ok)); }
         if (lcase) for (char &c : val) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
         else if (ucase) for (char &c : val) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        else if (capcase) {
+          bool cfirst = true;
+          for (char &c : val) {
+            c = static_cast<char>(cfirst ? std::toupper(static_cast<unsigned char>(c))
+                                         : std::tolower(static_cast<unsigned char>(c)));
+            cfirst = false;
+          }
+        }
         sh.set(name, val);
       }
     }
@@ -1385,6 +1396,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     if (integer) v.integer = true;
     if (ucase) v.ucase = true;
     if (lcase) v.lcase = true;
+    if (capcase) v.capcase = true;
     // Mark the nameref last, so the assignment above stored the *target name*
     // as this variable's value rather than being redirected through it.
     if (nameref) v.nameref = true;

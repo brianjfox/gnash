@@ -329,7 +329,8 @@ static bool array_op_ref(const std::string &body, std::string &name, char &sel,
   rest = body.substr(p + 3);
   if (rest.empty()) return false;
   char c = rest[0];
-  return c == '^' || c == ',' || c == '#' || c == '%' || c == '/' || c == '@';
+  return c == '^' || c == ',' || c == '~' || c == '#' || c == '%' || c == '/' ||
+         c == '@';
 }
 
 // Detect array/positional slicing: NAME[@]:off[:len] / NAME[*]:off[:len] and
@@ -807,7 +808,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
       // substitution /, case-mod ^/,, transform @) to each positional param.
       if ((body[0] == '@' || body[0] == '*') && body.size() > 1 &&
           (body[1] == '#' || body[1] == '%' || body[1] == '/' || body[1] == '^' ||
-           body[1] == ',' || body[1] == '@')) {
+           body[1] == ',' || body[1] == '~' || body[1] == '@')) {
         char psel = body[0];
         std::string prest = body.substr(1);
         std::vector<std::string> items = sh_.positional;
@@ -1291,6 +1292,27 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
       if (m && (all || first))
         nc = up ? static_cast<char>(std::toupper(static_cast<unsigned char>(c)))
                 : static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      if (!all && first) first = false;
+      out += nc;
+    }
+    return out;
+  }
+
+  // ${name~} ${name~~}  (case toggle: ~ the first matching char, ~~ all)
+  if (rest[0] == '~') {
+    bool all = rest.size() > 1 && rest[1] == '~';
+    std::string pat = ex.expand_pattern(rest.substr(all ? 2 : 1));
+    std::string out;
+    bool first = true;
+    for (char c : val) {
+      std::string cs(1, c);
+      bool m = pat.empty() ? true : pat_match(pat, cs);
+      char nc = c;
+      if (m && (all || first)) {
+        unsigned char uc = static_cast<unsigned char>(c);
+        if (std::isupper(uc)) nc = static_cast<char>(std::tolower(uc));
+        else if (std::islower(uc)) nc = static_cast<char>(std::toupper(uc));
+      }
       if (!all && first) first = false;
       out += nc;
     }
