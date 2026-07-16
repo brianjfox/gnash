@@ -5,6 +5,7 @@
 
 #include "gnash/core/executor.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <cerrno>
 #include <csignal>
@@ -224,7 +225,8 @@ bool parse_assign(const std::string &w, Assign &a) {
 }
 
 std::vector<std::pair<std::optional<std::string>, std::string>>
-parse_array_elems(Expander &ex, const std::string &parenval) {
+parse_array_elems(Shell &sh, Expander &ex, const std::string &name, bool integer,
+                  bool whole_append, const std::string &parenval) {
   std::vector<std::pair<std::optional<std::string>, std::string>> out;
   std::string inner = parenval.substr(1, parenval.size() - 2);
   for (const Token &t : tokenize(inner)) {
@@ -233,9 +235,24 @@ parse_array_elems(Expander &ex, const std::string &parenval) {
     const std::string &e = t.text;
     if (!e.empty() && e[0] == '[') {
       size_t rb = e.find(']');
-      if (rb != std::string::npos && rb + 1 < e.size() && e[rb + 1] == '=') {
-        out.emplace_back(ex.expand_no_split(e.substr(1, rb - 1)),
-                         ex.expand_no_split(e.substr(rb + 2)));
+      // [sub]=value or [sub]+=value (append to that element).
+      bool app = rb != std::string::npos && rb + 2 < e.size() && e[rb + 1] == '+' &&
+                 e[rb + 2] == '=';
+      bool plain = rb != std::string::npos && rb + 1 < e.size() && e[rb + 1] == '=';
+      if (app || plain) {
+        std::string sub = ex.expand_no_split(e.substr(1, rb - 1));
+        std::string val = ex.expand_no_split(e.substr(rb + (app ? 3 : 2)));
+        if (app) {  // resolve against the current element (fresh assign cleared
+                    // it, so the base is 0 unless this is a whole-array append)
+          std::string base = whole_append ? sh.array_get(name, sh.zsh_subscript(name, sub)) : "0";
+          if (integer) {
+            bool ok = true;
+            val = std::to_string(eval_arith(sh, base, &ok) + eval_arith(sh, val, &ok));
+          } else {
+            val = base + val;
+          }
+        }
+        out.emplace_back(sub, val);
         continue;
       }
     }
@@ -266,7 +283,7 @@ void apply_array_assign(Shell &sh, Expander &ex, const Assign &a) {
     sh.array_set(a.name, sub, val);
   } else {  // is_array
     bool assoc = sh.vars.count(a.name) && sh.vars[a.name].kind == VarKind::Assoc;
-    auto elems = parse_array_elems(ex, a.value);
+    auto elems = parse_array_elems(sh, ex, a.name, integer, a.append, a.value);
     if (integer)
       for (auto &e : elems) {
         bool ok = true;
@@ -886,7 +903,14 @@ int Executor::run_simple(const SimpleCommand *c) {
     // fork/wait (exec_replace was consumed at the top of run_simple).
     if (exec_replace) {
       std::vector<std::string> envs = sh_.environ_block();
-      for (const auto &a : assigns) envs.push_back(a.first + "=" + a.second);
+      for (const auto &a : assigns) {
+        // A temporary assignment overrides any exported value of the same name.
+        std::string pre = a.first + "=";
+        envs.erase(std::remove_if(envs.begin(), envs.end(),
+                                  [&](const std::string &e) { return e.compare(0, pre.size(), pre) == 0; }),
+                   envs.end());
+        envs.push_back(a.first + "=" + a.second);
+      }
       std::vector<char *> envp;
       for (auto &e : envs) envp.push_back(const_cast<char *>(e.c_str()));
       envp.push_back(nullptr);
@@ -915,7 +939,14 @@ int Executor::run_simple(const SimpleCommand *c) {
         signal(SIGTTOU, SIG_DFL);
       }
       std::vector<std::string> envs = sh_.environ_block();
-      for (const auto &a : assigns) envs.push_back(a.first + "=" + a.second);
+      for (const auto &a : assigns) {
+        // A temporary assignment overrides any exported value of the same name.
+        std::string pre = a.first + "=";
+        envs.erase(std::remove_if(envs.begin(), envs.end(),
+                                  [&](const std::string &e) { return e.compare(0, pre.size(), pre) == 0; }),
+                   envs.end());
+        envs.push_back(a.first + "=" + a.second);
+      }
       std::vector<char *> envp;
       for (auto &e : envs) envp.push_back(const_cast<char *>(e.c_str()));
       envp.push_back(nullptr);
