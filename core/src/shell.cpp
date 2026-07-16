@@ -40,6 +40,7 @@ Shell::Shell() {
     vars[name] = var;
   }
   if (!is_set("IFS")) set("IFS", " \t\n");
+  if (is_set("POSIXLY_CORRECT")) opt_posix = true;  // inherited from the environment
   set("OPTIND", "1");  // bash initializes getopts state at startup
   set("PPID", std::to_string(static_cast<long>(getppid())));
   set("$", std::to_string(static_cast<long>(getpid())));
@@ -697,6 +698,8 @@ bool Shell::set(const std::string &n_in, const std::string &v) {
     return false;
   }
   var.value = v;
+  // Setting POSIXLY_CORRECT (to any value) enables POSIX mode, as in bash.
+  if (n == "POSIXLY_CORRECT") opt_posix = true;
   // `declare -u' / `-l' / `-c' fold the value's case on every assignment.
   if (var.ucase)
     for (char &c : var.value) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
@@ -727,6 +730,7 @@ void Shell::set_exported(const std::string &n_in, const std::string &v) {
   if (var.readonly) return;
   var.value = v;
   var.exported = true;
+  if (n == "POSIXLY_CORRECT") opt_posix = true;
 }
 
 void Shell::export_name(const std::string &n) { vars[n].exported = true; }
@@ -738,6 +742,7 @@ void Shell::unset(const std::string &n_in, bool force) {
   // FORCE mirrors bash's unbind_variable_noref: remove the named variable
   // itself (no nameref following) even when it is readonly.
   std::string n = force ? n_in : deref(n_in);
+  if (n == "POSIXLY_CORRECT") opt_posix = false;  // unsetting leaves POSIX mode
   auto it = vars.find(n);
   if (it != vars.end() && (force || !it->second.readonly)) vars.erase(it);
 }
