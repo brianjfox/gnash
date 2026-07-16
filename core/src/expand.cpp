@@ -185,7 +185,17 @@ static std::string expand_leading_tilde(Shell &sh, const std::string &w) {
     if (pw) home = pw->pw_dir;
   }
   if (home.empty()) return w;
-  return home + (slash == std::string::npos ? std::string() : w.substr(slash));
+  // The substituted home directory is not re-scanned for expansions: escape
+  // the shell specials so the later process() pass keeps them literal (e.g.
+  // HOME='/usr/$x' must not expand `$x').
+  std::string esc;
+  for (char c : home) {
+    if (c == '$' || c == '`' || c == '\\' || c == '"' || c == '\'' ||
+        c == '*' || c == '?' || c == '[' || c == '~' || c == ' ' || c == '\t')
+      esc += '\\';
+    esc += c;
+  }
+  return esc + (slash == std::string::npos ? std::string() : w.substr(slash));
 }
 
 // Tilde expansion for an assignment value: leading ~ and ~ after each unquoted colon.

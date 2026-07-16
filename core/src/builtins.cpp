@@ -804,6 +804,59 @@ std::string set_elem(const std::string &v) {  // array element form: "value"
   return r + "\"";
 }
 
+// Quote a value for `declare -p': ANSI-C ($'...') for non-printable bytes,
+// double quotes otherwise (escaping " \\ $ `).
+std::string declare_quote(const std::string &v) {
+  if (q_needs_ansic(v)) return q_ansic(v);
+  std::string r = "\"";
+  for (char c : v) { if (c == '"' || c == '\\' || c == '$' || c == '`') r += '\\'; r += c; }
+  return r + "\"";
+}
+
+// `declare -p NAME': the attribute flags plus the reproducible assignment.
+void declare_print_var(const std::string &name, const Variable &v) {
+  std::string flags = "--";
+  if (v.kind == VarKind::Indexed) flags = "-a";
+  else if (v.kind == VarKind::Assoc) flags = "-A";
+  else {
+    flags.clear();
+    if (v.integer) flags += 'i';
+    if (v.nameref) flags += 'n';
+    flags = flags.empty() ? "--" : ("-" + flags);
+  }
+  std::string extra;  // r/x appended after the type flag, in bash's order
+  if (v.readonly) extra += 'r';
+  if (v.exported) extra += 'x';
+  std::string decl = "declare " + flags;
+  if (!extra.empty()) {
+    if (flags == "--") decl = "declare -" + extra;
+    else decl += extra;
+  }
+  decl += ' ' + name;
+  if (v.kind == VarKind::Indexed) {
+    decl += "=(";
+    bool first = true;
+    for (const auto &kv : v.idx) {
+      if (!first) decl += ' ';
+      first = false;
+      decl += "[" + std::to_string(kv.first) + "]=" + declare_quote(kv.second);
+    }
+    decl += ")";
+  } else if (v.kind == VarKind::Assoc) {
+    decl += "=(";
+    bool first = true;
+    for (const auto &kv : v.assoc) {
+      if (!first) decl += ' ';
+      first = false;
+      decl += "[" + kv.first + "]=" + declare_quote(kv.second);
+    }
+    decl += ")";
+  } else if (!v.value.empty() || v.integer) {
+    decl += "=" + declare_quote(v.value);
+  }
+  std::printf("%s\n", decl.c_str());
+}
+
 void set_print_var(const std::string &name, const Variable &v) {
   if (v.kind == VarKind::Indexed) {
     std::string s = name + "=(";
@@ -1191,6 +1244,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
   bool exported = false, global = false, local = force_local, nameref = false;
   bool lcase = false, ucase = false;  // -l lowercase / -u uppercase attribute
   bool funcs = false, funcnames = false;  // -f (definitions) / -F (names)
+  bool fp = false;                        // -p (display reproducibly)
   size_t i = 1;
   for (; i < argv.size(); i++) {
     const std::string &a = argv[i];
@@ -1208,13 +1262,32 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
           case 'n': nameref = true; break;
           case 'l': lcase = true; break;
           case 'u': ucase = true; break;
-          case 'p': break;
+          case 'p': fp = true; break;
           default: break;
         }
       }
     } else {
       break;
     }
+  }
+  // -p: display variables (named ones, or all) in reproducible form.
+  if (fp && !funcs && !funcnames) {
+    int st = 0;
+    if (i >= argv.size()) {
+      for (const auto &kv : sh.vars) declare_print_var(kv.first, kv.second);
+    } else {
+      for (; i < argv.size(); i++) {
+        auto it = sh.vars.find(argv[i]);
+        if (it == sh.vars.end()) {
+          std::fprintf(stderr, "%s%s: %s: not found\n", sh.err_prefix().c_str(),
+                       argv[0].c_str(), argv[i].c_str());
+          st = 1;
+        } else {
+          declare_print_var(argv[i], it->second);
+        }
+      }
+    }
+    return st;
   }
   // -f / -F: display function definitions or names.  With -x, restrict to
   // exported functions (gnash doesn't export functions, so none qualify).

@@ -818,6 +818,7 @@ struct Parser {
     if (reserved("in")) {
       advance();
     } else {
+      if (is(Tok::Eof)) incomplete = true;  // more input may supply `in'
       fail(is(Tok::Eof) ? std::string("unexpected end of file")
                         : std::string("near unexpected token `") + tok_to_text(cur()) + "'");
       return n;
