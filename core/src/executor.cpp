@@ -484,6 +484,9 @@ int Executor::run_pipeline(const Connection *c) {
 
 int Executor::run_simple(const SimpleCommand *c) {
   if (c->line > 0) sh_.cur_lineno = sh_.lineno_base + c->line;  // $LINENO
+  // $BASH_COMMAND tracks the command currently executing (bash sets it before
+  // every command, not only inside a DEBUG trap).
+  sh_.bash_command = to_string(c);
   // Consume the exec-in-place permission for *this* command up front, so it
   // applies only to a direct external here -- never to commands that a builtin
   // (eval/source) or function invoked by this command goes on to run.
