@@ -507,7 +507,10 @@ void Shell::pop_src_frame() {
 
 // ---- local scopes ---------------------------------------------------------
 
-void Shell::push_scope() { local_stack.emplace_back(); }
+void Shell::push_scope() {
+  local_stack.emplace_back();
+  getopt_scope_saves.emplace_back();  // no OPTIND localized here yet
+}
 
 void Shell::pop_scope() {
   if (local_stack.empty()) return;
@@ -519,6 +522,15 @@ void Shell::pop_scope() {
       vars.erase(it->first);
   }
   local_stack.pop_back();
+  if (!getopt_scope_saves.empty()) {
+    if (getopt_scope_saves.back()) {  // this scope had `local OPTIND'
+      auto &g = *getopt_scope_saves.back();
+      getopt_charidx = std::get<0>(g);
+      getopt_curarg = std::get<1>(g);
+      getopt_optind = std::get<2>(g);
+    }
+    getopt_scope_saves.pop_back();
+  }
 }
 
 void Shell::make_local(const std::string &n) {
@@ -529,6 +541,14 @@ void Shell::make_local(const std::string &n) {
   auto it = vars.find(n);
   scope.emplace_back(n, it == vars.end() ? std::nullopt : std::optional<Variable>(it->second));
   vars[n] = Variable{};  // fresh empty local
+  // Localizing OPTIND saves and resets the getopts scan state (bash restores
+  // it when the function returns).
+  if (n == "OPTIND" && !getopt_scope_saves.empty() && !getopt_scope_saves.back()) {
+    getopt_scope_saves.back() = std::make_tuple(getopt_charidx, getopt_curarg, getopt_optind);
+    getopt_charidx = 1;
+    getopt_curarg.clear();
+    getopt_optind = 0;
+  }
 }
 
 bool Shell::get_if_set(const std::string &n_in, std::string &out) const {
