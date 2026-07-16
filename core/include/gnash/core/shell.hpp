@@ -271,6 +271,10 @@ class Shell {
 
   bool opt_posix = false;       // -o posix
   bool opt_restricted = false;  // -r / -o restricted / rbash: restricted shell
+  // Set when a top-level $((...)) / $[...] arithmetic expansion failed (bad
+  // expression or an assignment to a readonly variable); run_simple aborts the
+  // current command (bash aborts but the shell continues).
+  bool arith_error = false;
   // Turn on `-o history': the first enable loads $HISTFILE and applies the
   // $HISTSIZE stifle, as bash does.
   void enable_history();

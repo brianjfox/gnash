@@ -806,8 +806,10 @@ struct Parser {
   }
 
   CommandPtr parse_case() {
+    int case_line = cur().line;  // $LINENO / error line of the case command
     expect_reserved("case");
     auto n = std::make_unique<CaseCommand>();
+    n->line = case_line;
     if (cur().type != Tok::Word) {
       fail("expected word after `case'");
       return n;

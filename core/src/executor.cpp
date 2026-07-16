@@ -313,6 +313,10 @@ int Executor::run(const Command *c) {
 
   sh_.run_pending_traps();  // deliver any signals received between commands
 
+  // $LINENO / error line for compound commands (run_simple sets its own).
+  if (c->line > 0 && !dynamic_cast<const SimpleCommand *>(c))
+    sh_.cur_lineno = sh_.lineno_base + c->line;
+
   if (auto *p = dynamic_cast<const SimpleCommand *>(c)) return run_simple(p);
   if (auto *p = dynamic_cast<const Connection *>(c)) return run_connection(p);
 
@@ -540,6 +544,14 @@ int Executor::run_simple(const SimpleCommand *c) {
       else
         for (const std::string &f : ex.expand_args({w})) argv.push_back(f);
     }
+  }
+
+  // A failed arithmetic expansion (bad expression, or assignment to a readonly
+  // variable) during word expansion aborts the command with status 1; the
+  // shell continues.
+  if (sh_.arith_error) {
+    sh_.arith_error = false;
+    return (sh_.last_status = 1);
   }
 
   if (sh_.opt_xtrace) {
@@ -909,6 +921,7 @@ int Executor::run_for(const ForCommand *c) {
 int Executor::run_case(const CaseCommand *c) {
   Expander ex(sh_);
   std::string word = ex.expand_no_split(c->word.text);
+  if (sh_.arith_error) { sh_.arith_error = false; return (sh_.last_status = 1); }
   int st = 0;
   size_t i = 0;
   while (i < c->clauses.size()) {
@@ -916,6 +929,7 @@ int Executor::run_case(const CaseCommand *c) {
     bool m = false;
     for (const Word &pat : cl.patterns) {
       std::string p = ex.expand_pattern(pat.text);
+      if (sh_.arith_error) { sh_.arith_error = false; return (sh_.last_status = 1); }
       std::string pp = p, ww = word;
       if (strmatch(pp.data(), ww.data(), FNM_EXTMATCH) == 0) {
         m = true;
