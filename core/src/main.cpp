@@ -256,6 +256,7 @@ void configure_persona(Shell &sh, const std::string &personality, const std::str
 int main(int argc, char **argv) {
   Shell sh;
   shopt_seed(sh);  // seed default shopt states so $BASHOPTS is populated
+  sh.import_env_functions();  // pull in any BASH_FUNC_*%% exported functions
 
   // Invocation name: basename of argv[0], minus a leading '-' (which marks a
   // login shell).  Drives error-message prefixes and startup-file names.

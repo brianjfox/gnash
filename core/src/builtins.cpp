@@ -790,14 +790,32 @@ int bi_mapfile(Shell &sh, const std::vector<std::string> &argv) {
 }
 
 int bi_export(Shell &sh, const std::vector<std::string> &argv) {
+  bool funcs = false;
+  int st = 0;
   for (size_t i = 1; i < argv.size(); i++) {
-    size_t eq = argv[i].find('=');
+    const std::string &a = argv[i];
+    if (a == "-f") { funcs = true; continue; }
+    if (a == "-n" || a == "-p" || a == "--") continue;  // (unmodeled here / no-op)
+    if (funcs) {
+      // `export -f name': mark a function for the environment of children.  A
+      // name that cannot encode as BASH_FUNC_<name>%% (it contains `=' or `/')
+      // cannot be exported, even though it is a valid function name.
+      if (a.find('=') != std::string::npos || a.find('/') != std::string::npos) {
+        std::fprintf(stderr, "%sexport: %s: cannot export\n", sh.err_prefix().c_str(),
+                     a.c_str());
+        st = 1;
+      } else if (sh.functions.count(a)) {
+        sh.exported_functions.insert(a);
+      }
+      continue;
+    }
+    size_t eq = a.find('=');
     if (eq != std::string::npos)
-      sh.set_exported(argv[i].substr(0, eq), argv[i].substr(eq + 1));
+      sh.set_exported(a.substr(0, eq), a.substr(eq + 1));
     else
-      sh.export_name(argv[i]);
+      sh.export_name(a);
   }
-  return 0;
+  return st;
 }
 
 int bi_unset(Shell &sh, const std::vector<std::string> &argv) {
