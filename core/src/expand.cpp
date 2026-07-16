@@ -1624,7 +1624,33 @@ std::vector<std::string> Expander::glob_field(const std::string &field, const st
   // (except the `.'/`..' entries, which are always skipped).
   auto dg = sh_.shopt_opts.find("dotglob");
   if (dg != sh_.shopt_opts.end() && dg->second) gflags |= GX_MATCHDOT;
+  // A non-null $GLOBIGNORE also enables dot matching, then filters out any
+  // result matching one of its colon-separated patterns.
+  std::string globignore = sh_.get("GLOBIGNORE");
+  if (!globignore.empty()) gflags |= GX_MATCHDOT;
   auto matches = gnash::glob::glob(pattern, gflags);
+  if (!globignore.empty()) {
+    // Split on `:' but not inside a bracket expression -- a `[:class:]' has
+    // its own colons.
+    std::vector<std::string> pats;
+    std::string cur;
+    int bracket = 0;
+    for (char c : globignore) {
+      if (c == '[') bracket++;
+      else if (c == ']' && bracket > 0) bracket--;
+      if (c == ':' && bracket == 0) { pats.push_back(cur); cur.clear(); }
+      else cur += c;
+    }
+    pats.push_back(cur);
+    matches.erase(std::remove_if(matches.begin(), matches.end(),
+                                 [&](const std::string &m) {
+                                   std::string base = m.substr(m.rfind('/') + 1);
+                                   for (const std::string &gp : pats)
+                                     if (!gp.empty() && pat_match(gp, base)) return true;
+                                   return false;
+                                 }),
+                  matches.end());
+  }
   if (matches.empty()) {
     auto it = sh_.shopt_opts.find("nullglob");
     if (it != sh_.shopt_opts.end() && it->second) return {};  // nullglob: remove word
