@@ -53,7 +53,9 @@ class Shell {
   bool set(const std::string &n, const std::string &v);
   void set_exported(const std::string &n, const std::string &v);
   void export_name(const std::string &n);
-  void unset(const std::string &n);
+  // Remove N.  A readonly variable is left in place unless FORCE is set
+  // (bash's unbind_variable_noref, used by getopts to clear OPTARG).
+  void unset(const std::string &n, bool force = false);
 
   // --- arrays ------------------------------------------------------------
   std::vector<std::string> array_values(const std::string &n) const;

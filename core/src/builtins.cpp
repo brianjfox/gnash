@@ -1645,10 +1645,14 @@ int bi_getopts(Shell &sh, const std::vector<std::string> &argv) {
                      args[static_cast<size_t>(cur_ai)] == s_curarg;
   if (optind != s_optind || !arg_matches) { s_charidx = 1; s_optind = optind; }
 
+  // bash clears OPTARG with unbind_variable_noref, which removes even a
+  // readonly OPTARG (dropping the readonly attribute), so `${OPTARG-unset}'
+  // reports it unset and a later re-declaration is not blocked.
+  auto clear_optarg = [&]() { sh.unset("OPTARG", true); };
   auto badopt = [&](char c) {
     if (silent) { sh.set(name, "?"); sh.set("OPTARG", std::string(1, c)); }
     else {
-      sh.unset("OPTARG");
+      clear_optarg();
       sh.set(name, "?");
       std::fprintf(stderr, "%s: illegal option -- %c\n", sh.arg0.c_str(), c);
     }
@@ -1656,7 +1660,7 @@ int bi_getopts(Shell &sh, const std::vector<std::string> &argv) {
   auto needarg = [&](char c) {
     if (silent) { sh.set(name, ":"); sh.set("OPTARG", std::string(1, c)); }
     else {
-      sh.unset("OPTARG");
+      clear_optarg();
       sh.set(name, "?");
       std::fprintf(stderr, "%s: option requires an argument -- %c\n", sh.arg0.c_str(), c);
     }
@@ -1664,7 +1668,7 @@ int bi_getopts(Shell &sh, const std::vector<std::string> &argv) {
 
   for (;;) {
     int ai = optind - 1;  // 0-based index into args
-    if (ai >= static_cast<int>(args.size())) { sh.set(name, "?"); return 1; }
+    if (ai >= static_cast<int>(args.size())) { clear_optarg(); sh.set(name, "?"); return 1; }
     const std::string &arg = args[static_cast<size_t>(ai)];
 
     // Start of a fresh argument.
@@ -1674,10 +1678,11 @@ int bi_getopts(Shell &sh, const std::vector<std::string> &argv) {
         s_optind = optind;
         s_charidx = 1;
         sh.set("OPTIND", std::to_string(optind));
+        clear_optarg();
         sh.set(name, "?");
         return 1;
       }
-      if (arg.empty() || arg[0] != '-' || arg == "-") { sh.set(name, "?"); return 1; }
+      if (arg.empty() || arg[0] != '-' || arg == "-") { clear_optarg(); sh.set(name, "?"); return 1; }
       s_charidx = 1;
       s_curarg = arg;
     }
