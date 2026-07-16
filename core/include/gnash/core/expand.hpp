@@ -72,7 +72,7 @@ class Expander {
 
   // Expand a ${...} / $name / $(...) / $((...)) starting at text[i] (i at `$').
   void expand_dollar(const std::string &text, size_t &i, bool dq, std::string &out,
-                     std::string &mask);
+                     std::string &mask, bool heredoc = false);
 
   // zsh array subscript on NAME with the raw text SUB (between the brackets):
   // a single 1-based/negative index, or a `lo,hi' range.  Emits the selected
