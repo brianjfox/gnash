@@ -255,6 +255,7 @@ std::string Expander::param_value(const std::string &name, bool &set, bool defau
     if (sh_.opt_noglob) f += 'f';
     f += 'h';                       // hashall: on by default
     if (sh_.interactive) f += 'i';  // rc files test `case $- in *i*)'
+    if (sh_.opt_keyword) f += 'k';  // keyword: assignments anywhere
     if (sh_.job_control) f += 'm';  // monitor: interactive job control
     if (sh_.opt_noexec) f += 'n';
     if (sh_.opt_nounset) f += 'u';
@@ -262,6 +263,7 @@ std::string Expander::param_value(const std::string &name, bool &set, bool defau
     if (sh_.opt_xtrace) f += 'x';
     f += 'B';                       // braceexpand: on by default
     if (sh_.opt_histexpand) f += 'H';  // histexpand (set -H; interactive default)
+    if (sh_.opt_physical) f += 'P';    // physical: resolve symlinks in cd/pwd
     if (sh_.invocation_char) f += sh_.invocation_char;
     return f;
   }
@@ -532,10 +534,10 @@ void Expander::emit_zsh_subscript(const std::string &name, const std::string &su
     bool ok = true;
     long long lo, hi;
     if (comma != std::string::npos) {
-      lo = eval_arith(sh_, expand_no_split(sub.substr(0, comma)), &ok);
-      hi = eval_arith(sh_, expand_no_split(sub.substr(comma + 1)), &ok);
+      lo = eval_arith(sh_, expand_no_split(sub.substr(0, comma), false, false), &ok);
+      hi = eval_arith(sh_, expand_no_split(sub.substr(comma + 1), false, false), &ok);
     } else {
-      lo = hi = eval_arith(sh_, expand_no_split(sub), &ok);
+      lo = hi = eval_arith(sh_, expand_no_split(sub, false, false), &ok);
     }
     if (lo < 0) lo += n + 1;
     if (hi < 0) hi += n + 1;
@@ -548,8 +550,8 @@ void Expander::emit_zsh_subscript(const std::string &name, const std::string &su
     std::vector<std::string> all = sh_.array_values(name);
     long long n = static_cast<long long>(all.size());
     bool ok = true;
-    long long lo = eval_arith(sh_, expand_no_split(sub.substr(0, comma)), &ok);
-    long long hi = eval_arith(sh_, expand_no_split(sub.substr(comma + 1)), &ok);
+    long long lo = eval_arith(sh_, expand_no_split(sub.substr(0, comma), false, false), &ok);
+    long long hi = eval_arith(sh_, expand_no_split(sub.substr(comma + 1), false, false), &ok);
     if (lo < 0) lo += n + 1;  // -1 == last element (position n)
     if (hi < 0) hi += n + 1;
     std::vector<std::string> items;
@@ -600,7 +602,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
     if (end != std::string::npos) {
       std::string expr = t.substr(i + 3, (end - 1) - (i + 3));
       bool ok = true;
-      long long v = eval_arith_msg(sh_, expand_no_split(expr), "", &ok);
+      long long v = eval_arith_msg(sh_, expand_no_split(expr, false, false), "", &ok);
       if (!ok) { sh_.arith_error = true; i = end + 1; return; }
       std::string s = std::to_string(v);
       for (char c : s) { out += c; mask += qm; }
@@ -614,7 +616,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
     if (end != std::string::npos) {
       std::string expr = t.substr(i + 2, end - (i + 2));
       bool ok = true;
-      long long v = eval_arith_msg(sh_, expand_no_split(expr), "", &ok);
+      long long v = eval_arith_msg(sh_, expand_no_split(expr, false, false), "", &ok);
       if (!ok) { sh_.arith_error = true; i = end + 1; return; }
       std::string s = std::to_string(v);
       for (char c : s) { out += c; mask += qm; }
@@ -662,6 +664,35 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
     size_t end = scan_balanced(t, i + 1, '{', '}');
     if (end != std::string::npos) {
       std::string body = t.substr(i + 2, end - (i + 2));
+
+      // ${@} / ${*}: a bare positional list, identical to $@ / $*.  Handle it
+      // here so `"${@}"' keeps its per-parameter field structure rather than
+      // being flattened to a single word by the generic scalar path below.
+      if (body == "@" || body == "*") {
+        const auto &pos = sh_.positional;
+        if (body[0] == '@' && dq) {
+          absorb_qnull();
+          for (size_t k = 0; k < pos.size(); k++) {
+            if (k) { out += FIELD_SEP; mask += MMARK; }
+            out += QNULL; mask += MMARK;
+            for (char c : pos[k]) { out += c; mask += '1'; }
+          }
+        } else if (body[0] == '*' && dq) {
+          std::string sep = sh_.ifs();
+          std::string joiner = sep.empty() ? std::string() : std::string(1, sep[0]);
+          for (size_t k = 0; k < pos.size(); k++) {
+            if (k) for (char c : joiner) { out += c; mask += '1'; }
+            for (char c : pos[k]) { out += c; mask += '1'; }
+          }
+        } else {
+          for (size_t k = 0; k < pos.size(); k++) {
+            if (k) { out += FIELD_SEP; mask += MMARK; }
+            for (char c : pos[k]) { out += c; mask += '0'; }
+          }
+        }
+        i = end + 1;
+        return;
+      }
 
       // ${name-word} / ${name+word} (and the `:' forms) with the operator
       // firing: expand WORD by re-processing it here, so an embedded "$@"
@@ -879,12 +910,12 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
         }
         long long n = static_cast<long long>(list.size());
         bool ok = true;
-        long long off = eval_arith(sh_, expand_no_split(soffx), &ok);
+        long long off = eval_arith(sh_, expand_no_split(soffx, false, false), &ok);
         if (!ok) off = 0;
         if (off < 0) { off += n; if (off < 0) off = 0; }
         long long count;
         if (shaslen) {
-          long long len = eval_arith(sh_, expand_no_split(slenx), &ok);
+          long long len = eval_arith(sh_, expand_no_split(slenx, false, false), &ok);
           if (!ok) len = 0;
           count = (len < 0) ? (n + len - off) : len;  // negative len = offset from end
         } else {
@@ -1073,6 +1104,9 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
   bool length = false;
   std::string b = body;
   if (b.size() > 1 && b[0] == '#') { length = true; b = b.substr(1); }
+  // ${#@} and ${#*} are the count of positional parameters (like $#), not the
+  // character length of the expanded list.
+  if (length && (b == "@" || b == "*")) return std::to_string(sh.positional.size());
 
   // ${!name} indirection and ${!prefix*}/${!prefix@} name listing.  A `['
   // after the name is the ${!arr[@]} keys form, handled by the array path.
@@ -1556,39 +1590,41 @@ std::vector<std::pair<std::string, std::string>> Expander::split_ifs(const std::
   bool zsh = sh_.is_zsh();
   auto splittable = [&](char m) { return m == '4' || (m == '0' && !zsh); };
   std::vector<std::pair<std::string, std::string>> fields;
-  std::string cur, curm;
-  bool have = false;
   auto is_ifs = [&](char c) { return ifs.find(c) != std::string::npos; };
   auto is_ws = [&](char c) { return c == ' ' || c == '\t' || c == '\n'; };
-  auto flush = [&]() { fields.emplace_back(cur, curm); cur.clear(); curm.clear(); have = false; };
-  size_t i = 0;
-  while (i < s.size()) {
-    char c = s[i];
-    // Quoted ('1') and literal ('2') text is never split, even when it contains
-    // IFS characters; '0'/'4' expansion output is (subject to the rule above).
-    bool q = mask[i] == '1' || mask[i] == '2';
-    (void)q;
-    if (mask[i] == MMARK && c == FIELD_SEP) {
-      flush();
+  auto soft_ifs = [&](size_t i) { return splittable(mask[i]) && is_ifs(s[i]); };
+  auto soft_ws = [&](size_t i) { return soft_ifs(i) && is_ws(s[i]); };
+  // bash's list_string algorithm (lib/sh/split.c): leading IFS whitespace is
+  // skipped, then each iteration extracts one field and consumes a single
+  // delimiter of the form [IFS ws]* [one IFS non-ws]? [IFS ws]*.  This makes
+  // ` :' (whitespace then a non-whitespace IFS char) a single delimiter, so
+  // `IFS=": "; set -- $x' on x="a :" yields just "a" rather than "a" plus a
+  // spurious empty field.  Quoted ('1') and literal ('2') text is never a
+  // delimiter, even when it contains IFS characters.  FIELD_SEP marks a hard
+  // array/`$@' element boundary that always splits (empty elements preserved).
+  size_t n = s.size(), i = 0;
+  while (i < n && soft_ws(i)) i++;  // strip leading IFS whitespace
+  while (i < n) {
+    std::string cur, curm;
+    while (i < n && !soft_ifs(i) && !(mask[i] == MMARK && s[i] == FIELD_SEP)) {
+      cur += s[i];
+      curm += mask[i];
       i++;
+    }
+    fields.emplace_back(cur, curm);
+    if (i >= n) break;
+    if (mask[i] == MMARK && s[i] == FIELD_SEP) {
+      i++;  // hard boundary; skip any IFS whitespace leading the next element
+      while (i < n && soft_ws(i)) i++;
       continue;
     }
-    if (splittable(mask[i]) && is_ifs(c)) {
-      if (is_ws(c)) {
-        if (have) flush();
-        while (i < s.size() && splittable(mask[i]) && is_ifs(s[i]) && is_ws(s[i])) i++;
-      } else {
-        flush();
-        i++;
-      }
-      continue;
+    // Soft IFS delimiter: [ws]* [one non-ws]? [ws]*.
+    while (i < n && soft_ws(i)) i++;
+    if (i < n && soft_ifs(i) && !is_ws(s[i])) {
+      i++;
+      while (i < n && soft_ws(i)) i++;
     }
-    cur += c;
-    curm += mask[i];
-    have = true;
-    i++;
   }
-  if (have) flush();
   return fields;
 }
 
@@ -1624,7 +1660,36 @@ std::vector<std::string> Expander::glob_field(const std::string &field, const st
   // (except the `.'/`..' entries, which are always skipped).
   auto dg = sh_.shopt_opts.find("dotglob");
   if (dg != sh_.shopt_opts.end() && dg->second) gflags |= GX_MATCHDOT;
+  // `shopt -u globskipdots' lets `.' and `..' be matched.
+  auto gsd = sh_.shopt_opts.find("globskipdots");
+  if (gsd != sh_.shopt_opts.end() && !gsd->second) gflags |= GX_NODOTSKIP;
+  // A non-null $GLOBIGNORE also enables dot matching, then filters out any
+  // result matching one of its colon-separated patterns.
+  std::string globignore = sh_.get("GLOBIGNORE");
+  if (!globignore.empty()) gflags |= GX_MATCHDOT;
   auto matches = gnash::glob::glob(pattern, gflags);
+  if (!globignore.empty()) {
+    // Split on `:' but not inside a bracket expression -- a `[:class:]' has
+    // its own colons.
+    std::vector<std::string> pats;
+    std::string cur;
+    int bracket = 0;
+    for (char c : globignore) {
+      if (c == '[') bracket++;
+      else if (c == ']' && bracket > 0) bracket--;
+      if (c == ':' && bracket == 0) { pats.push_back(cur); cur.clear(); }
+      else cur += c;
+    }
+    pats.push_back(cur);
+    matches.erase(std::remove_if(matches.begin(), matches.end(),
+                                 [&](const std::string &m) {
+                                   std::string base = m.substr(m.rfind('/') + 1);
+                                   for (const std::string &gp : pats)
+                                     if (!gp.empty() && pat_match(gp, base)) return true;
+                                   return false;
+                                 }),
+                  matches.end());
+  }
   if (matches.empty()) {
     auto it = sh_.shopt_opts.find("nullglob");
     if (it != sh_.shopt_opts.end() && it->second) return {};  // nullglob: remove word
@@ -1664,6 +1729,26 @@ void Expander::extract_procsubs(std::string &word) {
     if (c == '\\') { i += 2; continue; }
     if (c == '\'') { i++; while (i < word.size() && word[i] != '\'') i++; if (i < word.size()) i++; continue; }
     if (c == '"') { i++; while (i < word.size() && word[i] != '"') { if (word[i] == '\\') i++; i++; } if (i < word.size()) i++; continue; }
+    // Skip $(...) / $((...)) / ${...} and `...`: a `<('/`>(' inside them is not
+    // this word's process substitution (an arithmetic `4>(2+3)' is a comparison,
+    // and a nested command runs its own procsubs when it executes).
+    if (c == '$' && (word[i + 1] == '(' || word[i + 1] == '{')) {
+      char oc = word[i + 1], cc = oc == '(' ? ')' : '}';
+      int depth = 0;
+      size_t j = i + 1;
+      for (; j < word.size(); j++) {
+        if (word[j] == oc) depth++;
+        else if (word[j] == cc) { if (--depth == 0) { j++; break; } }
+      }
+      i = j;
+      continue;
+    }
+    if (c == '`') {
+      size_t j = i + 1;
+      while (j < word.size() && word[j] != '`') { if (word[j] == '\\') j++; j++; }
+      i = (j < word.size()) ? j + 1 : j;
+      continue;
+    }
     if ((c == '<' || c == '>') && word[i + 1] == '(') {
       int depth = 0;
       size_t j = i + 1;
@@ -1747,9 +1832,11 @@ std::string Expander::expand_pattern(const std::string &text) {
   return r;
 }
 
-std::string Expander::expand_no_split(const std::string &text, bool do_glob) {
+std::string Expander::expand_no_split(const std::string &text, bool do_glob, bool do_procsub) {
   std::string src = expand_leading_tilde(sh_, text);  // case subjects, redirects
-  extract_procsubs(src);  // e.g. a redirect target: < <(cmd)
+  // Arithmetic contexts pass do_procsub=false: there `4>(2+3)' is a comparison,
+  // not a `>(cmd)' process substitution.
+  if (do_procsub) extract_procsubs(src);  // e.g. a redirect target: < <(cmd)
   std::string out, mask;
   process(src, out, mask, false);
   // drop internal markers: field separators become spaces, quoted-nulls vanish
@@ -1805,6 +1892,9 @@ std::vector<std::string> brace_expand(const std::string &text) {
     if (c == '\\') { i++; continue; }
     if (c == '\'' ) { while (++i < text.size() && text[i] != '\'') {} continue; }
     if (c == '"') { while (++i < text.size() && text[i] != '"') { if (text[i]=='\\') i++; } continue; }
+    // A `...` command substitution is opaque to outer brace expansion: its
+    // `{'/`,' belong to the nested command, not this word.
+    if (c == '`') { while (++i < text.size() && text[i] != '`') { if (text[i]=='\\') i++; } continue; }
     // Skip $-constructs so their `{'/`,' aren't treated as brace expansion.
     if (c == '$' && i + 1 < text.size() && (text[i + 1] == '{' || text[i + 1] == '(')) {
       char oc = text[i + 1], cc = oc == '{' ? '}' : ')';
@@ -1825,6 +1915,26 @@ std::vector<std::string> brace_expand(const std::string &text) {
           bool comma = false;
           for (size_t k = 0; k < inside.size(); k++) {
             char ic = inside[k];
+            // A backslash escapes the next character (`{abc\,def}' is a single
+            // item, not two): keep both so later quote removal strips the `\'.
+            if (ic == '\\' && k + 1 < inside.size()) { cur += ic; cur += inside[++k]; continue; }
+            // A quoted comma is not a separator (`{"x,x"}' is one item): copy the
+            // quoted span verbatim, leaving the quotes for later removal.
+            if (ic == '\'') {
+              cur += ic;
+              while (++k < inside.size() && inside[k] != '\'') cur += inside[k];
+              if (k < inside.size()) cur += inside[k];
+              continue;
+            }
+            if (ic == '"') {
+              cur += ic;
+              while (++k < inside.size() && inside[k] != '"') {
+                if (inside[k] == '\\' && k + 1 < inside.size()) cur += inside[k++];
+                cur += inside[k];
+              }
+              if (k < inside.size()) cur += inside[k];
+              continue;
+            }
             if (ic == '{') d++;
             else if (ic == '}') d--;
             if (ic == ',' && d == 0) { parts.push_back(cur); cur.clear(); comma = true; }
@@ -1835,31 +1945,54 @@ std::vector<std::string> brace_expand(const std::string &text) {
           if (comma) {
             items = parts;
           } else {
-            // numeric or char range {a..b}
-            size_t dots = inside.find("..");
-            if (dots != std::string::npos) {
-              std::string a = inside.substr(0, dots), b = inside.substr(dots + 2);
-              char *ea = nullptr, *eb = nullptr;
+            // Sequence range {start..end} or {start..end..step}.  The step is
+            // taken as a magnitude (its sign is ignored; direction runs from
+            // start to end); a 0 or absent step means 1.
+            size_t d1 = inside.find("..");
+            if (d1 != std::string::npos) {
+              std::string a = inside.substr(0, d1);
+              std::string rest = inside.substr(d1 + 2);
+              size_t d2 = rest.find("..");
+              std::string b = (d2 == std::string::npos) ? rest : rest.substr(0, d2);
+              std::string stepstr = (d2 == std::string::npos) ? std::string() : rest.substr(d2 + 2);
+              char *ea = nullptr, *eb = nullptr, *es = nullptr;
               long va = std::strtol(a.c_str(), &ea, 10), vb = std::strtol(b.c_str(), &eb, 10);
-              if (ea && *ea == '\0' && eb && *eb == '\0' && !a.empty() && !b.empty()) {
-                // Cap the range length: an enormous {a..b} would otherwise build
-                // billions of strings and abort the shell on bad_alloc.  Beyond
-                // the cap, leave the word unexpanded rather than crash.  (span is
-                // the element count minus one; computed via unsigned to avoid
-                // signed overflow on a huge span.)
+              long step = stepstr.empty() ? 1 : std::strtol(stepstr.c_str(), &es, 10);
+              bool step_ok = stepstr.empty() || (es && *es == '\0');
+              if (step == 0) step = 1;
+              else if (step < 0) step = -step;
+              bool a_num = ea && *ea == '\0' && !a.empty();
+              bool b_num = eb && *eb == '\0' && !b.empty();
+              if (a_num && b_num && step_ok) {
+                // Zero-pad the terms to a common width when either bound is
+                // written with a leading zero (`{00..10}' -> 00 01 ... 10).
+                auto digits = [](const std::string &s) {
+                  size_t p = (!s.empty() && (s[0] == '-' || s[0] == '+')) ? 1 : 0;
+                  return s.substr(p);
+                };
+                std::string da = digits(a), db = digits(b);
+                bool pad = (da.size() > 1 && da[0] == '0') || (db.size() > 1 && db[0] == '0');
+                size_t width = std::max(da.size(), db.size());
+                auto fmt = [&](long v) {
+                  if (!pad) return std::to_string(v);
+                  bool neg = v < 0;
+                  std::string d = std::to_string(neg ? -v : v);
+                  while (d.size() < width) d = "0" + d;
+                  return (neg ? "-" : "") + d;
+                };
                 unsigned long long span =
                     (va <= vb) ? static_cast<unsigned long long>(vb) - static_cast<unsigned long long>(va)
                                : static_cast<unsigned long long>(va) - static_cast<unsigned long long>(vb);
-                if (span < kMaxBraceItems) {
-                  if (va <= vb) for (long v = va; v <= vb; v++) items.push_back(std::to_string(v));
-                  else for (long v = va; v >= vb; v--) items.push_back(std::to_string(v));
+                if (span / static_cast<unsigned long long>(step) < kMaxBraceItems) {
+                  if (va <= vb) for (long v = va; v <= vb; v += step) items.push_back(fmt(v));
+                  else for (long v = va; v >= vb; v -= step) items.push_back(fmt(v));
                 }
-              } else if (a.size() == 1 && b.size() == 1 &&
+              } else if (a.size() == 1 && b.size() == 1 && step_ok &&
                          std::isalpha(static_cast<unsigned char>(a[0])) &&
                          std::isalpha(static_cast<unsigned char>(b[0]))) {
                 char ca = a[0], cb = b[0];
-                if (ca <= cb) for (char v = ca; v <= cb; v++) items.push_back(std::string(1, v));
-                else for (char v = ca; v >= cb; v--) items.push_back(std::string(1, v));
+                if (ca <= cb) for (int v = ca; v <= cb; v += step) items.push_back(std::string(1, static_cast<char>(v)));
+                else for (int v = ca; v >= cb; v -= step) items.push_back(std::string(1, static_cast<char>(v)));
               }
             }
           }
@@ -1877,9 +2010,46 @@ std::vector<std::string> brace_expand(const std::string &text) {
               }
             return out;
           }
+          // The outer {...} is not itself a brace expression (no top-level comma
+          // or valid range), so its braces are literal -- but an inner brace may
+          // still expand: `a-{b{d,e}}-c' -> a-{bd}-c a-{be}-c.  Recurse on the
+          // interior; if it expands, keep the literal outer braces around each
+          // result and combine with the (recursively expanded) postscript.
+          {
+            std::vector<std::string> inner = brace_expand(inside);
+            bool changed = inner.size() > 1 || (inner.size() == 1 && inner[0] != inside);
+            if (changed) {
+              std::string pre = text.substr(0, open);
+              std::string post = text.substr(i + 1);
+              std::vector<std::string> out;
+              for (const std::string &ie : inner)
+                for (const std::string &tail : brace_expand(post)) {
+                  if (out.size() >= kMaxBraceItems) return {text};
+                  out.push_back(pre + "{" + ie + "}" + tail);
+                }
+              return out;
+            }
+          }
           open = std::string::npos;
         }
       }
+    }
+  }
+  // An unmatched `{' (never balanced by a `}') is literal, but a balanced brace
+  // nested after it may still expand: `a-{bdef-{g,i}-c' -> a-{bdef-g-c
+  // a-{bdef-i-c'.  Re-expand the text following the stray `{' and keep it as a
+  // literal prefix.
+  if (open != std::string::npos && open + 1 < text.size()) {
+    std::string rest = text.substr(open + 1);
+    std::vector<std::string> re = brace_expand(rest);
+    if (re.size() > 1 || (re.size() == 1 && re[0] != rest)) {
+      std::string pre = text.substr(0, open + 1);
+      std::vector<std::string> out;
+      for (const std::string &r : re) {
+        if (out.size() >= kMaxBraceItems) return {text};
+        out.push_back(pre + r);
+      }
+      return out;
     }
   }
   return {text};
