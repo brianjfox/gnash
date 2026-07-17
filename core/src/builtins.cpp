@@ -1748,45 +1748,154 @@ int signame_to_num(const std::string &s);
 const char *trapname_from_num(int sig) {
   switch (sig) {
     case SIGHUP: return "HUP";   case SIGINT: return "INT";
-    case SIGQUIT: return "QUIT"; case SIGTERM: return "TERM";
-    case SIGUSR1: return "USR1"; case SIGUSR2: return "USR2";
-    case SIGALRM: return "ALRM"; case SIGPIPE: return "PIPE";
+    case SIGQUIT: return "QUIT"; case SIGILL: return "ILL";
+    case SIGTRAP: return "TRAP"; case SIGABRT: return "ABRT";
+    case SIGFPE: return "FPE";   case SIGKILL: return "KILL";
+    case SIGBUS: return "BUS";   case SIGSEGV: return "SEGV";
+    case SIGSYS: return "SYS";   case SIGPIPE: return "PIPE";
+    case SIGALRM: return "ALRM"; case SIGTERM: return "TERM";
+    case SIGURG: return "URG";   case SIGSTOP: return "STOP";
     case SIGTSTP: return "TSTP"; case SIGCONT: return "CONT";
-    case SIGCHLD: return "CHLD";
+    case SIGCHLD: return "CHLD"; case SIGTTIN: return "TTIN";
+    case SIGTTOU: return "TTOU"; case SIGXCPU: return "XCPU";
+    case SIGXFSZ: return "XFSZ"; case SIGVTALRM: return "VTALRM";
+    case SIGPROF: return "PROF"; case SIGWINCH: return "WINCH";
+    case SIGUSR1: return "USR1"; case SIGUSR2: return "USR2";
     default: return nullptr;
   }
 }
 
+// bash's trap -p sort order: EXIT (signal 0) first, then real signals by
+// ascending signal number, then the pseudo-signals DEBUG, ERR, RETURN.
+static int trap_order(const std::string &key) {
+  if (key == "EXIT" || key == "0") return -1;
+  if (key == "DEBUG") return 1000;
+  if (key == "ERR") return 1001;
+  if (key == "RETURN") return 1002;
+  return signame_to_num(key);
+}
+
+// The name bash prints for a trap key: EXIT/DEBUG/ERR/RETURN bare, a real
+// signal with the `SIG' prefix (`HUP' -> `SIGHUP').
+static std::string trap_display_name(const std::string &key) {
+  if (key == "0") return "EXIT";
+  if (key == "EXIT" || key == "DEBUG" || key == "ERR" || key == "RETURN") return key;
+  return "SIG" + key;
+}
+
+// The pseudo-signal name for a spec, or "" if it is a real OS signal.  Signal 0
+// is the EXIT pseudo-signal.
+static std::string trap_pseudo(const std::string &spec) {
+  std::string u = spec;
+  if (u.rfind("SIG", 0) == 0 || u.rfind("sig", 0) == 0) u = u.substr(3);
+  for (char &c : u) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+  if (u == "EXIT" || spec == "0") return "EXIT";
+  if (u == "DEBUG" || u == "ERR" || u == "RETURN") return u;
+  return "";
+}
+
+// The sh.traps key for a signal spec (pseudo name, or the canonical short name).
+static std::string trap_key_for_spec(const std::string &spec) {
+  std::string pseudo = trap_pseudo(spec);
+  if (!pseudo.empty()) return pseudo;
+  const char *canon = trapname_from_num(signame_to_num(spec));
+  if (canon) return canon;
+  std::string u = spec;
+  if (u.rfind("SIG", 0) == 0 || u.rfind("sig", 0) == 0) u = u.substr(3);
+  for (char &c : u) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+  return u;
+}
+
 int bi_trap(Shell &sh, const std::vector<std::string> &argv) {
-  if (argv.size() < 2) {
-    for (const auto &kv : sh.traps)
-      std::printf("trap -- '%s' %s\n", kv.second.c_str(), kv.first.c_str());
+  static const char *kUsage = "trap: usage: trap [-Plp] [[action] signal_spec ...]";
+  bool opt_p = false, opt_P = false, opt_l = false;
+  size_t i = 1;
+  for (; i < argv.size(); i++) {
+    const std::string &a = argv[i];
+    if (a == "--") { i++; break; }
+    if (a.size() < 2 || a[0] != '-') break;  // action word or signal (`-' = reset)
+    bool bad = false;
+    for (size_t k = 1; k < a.size(); k++) {
+      if (a[k] == 'p') opt_p = true;
+      else if (a[k] == 'P') opt_P = true;
+      else if (a[k] == 'l') opt_l = true;
+      else {
+        std::fprintf(stderr, "%strap: -%c: invalid option\n", sh.err_prefix().c_str(), a[k]);
+        std::fprintf(stderr, "%s\n", kUsage);
+        bad = true;
+        break;
+      }
+    }
+    if (bad) return 2;
+  }
+
+  if (opt_p && opt_P) {
+    std::fprintf(stderr, "%strap: cannot specify both -p and -P\n", sh.err_prefix().c_str());
+    return 1;
+  }
+
+  // -l: list the signal names (like `kill -l').
+  if (opt_l) {
+    for (int s = 1; s < NSIG; s++)
+      if (const char *nm = trapname_from_num(s)) std::printf("%2d) SIG%s\n", s, nm);
     return 0;
   }
-  std::string cmd = argv[1];
+
+  // -P: print just the action(s) of the named signal(s); at least one required.
+  if (opt_P) {
+    if (i >= argv.size()) {
+      std::fprintf(stderr, "%strap: -P requires at least one signal name\n",
+                   sh.err_prefix().c_str());
+      return 1;
+    }
+    for (; i < argv.size(); i++) {
+      auto it = sh.traps.find(trap_key_for_spec(argv[i]));
+      if (it != sh.traps.end()) std::printf("%s\n", it->second.c_str());
+    }
+    return 0;
+  }
+
+  // Listing: a bare `trap', or `trap -p' with an optional signal filter.
+  if (opt_p || i >= argv.size()) {
+    std::vector<const std::pair<const std::string, std::string> *> items;
+    if (i >= argv.size()) {
+      for (const auto &kv : sh.traps) items.push_back(&kv);
+    } else {
+      for (; i < argv.size(); i++) {
+        auto it = sh.traps.find(trap_key_for_spec(argv[i]));
+        if (it != sh.traps.end()) items.push_back(&*it);
+      }
+    }
+    std::stable_sort(items.begin(), items.end(),
+                     [](const auto *a, const auto *b) {
+                       return trap_order(a->first) < trap_order(b->first);
+                     });
+    for (const auto *kv : items)
+      std::printf("trap -- '%s' %s\n", kv->second.c_str(),
+                  trap_display_name(kv->first).c_str());
+    return 0;
+  }
+
+  // Otherwise set/reset/ignore: the first operand is the action, the rest are
+  // the signals it applies to.
+  std::string cmd = argv[i];
   bool reset = (cmd == "-");
   bool ignore = cmd.empty();
-  for (size_t i = 2; i < argv.size(); i++) {
-    std::string spec = argv[i];
-    std::string upper = spec;
-    if (upper.rfind("SIG", 0) == 0 || upper.rfind("sig", 0) == 0) upper = upper.substr(3);
-    for (char &c : upper) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-
-    // Pseudo-signals run at specific points, not on OS signal delivery.
-    if (upper == "EXIT" || upper == "DEBUG" || upper == "ERR" || upper == "RETURN") {
-      if (reset) sh.traps.erase(upper);
-      else sh.traps[upper] = cmd;
+  for (size_t j = i + 1; j < argv.size(); j++) {
+    const std::string &spec = argv[j];
+    std::string pseudo = trap_pseudo(spec);
+    if (!pseudo.empty()) {  // EXIT/DEBUG/ERR/RETURN run at points, not on delivery
+      if (reset) sh.traps.erase(pseudo);
+      else sh.traps[pseudo] = cmd;
       continue;
     }
-
     int signo = signame_to_num(spec);
-    const char *canon = trapname_from_num(signo);
-    std::string key = canon ? canon : upper;
+    std::string key = trap_key_for_spec(spec);
     if (reset) {
       sh.traps.erase(key);
       sh.set_signal_trap(signo, false);
     } else if (ignore) {
-      sh.traps.erase(key);
+      sh.traps[key] = "";  // an ignored signal lists as `trap -- '' SIG'
       signal(signo, SIG_IGN);
     } else {
       sh.traps[key] = cmd;
@@ -1953,10 +2062,14 @@ int signame_to_num(const std::string &s) {
   if (n.rfind("SIG", 0) == 0) n = n.substr(3);
   for (char &c : n) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
   struct { const char *name; int sig; } tbl[] = {
-      {"HUP", SIGHUP},   {"INT", SIGINT},   {"QUIT", SIGQUIT}, {"KILL", SIGKILL},
-      {"TERM", SIGTERM}, {"STOP", SIGSTOP}, {"CONT", SIGCONT}, {"TSTP", SIGTSTP},
-      {"USR1", SIGUSR1}, {"USR2", SIGUSR2}, {"ALRM", SIGALRM}, {"CHLD", SIGCHLD},
-      {"PIPE", SIGPIPE}, {nullptr, 0}};
+      {"HUP", SIGHUP},   {"INT", SIGINT},   {"QUIT", SIGQUIT}, {"ILL", SIGILL},
+      {"TRAP", SIGTRAP}, {"ABRT", SIGABRT}, {"FPE", SIGFPE},   {"KILL", SIGKILL},
+      {"BUS", SIGBUS},   {"SEGV", SIGSEGV}, {"SYS", SIGSYS},   {"PIPE", SIGPIPE},
+      {"ALRM", SIGALRM}, {"TERM", SIGTERM}, {"URG", SIGURG},   {"STOP", SIGSTOP},
+      {"TSTP", SIGTSTP}, {"CONT", SIGCONT}, {"CHLD", SIGCHLD}, {"TTIN", SIGTTIN},
+      {"TTOU", SIGTTOU}, {"XCPU", SIGXCPU}, {"XFSZ", SIGXFSZ}, {"VTALRM", SIGVTALRM},
+      {"PROF", SIGPROF}, {"WINCH", SIGWINCH}, {"USR1", SIGUSR1}, {"USR2", SIGUSR2},
+      {nullptr, 0}};
   for (int i = 0; tbl[i].name; i++)
     if (n == tbl[i].name) return tbl[i].sig;
   return SIGTERM;

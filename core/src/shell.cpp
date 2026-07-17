@@ -28,6 +28,8 @@ extern "C" char **environ;
 
 namespace gnash::core {
 
+namespace { const char *signum_to_trapname(int sig); }
+
 Shell::Shell() {
   // Import the process environment as exported shell variables.
   for (char **e = environ; e && *e; e++) {
@@ -57,6 +59,16 @@ Shell::Shell() {
                  stat(cwd, &b) == 0 && a.st_dev == b.st_dev && a.st_ino == b.st_ino;
     if (valid) vars["PWD"].exported = true;
     else set_exported("PWD", cwd);
+  }
+
+  // Signals inherited as SIG_IGN keep that disposition, and bash reports them
+  // through `trap' as `trap -- '' SIG'.  Record them so the listing matches.
+  for (int s = 1; s < NSIG; s++) {
+    if (s == SIGKILL || s == SIGSTOP) continue;
+    const char *nm = signum_to_trapname(s);
+    if (!nm) continue;
+    struct sigaction cur;
+    if (sigaction(s, nullptr, &cur) == 0 && cur.sa_handler == SIG_IGN) traps[nm] = "";
   }
 }
 
@@ -203,11 +215,18 @@ void trap_signal_handler(int sig) {
 const char *signum_to_trapname(int sig) {
   switch (sig) {
     case SIGHUP: return "HUP";   case SIGINT: return "INT";
-    case SIGQUIT: return "QUIT"; case SIGTERM: return "TERM";
-    case SIGUSR1: return "USR1"; case SIGUSR2: return "USR2";
-    case SIGALRM: return "ALRM"; case SIGPIPE: return "PIPE";
+    case SIGQUIT: return "QUIT"; case SIGILL: return "ILL";
+    case SIGTRAP: return "TRAP"; case SIGABRT: return "ABRT";
+    case SIGFPE: return "FPE";   case SIGBUS: return "BUS";
+    case SIGSEGV: return "SEGV"; case SIGSYS: return "SYS";
+    case SIGPIPE: return "PIPE"; case SIGALRM: return "ALRM";
+    case SIGTERM: return "TERM"; case SIGURG: return "URG";
     case SIGTSTP: return "TSTP"; case SIGCONT: return "CONT";
-    case SIGCHLD: return "CHLD";
+    case SIGCHLD: return "CHLD"; case SIGTTIN: return "TTIN";
+    case SIGTTOU: return "TTOU"; case SIGXCPU: return "XCPU";
+    case SIGXFSZ: return "XFSZ"; case SIGVTALRM: return "VTALRM";
+    case SIGPROF: return "PROF"; case SIGWINCH: return "WINCH";
+    case SIGUSR1: return "USR1"; case SIGUSR2: return "USR2";
     default: return nullptr;
   }
 }
