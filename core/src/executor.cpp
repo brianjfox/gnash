@@ -715,8 +715,22 @@ int Executor::run_simple(const SimpleCommand *c) {
         // scalar field.
         bool is_arr = vit != sh_.vars.end() &&
                       (vit->second.kind == VarKind::Indexed || vit->second.kind == VarKind::Assoc);
+        // A preceding assignment in the same command is visible to this RHS
+        // (`A=1 B=$A'): apply the already-collected assignments, expand, then
+        // roll them back so command arguments still see the original values.
+        std::vector<std::pair<std::string, std::optional<Variable>>> prior;
+        for (const auto &pa : assigns) {
+          auto pv = sh_.vars.find(pa.first);
+          prior.push_back({pa.first, pv == sh_.vars.end() ? std::nullopt
+                                                          : std::optional<Variable>(pv->second)});
+          sh_.set(pa.first, pa.second);
+        }
         std::string v = ex.expand_assignment(a.value);
         std::string cur = is_arr ? sh_.array_get(a.name, "0") : sh_.get(a.name);
+        for (auto it = prior.rbegin(); it != prior.rend(); ++it) {
+          if (it->second) sh_.vars[it->first] = *it->second;
+          else sh_.vars.erase(it->first);
+        }
         if (integer) {
           bool ok = true;
           long long rv = eval_arith(sh_, v, &ok);
