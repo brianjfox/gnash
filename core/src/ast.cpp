@@ -469,7 +469,7 @@ struct MPrinter {
       out += " () ";
       out += '\n';
       ind(I);
-      inline_cmd(fd->body.get(), I);
+      print_func_body(fd->body.get(), I);
       return;
     }
     // [[ ]] / (( )) / coproc / anything else: the single-line rendering.
@@ -488,6 +488,21 @@ struct MPrinter {
     std::string one;
     if (c) c->print(one);
     out += one;
+  }
+
+  // A function body always displays as a `{ ... }' group.  A brace-group body
+  // supplies its own braces; any other compound command (subshell, if, for, ...)
+  // is wrapped in an explicit group, matching bash's named_function_string.
+  void print_func_body(const Command *body, int I) {
+    if (dynamic_cast<const Group *>(body)) {
+      inline_cmd(body, I);
+      return;
+    }
+    out += "{ ";
+    nl(I + 4);
+    inline_cmd(body, I + 4);
+    nl(I);
+    out += '}';
   }
 };
 
@@ -541,7 +556,7 @@ std::string named_function_string(const std::string &name, const Command *body) 
   MPrinter p;
   p.out = name + " () ";
   p.out += '\n';
-  p.inline_cmd(body, 0);
+  p.print_func_body(body, 0);
   return p.out;
 }
 
