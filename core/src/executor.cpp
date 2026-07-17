@@ -466,11 +466,13 @@ int Executor::run(const Command *c) {
   // A compound command (subshell, group, if, loop, ...) that returns non-zero
   // triggers errexit at its own level, e.g. `set -e; (exit 17)' exits the shell.
   // Conditions and negations are already exempted via errexit_suppress / the
-  // CMD_INVERT_RETURN guard in run().
-  if (sh_.opt_errexit && st != 0 && sh_.errexit_suppress == 0 && !unwinding() &&
+  // CMD_INVERT_RETURN guard in run().  The ERR trap fires for a subshell (a
+  // process boundary) but not for a transparent compound wrapper -- a group,
+  // if/while/for, or function body -- whose own commands already fired it.
+  if (st != 0 && sh_.errexit_suppress == 0 && !unwinding() &&
       !(c->flags & CMD_INVERT_RETURN)) {
-    sh_.exiting = true;
-    sh_.exit_status = st;
+    if (dynamic_cast<const Subshell *>(c)) sh_.run_err_trap(st);
+    if (sh_.opt_errexit) { sh_.exiting = true; sh_.exit_status = st; }
   }
   return st;
 }
@@ -587,6 +589,9 @@ int Executor::run_pipeline(const Connection *c) {
       if (prev_read != -1) { dup2(prev_read, 0); close(prev_read); }
       if (i + 1 < n) { close(pipefd[0]); dup2(pipefd[1], 1); close(pipefd[1]); }
       sh_.job_control = false;  // pipeline stage: no nested tty control
+      // A pipeline stage is a subshell: without errtrace it does not inherit the
+      // ERR trap (the whole pipeline fires it once in the parent instead).
+      if (!sh_.opt_functrace) sh_.traps.erase("ERR");
       // A simple command as a pipeline stage does not raise $BASH_SUBSHELL; a
       // compound one does.  An explicit ( ) subshell counts itself in
       // run_subshell, so don't double-count it here.
@@ -653,10 +658,10 @@ int Executor::run_pipeline(const Connection *c) {
   // A pipeline that returns non-zero triggers errexit (e.g. `set -e; true|false').
   // Suppressed contexts (conditions, `&&'/`||' non-final operands, `!') are
   // handled by errexit_suppress and the CMD_INVERT_RETURN guard in run().
-  if (sh_.opt_errexit && st != 0 && sh_.errexit_suppress == 0 && !unwinding() &&
+  if (st != 0 && sh_.errexit_suppress == 0 && !unwinding() &&
       !(c->flags & CMD_INVERT_RETURN)) {
-    sh_.exiting = true;
-    sh_.exit_status = st;
+    sh_.run_err_trap(st);
+    if (sh_.opt_errexit) { sh_.exiting = true; sh_.exit_status = st; }
   }
   return st;
 }
@@ -829,10 +834,10 @@ int Executor::run_simple(const SimpleCommand *c) {
     sh_.last_status = st;
     // A failing command substitution in the RHS (`x=$(false)') triggers errexit
     // just like any other command's non-zero status.
-    if (sh_.opt_errexit && st != 0 && sh_.errexit_suppress == 0 && !unwinding() &&
+    if (st != 0 && sh_.errexit_suppress == 0 && !unwinding() &&
         !(c->flags & CMD_INVERT_RETURN)) {
-      sh_.exiting = true;
-      sh_.exit_status = st;
+      sh_.run_err_trap(st);
+      if (sh_.opt_errexit) { sh_.exiting = true; sh_.exit_status = st; }
     }
     return st;
   }
@@ -1062,10 +1067,10 @@ int Executor::run_simple(const SimpleCommand *c) {
     restore_fds(saved);
   if (c->flags & CMD_INVERT_RETURN) status = status ? 0 : 1;
   sh_.last_status = status;
-  if (sh_.opt_errexit && status != 0 && sh_.errexit_suppress == 0 && !unwinding() &&
+  if (status != 0 && sh_.errexit_suppress == 0 && !unwinding() &&
       !(c->flags & CMD_INVERT_RETURN)) {
-    sh_.exiting = true;
-    sh_.exit_status = status;
+    sh_.run_err_trap(status);
+    if (sh_.opt_errexit) { sh_.exiting = true; sh_.exit_status = status; }
   }
   return status;
 }

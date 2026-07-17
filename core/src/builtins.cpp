@@ -1058,6 +1058,7 @@ int bi_set(Shell &sh, const std::vector<std::string> &argv) {
           case 'v': sh.opt_verbose = on; break;
           case 'n': if (!sh.interactive) sh.opt_noexec = on; break;  // ignored when interactive
           case 'T': sh.opt_functrace = on; break;  // DEBUG/RETURN trap inheritance
+          case 'E': sh.opt_functrace = on; break;  // errtrace: ERR trap inheritance
           case 'H': sh.opt_histexpand = on; break;  // `!' history expansion
           case 'r':  // restricted: can be turned on, never off
             if (on) sh.opt_restricted = true;
