@@ -1624,6 +1624,9 @@ std::vector<std::string> Expander::glob_field(const std::string &field, const st
   // (except the `.'/`..' entries, which are always skipped).
   auto dg = sh_.shopt_opts.find("dotglob");
   if (dg != sh_.shopt_opts.end() && dg->second) gflags |= GX_MATCHDOT;
+  // `shopt -u globskipdots' lets `.' and `..' be matched.
+  auto gsd = sh_.shopt_opts.find("globskipdots");
+  if (gsd != sh_.shopt_opts.end() && !gsd->second) gflags |= GX_NODOTSKIP;
   // A non-null $GLOBIGNORE also enables dot matching, then filters out any
   // result matching one of its colon-separated patterns.
   std::string globignore = sh_.get("GLOBIGNORE");
