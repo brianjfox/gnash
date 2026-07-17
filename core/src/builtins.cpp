@@ -1748,19 +1748,52 @@ int signame_to_num(const std::string &s);
 const char *trapname_from_num(int sig) {
   switch (sig) {
     case SIGHUP: return "HUP";   case SIGINT: return "INT";
-    case SIGQUIT: return "QUIT"; case SIGTERM: return "TERM";
-    case SIGUSR1: return "USR1"; case SIGUSR2: return "USR2";
-    case SIGALRM: return "ALRM"; case SIGPIPE: return "PIPE";
+    case SIGQUIT: return "QUIT"; case SIGILL: return "ILL";
+    case SIGTRAP: return "TRAP"; case SIGABRT: return "ABRT";
+    case SIGFPE: return "FPE";   case SIGKILL: return "KILL";
+    case SIGBUS: return "BUS";   case SIGSEGV: return "SEGV";
+    case SIGSYS: return "SYS";   case SIGPIPE: return "PIPE";
+    case SIGALRM: return "ALRM"; case SIGTERM: return "TERM";
+    case SIGURG: return "URG";   case SIGSTOP: return "STOP";
     case SIGTSTP: return "TSTP"; case SIGCONT: return "CONT";
-    case SIGCHLD: return "CHLD";
+    case SIGCHLD: return "CHLD"; case SIGTTIN: return "TTIN";
+    case SIGTTOU: return "TTOU"; case SIGXCPU: return "XCPU";
+    case SIGXFSZ: return "XFSZ"; case SIGVTALRM: return "VTALRM";
+    case SIGPROF: return "PROF"; case SIGWINCH: return "WINCH";
+    case SIGUSR1: return "USR1"; case SIGUSR2: return "USR2";
     default: return nullptr;
   }
 }
 
+// bash's trap -p sort order: EXIT (signal 0) first, then real signals by
+// ascending signal number, then the pseudo-signals DEBUG, ERR, RETURN.
+static int trap_order(const std::string &key) {
+  if (key == "EXIT" || key == "0") return -1;
+  if (key == "DEBUG") return 1000;
+  if (key == "ERR") return 1001;
+  if (key == "RETURN") return 1002;
+  return signame_to_num(key);
+}
+
+// The name bash prints for a trap key: EXIT/DEBUG/ERR/RETURN bare, a real
+// signal with the `SIG' prefix (`HUP' -> `SIGHUP').
+static std::string trap_display_name(const std::string &key) {
+  if (key == "0") return "EXIT";
+  if (key == "EXIT" || key == "DEBUG" || key == "ERR" || key == "RETURN") return key;
+  return "SIG" + key;
+}
+
 int bi_trap(Shell &sh, const std::vector<std::string> &argv) {
   if (argv.size() < 2) {
-    for (const auto &kv : sh.traps)
-      std::printf("trap -- '%s' %s\n", kv.second.c_str(), kv.first.c_str());
+    std::vector<const std::pair<const std::string, std::string> *> items;
+    for (const auto &kv : sh.traps) items.push_back(&kv);
+    std::stable_sort(items.begin(), items.end(),
+                     [](const auto *a, const auto *b) {
+                       return trap_order(a->first) < trap_order(b->first);
+                     });
+    for (const auto *kv : items)
+      std::printf("trap -- '%s' %s\n", kv->second.c_str(),
+                  trap_display_name(kv->first).c_str());
     return 0;
   }
   std::string cmd = argv[1];
@@ -1953,10 +1986,14 @@ int signame_to_num(const std::string &s) {
   if (n.rfind("SIG", 0) == 0) n = n.substr(3);
   for (char &c : n) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
   struct { const char *name; int sig; } tbl[] = {
-      {"HUP", SIGHUP},   {"INT", SIGINT},   {"QUIT", SIGQUIT}, {"KILL", SIGKILL},
-      {"TERM", SIGTERM}, {"STOP", SIGSTOP}, {"CONT", SIGCONT}, {"TSTP", SIGTSTP},
-      {"USR1", SIGUSR1}, {"USR2", SIGUSR2}, {"ALRM", SIGALRM}, {"CHLD", SIGCHLD},
-      {"PIPE", SIGPIPE}, {nullptr, 0}};
+      {"HUP", SIGHUP},   {"INT", SIGINT},   {"QUIT", SIGQUIT}, {"ILL", SIGILL},
+      {"TRAP", SIGTRAP}, {"ABRT", SIGABRT}, {"FPE", SIGFPE},   {"KILL", SIGKILL},
+      {"BUS", SIGBUS},   {"SEGV", SIGSEGV}, {"SYS", SIGSYS},   {"PIPE", SIGPIPE},
+      {"ALRM", SIGALRM}, {"TERM", SIGTERM}, {"URG", SIGURG},   {"STOP", SIGSTOP},
+      {"TSTP", SIGTSTP}, {"CONT", SIGCONT}, {"CHLD", SIGCHLD}, {"TTIN", SIGTTIN},
+      {"TTOU", SIGTTOU}, {"XCPU", SIGXCPU}, {"XFSZ", SIGXFSZ}, {"VTALRM", SIGVTALRM},
+      {"PROF", SIGPROF}, {"WINCH", SIGWINCH}, {"USR1", SIGUSR1}, {"USR2", SIGUSR2},
+      {nullptr, 0}};
   for (int i = 0; tbl[i].name; i++)
     if (n == tbl[i].name) return tbl[i].sig;
   return SIGTERM;
