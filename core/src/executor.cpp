@@ -927,7 +927,11 @@ int Executor::run_simple(const SimpleCommand *c) {
     int saved_lineno_base = sh_.lineno_base;
     auto lbit = sh_.func_lineno_base.find(argv[0]);
     if (lbit != sh_.func_lineno_base.end()) sh_.lineno_base = lbit->second;
-    status = run(fit->second);
+    // Under functrace, bash fires the DEBUG trap once for the function body as a
+    // whole on entry, before the per-command traps inside it.
+    if (sh_.opt_functrace && sh_.traps.count("DEBUG") && !sh_.in_debug_trap)
+      sh_.run_debug_trap(to_string(fit->second));
+    status = unwinding() ? sh_.last_status : run(fit->second);
     sh_.lineno_base = saved_lineno_base;
     if (!sh_.persona_restore.empty()) {
       if (sh_.persona_restore.back()) sh_.set_personality(*sh_.persona_restore.back());
