@@ -1423,6 +1423,28 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     return st;
   }
 
+  // Attribute flags with no name arguments list every variable that carries all
+  // of the requested attributes, in `declare -p' form: `typeset -n' lists all
+  // namerefs, `declare -i' all integers, and so on.
+  if (i >= argv.size() &&
+      (nameref || readonly || integer || exported || mk_array || mk_assoc ||
+       lcase || ucase || capcase)) {
+    for (const auto &kv : sh.vars) {
+      const Variable &v = kv.second;
+      if (nameref && !v.nameref) continue;
+      if (readonly && !v.readonly) continue;
+      if (integer && !v.integer) continue;
+      if (exported && !v.exported) continue;
+      if (mk_array && v.kind != VarKind::Indexed) continue;
+      if (mk_assoc && v.kind != VarKind::Assoc) continue;
+      if (lcase && !v.lcase) continue;
+      if (ucase && !v.ucase) continue;
+      if (capcase && !v.capcase) continue;
+      declare_print_var(kv.first, v);
+    }
+    return 0;
+  }
+
   for (; i < argv.size(); i++) {
     const std::string &a = argv[i];
     size_t nend = a.find_first_of("[=");
