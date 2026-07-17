@@ -977,6 +977,7 @@ void set_print_var(const std::string &name, const Variable &v) {
 // Apply one `set -o NAME' / `set +o NAME'; false if NAME is unknown.
 bool set_o_option(Shell &sh, const std::string &o, bool on) {
   if (o == "errexit") sh.opt_errexit = on;
+  else if (o == "keyword") sh.opt_keyword = on;
   else if (o == "xtrace") sh.opt_xtrace = on;
   else if (o == "nounset") sh.opt_nounset = on;
   else if (o == "noglob") sh.opt_noglob = on;
@@ -1008,7 +1009,7 @@ std::vector<std::pair<std::string, bool>> set_option_states(Shell &sh) {
       {"errtrace", sh.opt_functrace}, {"functrace", sh.opt_functrace},
       {"hashall", true},      {"histexpand", sh.opt_histexpand},
       {"history", sh.opt_history}, {"ignoreeof", false},
-      {"interactive-comments", true}, {"keyword", false},
+      {"interactive-comments", true}, {"keyword", sh.opt_keyword},
       {"monitor", i},         {"noclobber", false},
       {"noexec", sh.opt_noexec}, {"noglob", sh.opt_noglob},
       {"nolog", false},       {"notify", false},
@@ -1042,6 +1043,7 @@ int bi_set(Shell &sh, const std::vector<std::string> &argv) {
       for (size_t k = 1; k < a.size(); k++) {
         switch (a[k]) {
           case 'e': sh.opt_errexit = on; break;
+          case 'k': sh.opt_keyword = on; break;  // keyword: assignments anywhere
           case 'x': sh.opt_xtrace = on; break;
           case 'u': sh.opt_nounset = on; break;
           case 'f': sh.opt_noglob = on; break;

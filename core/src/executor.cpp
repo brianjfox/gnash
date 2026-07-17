@@ -696,7 +696,13 @@ int Executor::run_simple(const SimpleCommand *c) {
   // command takes the status of the last one (bash), or 0 if there were none.
   sh_.cmdsub_ran = false;
   for (const Word &w : c->words) {
-    if (prefix && (w.flags & W_ASSIGNMENT)) {
+    // Under `set -k' (keyword mode) an assignment-form word ANYWHERE in the
+    // command is an assignment, not just those preceding the command name.
+    // Checked at run time (the flag can be toggled mid-script) via the word
+    // text, since the parser only marks leading words as W_ASSIGNMENT.
+    bool assign_here = (prefix && (w.flags & W_ASSIGNMENT)) ||
+                       (sh_.opt_keyword && is_assignment_word_text(w.text));
+    if (assign_here) {
       Assign a;
       parse_assign(w.text, a);
       if (a.sub || a.is_array) {
