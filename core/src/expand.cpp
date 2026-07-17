@@ -1836,6 +1836,9 @@ std::vector<std::string> brace_expand(const std::string &text) {
     if (c == '\\') { i++; continue; }
     if (c == '\'' ) { while (++i < text.size() && text[i] != '\'') {} continue; }
     if (c == '"') { while (++i < text.size() && text[i] != '"') { if (text[i]=='\\') i++; } continue; }
+    // A `...` command substitution is opaque to outer brace expansion: its
+    // `{'/`,' belong to the nested command, not this word.
+    if (c == '`') { while (++i < text.size() && text[i] != '`') { if (text[i]=='\\') i++; } continue; }
     // Skip $-constructs so their `{'/`,' aren't treated as brace expansion.
     if (c == '$' && i + 1 < text.size() && (text[i + 1] == '{' || text[i + 1] == '(')) {
       char oc = text[i + 1], cc = oc == '{' ? '}' : ')';
@@ -1933,6 +1936,26 @@ std::vector<std::string> brace_expand(const std::string &text) {
                 out.push_back(pre + tail);
               }
             return out;
+          }
+          // The outer {...} is not itself a brace expression (no top-level comma
+          // or valid range), so its braces are literal -- but an inner brace may
+          // still expand: `a-{b{d,e}}-c' -> a-{bd}-c a-{be}-c.  Recurse on the
+          // interior; if it expands, keep the literal outer braces around each
+          // result and combine with the (recursively expanded) postscript.
+          {
+            std::vector<std::string> inner = brace_expand(inside);
+            bool changed = inner.size() > 1 || (inner.size() == 1 && inner[0] != inside);
+            if (changed) {
+              std::string pre = text.substr(0, open);
+              std::string post = text.substr(i + 1);
+              std::vector<std::string> out;
+              for (const std::string &ie : inner)
+                for (const std::string &tail : brace_expand(post)) {
+                  if (out.size() >= kMaxBraceItems) return {text};
+                  out.push_back(pre + "{" + ie + "}" + tail);
+                }
+              return out;
+            }
           }
           open = std::string::npos;
         }
