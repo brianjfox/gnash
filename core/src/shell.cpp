@@ -86,9 +86,12 @@ const std::vector<std::string> &Shell::special_var_names() {
   static const std::vector<std::string> names = {
       "RANDOM", "SECONDS", "LINENO", "BASHPID", "BASH_SUBSHELL",
       "EPOCHSECONDS", "EPOCHREALTIME", "BASH_MONOSECONDS", "HISTCMD",
-      "BASHOPTS", "BASH_ALIASES", "BASH_CMDS", "BASH_ARGC", "BASH_ARGV"};
+      "BASHOPTS", "SHELLOPTS", "BASH_ALIASES", "BASH_CMDS", "BASH_ARGC", "BASH_ARGV"};
   return names;
 }
+
+// Defined in builtins.cpp: the state of every `set -o' option, in name order.
+std::vector<std::pair<std::string, bool>> set_option_states(Shell &sh);
 
 // Dynamic variables computed on each reference.  Returns false for names that
 // are not dynamic (the caller then looks them up as ordinary variables).
@@ -126,6 +129,13 @@ bool Shell::dynamic_var(const std::string &name, std::string &out) {
   if (name == "BASHOPTS") {  // colon-separated list of the enabled shopt options
     std::string r;
     for (const auto &kv : shopt_opts) if (kv.second) { if (!r.empty()) r += ':'; r += kv.first; }
+    out = r;
+    return true;
+  }
+  if (name == "SHELLOPTS") {  // colon-separated list of the enabled `set -o' options
+    std::string r;
+    for (const auto &o : set_option_states(*this))
+      if (o.second) { if (!r.empty()) r += ':'; r += o.first; }
     out = r;
     return true;
   }
@@ -456,6 +466,10 @@ void Shell::array_set(const std::string &n_in, const std::string &sub, const std
     assoc_put(v, sub, val);
     return;
   }
+  // A subscripted assignment to an existing scalar promotes it to an indexed
+  // array, keeping the old value as element 0 (`a=abcde; a[2]=x' yields
+  // ([0]=abcde [2]=x)), matching bash.
+  if (v.kind == VarKind::Scalar && !v.value.empty() && v.idx.empty()) v.idx[0] = v.value;
   v.kind = VarKind::Indexed;
   bool ok = true;
   long long k = eval_arith(*this, sub, &ok);
@@ -502,7 +516,17 @@ int Shell::array_count(const std::string &n_in) const {
 void Shell::make_array(const std::string &n_in, bool assoc) {
   std::string n = deref(n_in);
   Variable &v = vars[n];
-  if (v.kind == VarKind::Scalar) v.kind = assoc ? VarKind::Assoc : VarKind::Indexed;
+  if (v.kind == VarKind::Scalar) {
+    // Converting an existing scalar to an indexed array keeps its value as
+    // element 0 (`a=abcde; declare -a a' leaves ${a[0]} == abcde), matching
+    // bash.  An associative array has no natural key for the old value, so bash
+    // discards it there.
+    if (!assoc && !v.value.empty()) {
+      v.idx[0] = v.value;
+      v.value.clear();
+    }
+    v.kind = assoc ? VarKind::Assoc : VarKind::Indexed;
+  }
 }
 
 void Shell::array_assign(
@@ -1283,6 +1307,11 @@ std::string Shell::run_and_capture(const std::string &script, int *status) {
     job_control = false;  // command substitution: no nested tty control
     subshell_level++;  // $BASH_SUBSHELL
     subshell_leaf = true;  // a lone external here can exec in place (no 2nd fork)
+    // Command substitution unsets errexit in the subshell unless the caller has
+    // enabled `shopt -s inherit_errexit'; so `$(false; echo ok)' still runs the
+    // `echo' under `set -e'.  POSIX mode inherits errexit into the subshell, so
+    // there `z=$(false; echo foo)' exits silently before the `echo'.
+    if (opt_errexit && !opt_posix && !shopt_opts["inherit_errexit"]) opt_errexit = false;
     int st = run_string(script);
     std::fflush(stdout);
     _exit(st & 0xff);

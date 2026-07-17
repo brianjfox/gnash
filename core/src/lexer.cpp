@@ -180,6 +180,35 @@ struct Lexer {
     } while (pos < n && depth > 0);
     if (depth > 0) { unterminated = true; if (!unterm_close) unterm_close = '}'; }
   }
+  void scan_square(std::string &w) {  // pos at '[' of $[...] arithmetic
+    int depth = 0;
+    do {
+      char c = in[pos];
+      if (c == '[') {
+        depth++;
+        w += c;
+        pos++;
+      } else if (c == ']') {
+        depth--;
+        w += c;
+        pos++;
+      } else if (c == '\'') {
+        scan_single(w);
+      } else if (c == '"') {
+        scan_double(w);
+      } else if (c == '`') {
+        scan_backtick(w);
+      } else if (c == '\\') {
+        w += c;
+        pos++;
+        if (pos < n) w += in[pos++];
+      } else {
+        w += c;
+        pos++;
+      }
+    } while (pos < n && depth > 0);
+    if (depth > 0) { unterminated = true; if (!unterm_close) unterm_close = ']'; }
+  }
   void scan_double(std::string &w) {
     w += in[pos++];  // "
     while (pos < n && in[pos] != '"') {
@@ -300,6 +329,12 @@ struct Lexer {
           w += '$';
           pos++;
           scan_brace(w);
+          continue;
+        }
+        if (pos + 1 < n && in[pos + 1] == '[') {
+          w += '$';
+          pos++;
+          scan_square(w);  // $[...] deprecated arithmetic: span internal spaces
           continue;
         }
         w += c;
