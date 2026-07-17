@@ -663,6 +663,35 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
     if (end != std::string::npos) {
       std::string body = t.substr(i + 2, end - (i + 2));
 
+      // ${@} / ${*}: a bare positional list, identical to $@ / $*.  Handle it
+      // here so `"${@}"' keeps its per-parameter field structure rather than
+      // being flattened to a single word by the generic scalar path below.
+      if (body == "@" || body == "*") {
+        const auto &pos = sh_.positional;
+        if (body[0] == '@' && dq) {
+          absorb_qnull();
+          for (size_t k = 0; k < pos.size(); k++) {
+            if (k) { out += FIELD_SEP; mask += MMARK; }
+            out += QNULL; mask += MMARK;
+            for (char c : pos[k]) { out += c; mask += '1'; }
+          }
+        } else if (body[0] == '*' && dq) {
+          std::string sep = sh_.ifs();
+          std::string joiner = sep.empty() ? std::string() : std::string(1, sep[0]);
+          for (size_t k = 0; k < pos.size(); k++) {
+            if (k) for (char c : joiner) { out += c; mask += '1'; }
+            for (char c : pos[k]) { out += c; mask += '1'; }
+          }
+        } else {
+          for (size_t k = 0; k < pos.size(); k++) {
+            if (k) { out += FIELD_SEP; mask += MMARK; }
+            for (char c : pos[k]) { out += c; mask += '0'; }
+          }
+        }
+        i = end + 1;
+        return;
+      }
+
       // ${name-word} / ${name+word} (and the `:' forms) with the operator
       // firing: expand WORD by re-processing it here, so an embedded "$@"
       // keeps its field structure (a flat string would lose empty fields).
