@@ -1492,6 +1492,27 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     bool scalar_pre = eq != std::string::npos && !arraylit0 && !subscript0 && !nameref;
     std::string pre_val;
     if (scalar_pre) { Expander ex(sh); pre_val = ex.expand_assignment(a.substr(eq + 1)); }
+    // `declare -g name' assigns to the GLOBAL binding even when a local of the
+    // same name shadows it.  Temporarily swap the saved global binding into
+    // `vars', run the normal assignment against it, and restore the local at
+    // the end of the loop body.  (The RHS was already expanded above against the
+    // still-visible local, matching bash.)
+    std::optional<Variable> *gslot = nullptr;
+    Variable held_local;
+    bool had_local = false;
+    if (global) {
+      for (auto &scope : sh.local_stack) {
+        for (auto &e : scope)
+          if (e.first == name) { gslot = &e.second; break; }
+        if (gslot) break;
+      }
+      if (gslot) {
+        auto vit = sh.vars.find(name);
+        if ((had_local = (vit != sh.vars.end()))) held_local = vit->second;
+        if (gslot->has_value()) sh.vars[name] = gslot->value();
+        else sh.vars.erase(name);
+      }
+    }
     if (local && !global) sh.make_local(name);
     // An array cannot be switched between indexed and associative in place; bash
     // rejects the redeclaration and leaves the variable unchanged.
@@ -1580,6 +1601,13 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     if (rm_ucase) v.ucase = false;
     if (rm_lcase) v.lcase = false;
     if (rm_capcase) v.capcase = false;
+    // Restore the local shadow after a `declare -g' assignment to the global.
+    if (gslot) {
+      auto vit = sh.vars.find(name);
+      *gslot = (vit != sh.vars.end()) ? std::optional<Variable>(vit->second) : std::nullopt;
+      if (had_local) sh.vars[name] = held_local;
+      else sh.vars.erase(name);
+    }
   }
   return ret;
 }
