@@ -1068,6 +1068,7 @@ int Executor::run_for(const ForCommand *c) {
     Expander aex(sh_);
     auto aeval = [&](const std::string &e) {
       if (e.empty()) return 0LL;
+      if (sh_.opt_xtrace) std::fprintf(stderr, "+ (( %s ))\n", e.c_str());
       return static_cast<long long>(eval_arith(sh_, aex.expand_no_split(e), &ok));
     };
     aeval(c->a_init);
@@ -1088,6 +1089,11 @@ int Executor::run_for(const ForCommand *c) {
     items = ex.expand_args(c->words);
   else
     items = sh_.positional;
+  if (sh_.opt_xtrace) {
+    std::string line = "+ for " + c->var + " in";
+    for (const std::string &it : items) line += " " + it;
+    std::fprintf(stderr, "%s\n", line.c_str());
+  }
   for (const std::string &item : items) {
     sh_.set(c->var, item);
     st = run(c->body.get());
@@ -1157,6 +1163,7 @@ int Executor::run_cond(const CondCommand *c) {
 }
 
 int Executor::run_arith(const ArithCommand *c) {
+  if (sh_.opt_xtrace) std::fprintf(stderr, "+ (( %s ))\n", c->expression.c_str());
   bool ok = true;
   Expander ex(sh_);  // expand ${#arr[@]} etc. before arithmetic evaluation
   long long v = eval_arith(sh_, ex.expand_no_split(c->expression), &ok);
