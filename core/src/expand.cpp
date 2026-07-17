@@ -1856,6 +1856,9 @@ std::vector<std::string> brace_expand(const std::string &text) {
           bool comma = false;
           for (size_t k = 0; k < inside.size(); k++) {
             char ic = inside[k];
+            // A backslash escapes the next character (`{abc\,def}' is a single
+            // item, not two): keep both so later quote removal strips the `\'.
+            if (ic == '\\' && k + 1 < inside.size()) { cur += ic; cur += inside[++k]; continue; }
             if (ic == '{') d++;
             else if (ic == '}') d--;
             if (ic == ',' && d == 0) { parts.push_back(cur); cur.clear(); comma = true; }
