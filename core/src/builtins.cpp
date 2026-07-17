@@ -978,6 +978,7 @@ void set_print_var(const std::string &name, const Variable &v) {
 bool set_o_option(Shell &sh, const std::string &o, bool on) {
   if (o == "errexit") sh.opt_errexit = on;
   else if (o == "keyword") sh.opt_keyword = on;
+  else if (o == "physical") sh.opt_physical = on;
   else if (o == "xtrace") sh.opt_xtrace = on;
   else if (o == "nounset") sh.opt_nounset = on;
   else if (o == "noglob") sh.opt_noglob = on;
@@ -1000,12 +1001,16 @@ bool set_o_option(Shell &sh, const std::string &o, bool on) {
   return true;
 }
 
-// The `set -o'/`set +o' option table with each option's current state.
+}  // namespace (close anon: set_option_states needs external linkage for SHELLOPTS)
+
+// The `set -o'/`set +o' option table with each option's current state.  Also
+// used by Shell::dynamic_var to build $SHELLOPTS, so it lives at namespace
+// scope rather than in the anonymous namespace.
 std::vector<std::pair<std::string, bool>> set_option_states(Shell &sh) {
   bool i = sh.interactive;
   return {
       {"allexport", false},   {"braceexpand", true},
-      {"emacs", rl_editing_mode == 1}, {"errexit", sh.opt_errexit},
+      {"emacs", i && rl_editing_mode == 1}, {"errexit", sh.opt_errexit},
       {"errtrace", sh.opt_functrace}, {"functrace", sh.opt_functrace},
       {"hashall", true},      {"histexpand", sh.opt_histexpand},
       {"history", sh.opt_history}, {"ignoreeof", false},
@@ -1014,11 +1019,13 @@ std::vector<std::pair<std::string, bool>> set_option_states(Shell &sh) {
       {"noexec", sh.opt_noexec}, {"noglob", sh.opt_noglob},
       {"nolog", false},       {"notify", false},
       {"nounset", sh.opt_nounset}, {"onecmd", false},
-      {"physical", false},    {"pipefail", sh.opt_pipefail},
+      {"physical", sh.opt_physical}, {"pipefail", sh.opt_pipefail},
       {"posix", sh.opt_posix}, {"privileged", false},
-      {"verbose", sh.opt_verbose}, {"vi", rl_editing_mode == 0},
+      {"verbose", sh.opt_verbose}, {"vi", i && rl_editing_mode == 0},
       {"xtrace", sh.opt_xtrace}};
 }
+
+namespace {  // reopen the anonymous namespace for the remaining file-local helpers
 
 int bi_set(Shell &sh, const std::vector<std::string> &argv) {
   // No arguments: list all shell variables (name=value), names sorted.
@@ -1044,6 +1051,7 @@ int bi_set(Shell &sh, const std::vector<std::string> &argv) {
         switch (a[k]) {
           case 'e': sh.opt_errexit = on; break;
           case 'k': sh.opt_keyword = on; break;  // keyword: assignments anywhere
+          case 'P': sh.opt_physical = on; break;  // physical: resolve symlinks
           case 'x': sh.opt_xtrace = on; break;
           case 'u': sh.opt_nounset = on; break;
           case 'f': sh.opt_noglob = on; break;

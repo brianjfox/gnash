@@ -86,9 +86,12 @@ const std::vector<std::string> &Shell::special_var_names() {
   static const std::vector<std::string> names = {
       "RANDOM", "SECONDS", "LINENO", "BASHPID", "BASH_SUBSHELL",
       "EPOCHSECONDS", "EPOCHREALTIME", "BASH_MONOSECONDS", "HISTCMD",
-      "BASHOPTS", "BASH_ALIASES", "BASH_CMDS", "BASH_ARGC", "BASH_ARGV"};
+      "BASHOPTS", "SHELLOPTS", "BASH_ALIASES", "BASH_CMDS", "BASH_ARGC", "BASH_ARGV"};
   return names;
 }
+
+// Defined in builtins.cpp: the state of every `set -o' option, in name order.
+std::vector<std::pair<std::string, bool>> set_option_states(Shell &sh);
 
 // Dynamic variables computed on each reference.  Returns false for names that
 // are not dynamic (the caller then looks them up as ordinary variables).
@@ -126,6 +129,13 @@ bool Shell::dynamic_var(const std::string &name, std::string &out) {
   if (name == "BASHOPTS") {  // colon-separated list of the enabled shopt options
     std::string r;
     for (const auto &kv : shopt_opts) if (kv.second) { if (!r.empty()) r += ':'; r += kv.first; }
+    out = r;
+    return true;
+  }
+  if (name == "SHELLOPTS") {  // colon-separated list of the enabled `set -o' options
+    std::string r;
+    for (const auto &o : set_option_states(*this))
+      if (o.second) { if (!r.empty()) r += ':'; r += o.first; }
     out = r;
     return true;
   }
