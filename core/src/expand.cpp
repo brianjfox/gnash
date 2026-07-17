@@ -1979,6 +1979,23 @@ std::vector<std::string> brace_expand(const std::string &text) {
       }
     }
   }
+  // An unmatched `{' (never balanced by a `}') is literal, but a balanced brace
+  // nested after it may still expand: `a-{bdef-{g,i}-c' -> a-{bdef-g-c
+  // a-{bdef-i-c'.  Re-expand the text following the stray `{' and keep it as a
+  // literal prefix.
+  if (open != std::string::npos && open + 1 < text.size()) {
+    std::string rest = text.substr(open + 1);
+    std::vector<std::string> re = brace_expand(rest);
+    if (re.size() > 1 || (re.size() == 1 && re[0] != rest)) {
+      std::string pre = text.substr(0, open + 1);
+      std::vector<std::string> out;
+      for (const std::string &r : re) {
+        if (out.size() >= kMaxBraceItems) return {text};
+        out.push_back(pre + r);
+      }
+      return out;
+    }
+  }
   return {text};
 }
 
