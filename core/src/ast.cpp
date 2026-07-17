@@ -465,6 +465,10 @@ struct MPrinter {
       return;
     }
     if (const auto *fd = dynamic_cast<const FunctionDef *>(c)) {
+      // A function definition nested in another function's body always prints
+      // in the `function NAME ()' form, regardless of how it was written -- the
+      // outer (top-level) display uses the bare `NAME ()' form instead.
+      out += "function ";
       out += fd->name;
       out += " () ";
       out += '\n';
