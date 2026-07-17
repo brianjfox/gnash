@@ -1482,6 +1482,15 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     // the `+' is part of neither the name nor the value.
     bool append = eq != std::string::npos && eq > 0 && a[eq - 1] == '+';
     if (append && nend == eq) name = a.substr(0, eq - 1);
+    // For a plain scalar assignment, expand the RHS in the ENCLOSING scope
+    // before the variable is localized, so `local x=${x-10}' / `local x=$x'
+    // reference the outer (or temporary-environment) value, as bash does.
+    bool arraylit0 = eq != std::string::npos && a.size() > eq + 2 &&
+                     a[eq + 1] == '(' && a.back() == ')';
+    bool subscript0 = nend != std::string::npos && a[nend] == '[';
+    bool scalar_pre = eq != std::string::npos && !arraylit0 && !subscript0 && !nameref;
+    std::string pre_val;
+    if (scalar_pre) { Expander ex(sh); pre_val = ex.expand_assignment(a.substr(eq + 1)); }
     if (local && !global) sh.make_local(name);
     if (mk_assoc) sh.make_array(name, true);
     else if (mk_array) sh.make_array(name, false);
@@ -1505,8 +1514,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
         }
         rv.value = append ? rv.value + val : val;
       } else {
-        Expander ex(sh);
-        val = ex.expand_assignment(val);  // arg arrives raw (assignment builtin)
+        val = pre_val;  // expanded above, in the enclosing scope, before localizing
         // Honor a pre-existing integer attribute too (e.g. `readonly x+=7' on a
         // variable already declared `-i'), not just an `-i' on this command.
         auto exv = sh.vars.find(name);
