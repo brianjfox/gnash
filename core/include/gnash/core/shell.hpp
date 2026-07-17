@@ -306,6 +306,7 @@ class Shell {
   void append_history_line(const std::string &line, bool heredoc = false);
   int errexit_suppress = 0;   // >0 while a command's status is being checked
   std::string bash_command;   // $BASH_COMMAND: the command currently executing
+  int trap_sig = 0;           // $BASH_TRAPSIG: signal number while a trap runs
   bool in_debug_trap = false; // guard: don't fire the DEBUG trap within itself
   int command_number = 1;     // \# prompt escape: commands entered this session
   bool opt_extdebug = false;  // `shopt -s extdebug': enables BASH_ARGC/BASH_ARGV
