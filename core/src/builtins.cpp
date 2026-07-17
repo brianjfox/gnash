@@ -1401,7 +1401,21 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
   if (fp && !funcs && !funcnames) {
     int st = 0;
     if (i >= argv.size()) {
-      for (const auto &kv : sh.vars) declare_print_var(kv.first, kv.second);
+      if (force_local) {
+        // `local -p': only the variables local to the current function scope,
+        // in declaration order (bash), not every shell variable.
+        if (!sh.local_stack.empty()) {
+          std::vector<std::string> seen;
+          for (const auto &pr : sh.local_stack.back()) {
+            if (std::find(seen.begin(), seen.end(), pr.first) != seen.end()) continue;
+            seen.push_back(pr.first);
+            auto it = sh.vars.find(pr.first);
+            if (it != sh.vars.end()) declare_print_var(pr.first, it->second);
+          }
+        }
+      } else {
+        for (const auto &kv : sh.vars) declare_print_var(kv.first, kv.second);
+      }
     } else {
       for (; i < argv.size(); i++) {
         auto it = sh.vars.find(argv[i]);
