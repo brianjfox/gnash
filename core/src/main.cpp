@@ -342,7 +342,10 @@ int main(int argc, char **argv) {
         case 'r': if (set) sh.opt_restricted = true; break;  // restricted shell
         case 'm': case 'B': case 'h': case 'H':
           break;  // accepted, not (yet) acted on
-        case 'c': have_c = true; stop_after = true; break;
+        // `-c' takes its command from the next word, but other flags grouped in
+        // the same word still apply -- `-ce cmd' means both `-c' and `-e'.  So
+        // mark have_c and keep scanning the remaining letters of this word.
+        case 'c': have_c = true; break;
         case 'o': {
           std::string name = (k + 1 < a.size()) ? a.substr(k + 1)
                              : (idx + 1 < args.size() ? args[++idx] : "");
