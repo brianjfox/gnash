@@ -1062,11 +1062,25 @@ int Executor::run_subshell(const Subshell *c) {
   if (pid == 0) {
     sh_.job_control = false;  // the subshell runs as one unit; no nested tty control
     sh_.subshell_level++;
+    // A subshell does not inherit the parent's EXIT trap; only one it sets for
+    // itself runs when it exits.
+    sh_.traps.erase("EXIT");
     // (external): a lone simple command can exec in place, no second fork.
     if (dynamic_cast<const SimpleCommand *>(c->body.get())) sh_.can_exec_replace = true;
     Executor ex(sh_);
     int s = ex.run(c->body.get());
     sh_.can_exec_replace = false;
+    // Run the subshell's own EXIT trap, if it installed one, with $? set to the
+    // status of the last command (bash semantics).
+    auto it = sh_.traps.find("EXIT");
+    if (it != sh_.traps.end()) {
+      std::string cmd = it->second;
+      sh_.traps.erase(it);
+      sh_.last_status = s;
+      sh_.exiting = false;
+      sh_.run_string(cmd);
+      if (sh_.exiting) s = sh_.exit_status;  // the trap ran `exit N'
+    }
     std::fflush(nullptr);
     _exit(s & 0xff);
   }
