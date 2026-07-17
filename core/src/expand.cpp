@@ -532,10 +532,10 @@ void Expander::emit_zsh_subscript(const std::string &name, const std::string &su
     bool ok = true;
     long long lo, hi;
     if (comma != std::string::npos) {
-      lo = eval_arith(sh_, expand_no_split(sub.substr(0, comma)), &ok);
-      hi = eval_arith(sh_, expand_no_split(sub.substr(comma + 1)), &ok);
+      lo = eval_arith(sh_, expand_no_split(sub.substr(0, comma), false, false), &ok);
+      hi = eval_arith(sh_, expand_no_split(sub.substr(comma + 1), false, false), &ok);
     } else {
-      lo = hi = eval_arith(sh_, expand_no_split(sub), &ok);
+      lo = hi = eval_arith(sh_, expand_no_split(sub, false, false), &ok);
     }
     if (lo < 0) lo += n + 1;
     if (hi < 0) hi += n + 1;
@@ -548,8 +548,8 @@ void Expander::emit_zsh_subscript(const std::string &name, const std::string &su
     std::vector<std::string> all = sh_.array_values(name);
     long long n = static_cast<long long>(all.size());
     bool ok = true;
-    long long lo = eval_arith(sh_, expand_no_split(sub.substr(0, comma)), &ok);
-    long long hi = eval_arith(sh_, expand_no_split(sub.substr(comma + 1)), &ok);
+    long long lo = eval_arith(sh_, expand_no_split(sub.substr(0, comma), false, false), &ok);
+    long long hi = eval_arith(sh_, expand_no_split(sub.substr(comma + 1), false, false), &ok);
     if (lo < 0) lo += n + 1;  // -1 == last element (position n)
     if (hi < 0) hi += n + 1;
     std::vector<std::string> items;
@@ -600,7 +600,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
     if (end != std::string::npos) {
       std::string expr = t.substr(i + 3, (end - 1) - (i + 3));
       bool ok = true;
-      long long v = eval_arith_msg(sh_, expand_no_split(expr), "", &ok);
+      long long v = eval_arith_msg(sh_, expand_no_split(expr, false, false), "", &ok);
       if (!ok) { sh_.arith_error = true; i = end + 1; return; }
       std::string s = std::to_string(v);
       for (char c : s) { out += c; mask += qm; }
@@ -614,7 +614,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
     if (end != std::string::npos) {
       std::string expr = t.substr(i + 2, end - (i + 2));
       bool ok = true;
-      long long v = eval_arith_msg(sh_, expand_no_split(expr), "", &ok);
+      long long v = eval_arith_msg(sh_, expand_no_split(expr, false, false), "", &ok);
       if (!ok) { sh_.arith_error = true; i = end + 1; return; }
       std::string s = std::to_string(v);
       for (char c : s) { out += c; mask += qm; }
@@ -908,12 +908,12 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
         }
         long long n = static_cast<long long>(list.size());
         bool ok = true;
-        long long off = eval_arith(sh_, expand_no_split(soffx), &ok);
+        long long off = eval_arith(sh_, expand_no_split(soffx, false, false), &ok);
         if (!ok) off = 0;
         if (off < 0) { off += n; if (off < 0) off = 0; }
         long long count;
         if (shaslen) {
-          long long len = eval_arith(sh_, expand_no_split(slenx), &ok);
+          long long len = eval_arith(sh_, expand_no_split(slenx, false, false), &ok);
           if (!ok) len = 0;
           count = (len < 0) ? (n + len - off) : len;  // negative len = offset from end
         } else {
@@ -1727,6 +1727,26 @@ void Expander::extract_procsubs(std::string &word) {
     if (c == '\\') { i += 2; continue; }
     if (c == '\'') { i++; while (i < word.size() && word[i] != '\'') i++; if (i < word.size()) i++; continue; }
     if (c == '"') { i++; while (i < word.size() && word[i] != '"') { if (word[i] == '\\') i++; i++; } if (i < word.size()) i++; continue; }
+    // Skip $(...) / $((...)) / ${...} and `...`: a `<('/`>(' inside them is not
+    // this word's process substitution (an arithmetic `4>(2+3)' is a comparison,
+    // and a nested command runs its own procsubs when it executes).
+    if (c == '$' && (word[i + 1] == '(' || word[i + 1] == '{')) {
+      char oc = word[i + 1], cc = oc == '(' ? ')' : '}';
+      int depth = 0;
+      size_t j = i + 1;
+      for (; j < word.size(); j++) {
+        if (word[j] == oc) depth++;
+        else if (word[j] == cc) { if (--depth == 0) { j++; break; } }
+      }
+      i = j;
+      continue;
+    }
+    if (c == '`') {
+      size_t j = i + 1;
+      while (j < word.size() && word[j] != '`') { if (word[j] == '\\') j++; j++; }
+      i = (j < word.size()) ? j + 1 : j;
+      continue;
+    }
     if ((c == '<' || c == '>') && word[i + 1] == '(') {
       int depth = 0;
       size_t j = i + 1;
@@ -1810,9 +1830,11 @@ std::string Expander::expand_pattern(const std::string &text) {
   return r;
 }
 
-std::string Expander::expand_no_split(const std::string &text, bool do_glob) {
+std::string Expander::expand_no_split(const std::string &text, bool do_glob, bool do_procsub) {
   std::string src = expand_leading_tilde(sh_, text);  // case subjects, redirects
-  extract_procsubs(src);  // e.g. a redirect target: < <(cmd)
+  // Arithmetic contexts pass do_procsub=false: there `4>(2+3)' is a comparison,
+  // not a `>(cmd)' process substitution.
+  if (do_procsub) extract_procsubs(src);  // e.g. a redirect target: < <(cmd)
   std::string out, mask;
   process(src, out, mask, false);
   // drop internal markers: field separators become spaces, quoted-nulls vanish
