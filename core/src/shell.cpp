@@ -1283,6 +1283,11 @@ std::string Shell::run_and_capture(const std::string &script, int *status) {
     job_control = false;  // command substitution: no nested tty control
     subshell_level++;  // $BASH_SUBSHELL
     subshell_leaf = true;  // a lone external here can exec in place (no 2nd fork)
+    // Command substitution unsets errexit in the subshell unless the caller has
+    // enabled `shopt -s inherit_errexit'; so `$(false; echo ok)' still runs the
+    // `echo' under `set -e'.  POSIX mode inherits errexit into the subshell, so
+    // there `z=$(false; echo foo)' exits silently before the `echo'.
+    if (opt_errexit && !opt_posix && !shopt_opts["inherit_errexit"]) opt_errexit = false;
     int st = run_string(script);
     std::fflush(stdout);
     _exit(st & 0xff);

@@ -431,6 +431,16 @@ int Executor::run(const Command *c) {
   if (c->line > 0 && !dynamic_cast<const SimpleCommand *>(c))
     sh_.cur_lineno = sh_.lineno_base + c->line;
 
+  // A negated command (`! cmd') never triggers errexit, and neither do the
+  // commands nested within it -- bash exempts the entire subtree, so that e.g.
+  // the `false' inside `! eval false' does not exit a `set -e' shell.  Suppress
+  // errexit for the duration of the negated command's execution.
+  struct ErrexitGuard {
+    Shell &sh; bool active;
+    ErrexitGuard(Shell &s, bool a) : sh(s), active(a) { if (active) sh.errexit_suppress++; }
+    ~ErrexitGuard() { if (active) sh.errexit_suppress--; }
+  } eg(sh_, (c->flags & CMD_INVERT_RETURN) != 0);
+
   if (auto *p = dynamic_cast<const SimpleCommand *>(c)) return run_simple(p);
   if (auto *p = dynamic_cast<const Connection *>(c)) return run_connection(p);
 
@@ -453,6 +463,15 @@ int Executor::run(const Command *c) {
   restore_fds(saved);
   if (c->flags & CMD_INVERT_RETURN) st = st ? 0 : 1;
   sh_.last_status = st;
+  // A compound command (subshell, group, if, loop, ...) that returns non-zero
+  // triggers errexit at its own level, e.g. `set -e; (exit 17)' exits the shell.
+  // Conditions and negations are already exempted via errexit_suppress / the
+  // CMD_INVERT_RETURN guard in run().
+  if (sh_.opt_errexit && st != 0 && sh_.errexit_suppress == 0 && !unwinding() &&
+      !(c->flags & CMD_INVERT_RETURN)) {
+    sh_.exiting = true;
+    sh_.exit_status = st;
+  }
   return st;
 }
 
@@ -631,6 +650,14 @@ int Executor::run_pipeline(const Connection *c) {
 
   if (c->flags & CMD_INVERT_RETURN) st = st ? 0 : 1;
   sh_.last_status = st;
+  // A pipeline that returns non-zero triggers errexit (e.g. `set -e; true|false').
+  // Suppressed contexts (conditions, `&&'/`||' non-final operands, `!') are
+  // handled by errexit_suppress and the CMD_INVERT_RETURN guard in run().
+  if (sh_.opt_errexit && st != 0 && sh_.errexit_suppress == 0 && !unwinding() &&
+      !(c->flags & CMD_INVERT_RETURN)) {
+    sh_.exiting = true;
+    sh_.exit_status = st;
+  }
   return st;
 }
 
@@ -766,7 +793,15 @@ int Executor::run_simple(const SimpleCommand *c) {
     restore_fds(saved);
     int st = sh_.cmdsub_ran ? sh_.last_cmdsub_status : 0;
     if (c->flags & CMD_INVERT_RETURN) st = st ? 0 : 1;  // a bare `!'
-    return (sh_.last_status = st);
+    sh_.last_status = st;
+    // A failing command substitution in the RHS (`x=$(false)') triggers errexit
+    // just like any other command's non-zero status.
+    if (sh_.opt_errexit && st != 0 && sh_.errexit_suppress == 0 && !unwinding() &&
+        !(c->flags & CMD_INVERT_RETURN)) {
+      sh_.exiting = true;
+      sh_.exit_status = st;
+    }
+    return st;
   }
 
   // A bare job spec in command position (`%1', `%', `%%', `%-', `%name') is a
