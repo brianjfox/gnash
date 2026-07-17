@@ -456,6 +456,10 @@ void Shell::array_set(const std::string &n_in, const std::string &sub, const std
     assoc_put(v, sub, val);
     return;
   }
+  // A subscripted assignment to an existing scalar promotes it to an indexed
+  // array, keeping the old value as element 0 (`a=abcde; a[2]=x' yields
+  // ([0]=abcde [2]=x)), matching bash.
+  if (v.kind == VarKind::Scalar && !v.value.empty() && v.idx.empty()) v.idx[0] = v.value;
   v.kind = VarKind::Indexed;
   bool ok = true;
   long long k = eval_arith(*this, sub, &ok);
@@ -502,7 +506,17 @@ int Shell::array_count(const std::string &n_in) const {
 void Shell::make_array(const std::string &n_in, bool assoc) {
   std::string n = deref(n_in);
   Variable &v = vars[n];
-  if (v.kind == VarKind::Scalar) v.kind = assoc ? VarKind::Assoc : VarKind::Indexed;
+  if (v.kind == VarKind::Scalar) {
+    // Converting an existing scalar to an indexed array keeps its value as
+    // element 0 (`a=abcde; declare -a a' leaves ${a[0]} == abcde), matching
+    // bash.  An associative array has no natural key for the old value, so bash
+    // discards it there.
+    if (!assoc && !v.value.empty()) {
+      v.idx[0] = v.value;
+      v.value.clear();
+    }
+    v.kind = assoc ? VarKind::Assoc : VarKind::Indexed;
+  }
 }
 
 void Shell::array_assign(
