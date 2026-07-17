@@ -39,10 +39,22 @@ void invert_prefix(const Command *c, std::string &out) {
 
 }  // namespace
 
+// The source fd bash prints for a redirection.  An explicit fd is kept; for the
+// dup operators (`>&' / `<&') with no explicit fd bash shows the default it acts
+// on (1 for output, 0 for input), so `>&2' displays as `1>&2'.  Every other
+// redirection with an implicit fd prints none (returns -1).
+int effective_source_fd(const Redirect &r) {
+  if (r.source_fd >= 0) return r.source_fd;
+  if (r.op == RedirOp::DupOutput) return 1;
+  if (r.op == RedirOp::DupInput) return 0;
+  return -1;
+}
+
 void print_redirects(const std::vector<Redirect> &redirs, std::string &out) {
   for (const Redirect &r : redirs) {
     out += ' ';
-    if (r.source_fd >= 0) out += std::to_string(r.source_fd);
+    int sfd = effective_source_fd(r);
+    if (sfd >= 0) out += std::to_string(sfd);
     out += op_string(r.op);
     out += r.target.text;
   }
@@ -220,7 +232,8 @@ struct MPrinter {
 
   void print_redir(const Redirect &r) {
     out += ' ';
-    if (r.source_fd >= 0) out += std::to_string(r.source_fd);
+    int sfd = effective_source_fd(r);
+    if (sfd >= 0) out += std::to_string(sfd);
     switch (r.op) {
       case RedirOp::HereDoc: out += "<<"; out += r.target.text; return;
       case RedirOp::HereDocStrip: out += "<<-"; out += r.target.text; return;
