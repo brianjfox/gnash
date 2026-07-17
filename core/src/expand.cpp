@@ -1102,6 +1102,9 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
   bool length = false;
   std::string b = body;
   if (b.size() > 1 && b[0] == '#') { length = true; b = b.substr(1); }
+  // ${#@} and ${#*} are the count of positional parameters (like $#), not the
+  // character length of the expanded list.
+  if (length && (b == "@" || b == "*")) return std::to_string(sh.positional.size());
 
   // ${!name} indirection and ${!prefix*}/${!prefix@} name listing.  A `['
   // after the name is the ${!arr[@]} keys form, handled by the array path.
