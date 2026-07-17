@@ -260,6 +260,22 @@ int Shell::run_debug_trap(const std::string &cmd_text) {
   return st;
 }
 
+void Shell::run_err_trap(int status) {
+  auto it = traps.find("ERR");
+  if (it == traps.end() || it->second.empty() || in_err_trap) return;
+  // Without errtrace (`set -E'), the ERR trap is not inherited into functions
+  // or subshells (a forked child raises subshell_level); only the enclosing
+  // shell fires it for the function call / subshell / pipeline as a whole.
+  if (!opt_functrace && (in_function() || subshell_level > 0)) return;
+  in_err_trap = true;
+  int saved = last_status;
+  last_status = status;  // $? inside the ERR trap is the failing command's status
+  std::string body = it->second;
+  run_string(body);
+  last_status = saved;
+  in_err_trap = false;
+}
+
 void Shell::run_pending_traps() {
   if (in_trap) return;
   for (int s = 1; s < NSIG; s++) {
