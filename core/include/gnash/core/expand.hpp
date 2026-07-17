@@ -27,7 +27,8 @@ class Expander {
   // Expand a single word without word-splitting (redirect targets, here-doc
   // bodies with `do_expand`, case subjects).  `do_glob` controls pathname
   // expansion (used for redirect filenames).
-  std::string expand_no_split(const std::string &text, bool do_glob = false);
+  std::string expand_no_split(const std::string &text, bool do_glob = false,
+                              bool do_procsub = true);
 
   // Expand a word that will be used as a match pattern (case patterns,
   // [[ == ]] right sides): quoted characters are backslash-escaped in the

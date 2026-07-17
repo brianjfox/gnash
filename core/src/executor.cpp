@@ -431,6 +431,16 @@ int Executor::run(const Command *c) {
   if (c->line > 0 && !dynamic_cast<const SimpleCommand *>(c))
     sh_.cur_lineno = sh_.lineno_base + c->line;
 
+  // A negated command (`! cmd') never triggers errexit, and neither do the
+  // commands nested within it -- bash exempts the entire subtree, so that e.g.
+  // the `false' inside `! eval false' does not exit a `set -e' shell.  Suppress
+  // errexit for the duration of the negated command's execution.
+  struct ErrexitGuard {
+    Shell &sh; bool active;
+    ErrexitGuard(Shell &s, bool a) : sh(s), active(a) { if (active) sh.errexit_suppress++; }
+    ~ErrexitGuard() { if (active) sh.errexit_suppress--; }
+  } eg(sh_, (c->flags & CMD_INVERT_RETURN) != 0);
+
   if (auto *p = dynamic_cast<const SimpleCommand *>(c)) return run_simple(p);
   if (auto *p = dynamic_cast<const Connection *>(c)) return run_connection(p);
 
@@ -453,6 +463,15 @@ int Executor::run(const Command *c) {
   restore_fds(saved);
   if (c->flags & CMD_INVERT_RETURN) st = st ? 0 : 1;
   sh_.last_status = st;
+  // A compound command (subshell, group, if, loop, ...) that returns non-zero
+  // triggers errexit at its own level, e.g. `set -e; (exit 17)' exits the shell.
+  // Conditions and negations are already exempted via errexit_suppress / the
+  // CMD_INVERT_RETURN guard in run().
+  if (sh_.opt_errexit && st != 0 && sh_.errexit_suppress == 0 && !unwinding() &&
+      !(c->flags & CMD_INVERT_RETURN)) {
+    sh_.exiting = true;
+    sh_.exit_status = st;
+  }
   return st;
 }
 
@@ -631,6 +650,14 @@ int Executor::run_pipeline(const Connection *c) {
 
   if (c->flags & CMD_INVERT_RETURN) st = st ? 0 : 1;
   sh_.last_status = st;
+  // A pipeline that returns non-zero triggers errexit (e.g. `set -e; true|false').
+  // Suppressed contexts (conditions, `&&'/`||' non-final operands, `!') are
+  // handled by errexit_suppress and the CMD_INVERT_RETURN guard in run().
+  if (sh_.opt_errexit && st != 0 && sh_.errexit_suppress == 0 && !unwinding() &&
+      !(c->flags & CMD_INVERT_RETURN)) {
+    sh_.exiting = true;
+    sh_.exit_status = st;
+  }
   return st;
 }
 
@@ -669,7 +696,13 @@ int Executor::run_simple(const SimpleCommand *c) {
   // command takes the status of the last one (bash), or 0 if there were none.
   sh_.cmdsub_ran = false;
   for (const Word &w : c->words) {
-    if (prefix && (w.flags & W_ASSIGNMENT)) {
+    // Under `set -k' (keyword mode) an assignment-form word ANYWHERE in the
+    // command is an assignment, not just those preceding the command name.
+    // Checked at run time (the flag can be toggled mid-script) via the word
+    // text, since the parser only marks leading words as W_ASSIGNMENT.
+    bool assign_here = (prefix && (w.flags & W_ASSIGNMENT)) ||
+                       (sh_.opt_keyword && is_assignment_word_text(w.text));
+    if (assign_here) {
       Assign a;
       parse_assign(w.text, a);
       if (a.sub || a.is_array) {
@@ -682,8 +715,22 @@ int Executor::run_simple(const SimpleCommand *c) {
         // scalar field.
         bool is_arr = vit != sh_.vars.end() &&
                       (vit->second.kind == VarKind::Indexed || vit->second.kind == VarKind::Assoc);
+        // A preceding assignment in the same command is visible to this RHS
+        // (`A=1 B=$A'): apply the already-collected assignments, expand, then
+        // roll them back so command arguments still see the original values.
+        std::vector<std::pair<std::string, std::optional<Variable>>> prior;
+        for (const auto &pa : assigns) {
+          auto pv = sh_.vars.find(pa.first);
+          prior.push_back({pa.first, pv == sh_.vars.end() ? std::nullopt
+                                                          : std::optional<Variable>(pv->second)});
+          sh_.set(pa.first, pa.second);
+        }
         std::string v = ex.expand_assignment(a.value);
         std::string cur = is_arr ? sh_.array_get(a.name, "0") : sh_.get(a.name);
+        for (auto it = prior.rbegin(); it != prior.rend(); ++it) {
+          if (it->second) sh_.vars[it->first] = *it->second;
+          else sh_.vars.erase(it->first);
+        }
         if (integer) {
           bool ok = true;
           long long rv = eval_arith(sh_, v, &ok);
@@ -766,7 +813,15 @@ int Executor::run_simple(const SimpleCommand *c) {
     restore_fds(saved);
     int st = sh_.cmdsub_ran ? sh_.last_cmdsub_status : 0;
     if (c->flags & CMD_INVERT_RETURN) st = st ? 0 : 1;  // a bare `!'
-    return (sh_.last_status = st);
+    sh_.last_status = st;
+    // A failing command substitution in the RHS (`x=$(false)') triggers errexit
+    // just like any other command's non-zero status.
+    if (sh_.opt_errexit && st != 0 && sh_.errexit_suppress == 0 && !unwinding() &&
+        !(c->flags & CMD_INVERT_RETURN)) {
+      sh_.exiting = true;
+      sh_.exit_status = st;
+    }
+    return st;
   }
 
   // A bare job spec in command position (`%1', `%', `%%', `%-', `%name') is a
@@ -1068,6 +1123,7 @@ int Executor::run_for(const ForCommand *c) {
     Expander aex(sh_);
     auto aeval = [&](const std::string &e) {
       if (e.empty()) return 0LL;
+      if (sh_.opt_xtrace) std::fprintf(stderr, "+ (( %s ))\n", e.c_str());
       return static_cast<long long>(eval_arith(sh_, aex.expand_no_split(e), &ok));
     };
     aeval(c->a_init);
@@ -1088,6 +1144,11 @@ int Executor::run_for(const ForCommand *c) {
     items = ex.expand_args(c->words);
   else
     items = sh_.positional;
+  if (sh_.opt_xtrace) {
+    std::string line = "+ for " + c->var + " in";
+    for (const std::string &it : items) line += " " + it;
+    std::fprintf(stderr, "%s\n", line.c_str());
+  }
   for (const std::string &item : items) {
     sh_.set(c->var, item);
     st = run(c->body.get());
@@ -1157,6 +1218,7 @@ int Executor::run_cond(const CondCommand *c) {
 }
 
 int Executor::run_arith(const ArithCommand *c) {
+  if (sh_.opt_xtrace) std::fprintf(stderr, "+ (( %s ))\n", c->expression.c_str());
   bool ok = true;
   Expander ex(sh_);  // expand ${#arr[@]} etc. before arithmetic evaluation
   long long v = eval_arith(sh_, ex.expand_no_split(c->expression), &ok);

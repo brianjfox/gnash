@@ -977,6 +977,8 @@ void set_print_var(const std::string &name, const Variable &v) {
 // Apply one `set -o NAME' / `set +o NAME'; false if NAME is unknown.
 bool set_o_option(Shell &sh, const std::string &o, bool on) {
   if (o == "errexit") sh.opt_errexit = on;
+  else if (o == "keyword") sh.opt_keyword = on;
+  else if (o == "physical") sh.opt_physical = on;
   else if (o == "xtrace") sh.opt_xtrace = on;
   else if (o == "nounset") sh.opt_nounset = on;
   else if (o == "noglob") sh.opt_noglob = on;
@@ -999,25 +1001,31 @@ bool set_o_option(Shell &sh, const std::string &o, bool on) {
   return true;
 }
 
-// The `set -o'/`set +o' option table with each option's current state.
+}  // namespace (close anon: set_option_states needs external linkage for SHELLOPTS)
+
+// The `set -o'/`set +o' option table with each option's current state.  Also
+// used by Shell::dynamic_var to build $SHELLOPTS, so it lives at namespace
+// scope rather than in the anonymous namespace.
 std::vector<std::pair<std::string, bool>> set_option_states(Shell &sh) {
   bool i = sh.interactive;
   return {
       {"allexport", false},   {"braceexpand", true},
-      {"emacs", rl_editing_mode == 1}, {"errexit", sh.opt_errexit},
+      {"emacs", i && rl_editing_mode == 1}, {"errexit", sh.opt_errexit},
       {"errtrace", sh.opt_functrace}, {"functrace", sh.opt_functrace},
       {"hashall", true},      {"histexpand", sh.opt_histexpand},
       {"history", sh.opt_history}, {"ignoreeof", false},
-      {"interactive-comments", true}, {"keyword", false},
+      {"interactive-comments", true}, {"keyword", sh.opt_keyword},
       {"monitor", i},         {"noclobber", false},
       {"noexec", sh.opt_noexec}, {"noglob", sh.opt_noglob},
       {"nolog", false},       {"notify", false},
       {"nounset", sh.opt_nounset}, {"onecmd", false},
-      {"physical", false},    {"pipefail", sh.opt_pipefail},
+      {"physical", sh.opt_physical}, {"pipefail", sh.opt_pipefail},
       {"posix", sh.opt_posix}, {"privileged", false},
-      {"verbose", sh.opt_verbose}, {"vi", rl_editing_mode == 0},
+      {"verbose", sh.opt_verbose}, {"vi", i && rl_editing_mode == 0},
       {"xtrace", sh.opt_xtrace}};
 }
+
+namespace {  // reopen the anonymous namespace for the remaining file-local helpers
 
 int bi_set(Shell &sh, const std::vector<std::string> &argv) {
   // No arguments: list all shell variables (name=value), names sorted.
@@ -1042,6 +1050,8 @@ int bi_set(Shell &sh, const std::vector<std::string> &argv) {
       for (size_t k = 1; k < a.size(); k++) {
         switch (a[k]) {
           case 'e': sh.opt_errexit = on; break;
+          case 'k': sh.opt_keyword = on; break;  // keyword: assignments anywhere
+          case 'P': sh.opt_physical = on; break;  // physical: resolve symlinks
           case 'x': sh.opt_xtrace = on; break;
           case 'u': sh.opt_nounset = on; break;
           case 'f': sh.opt_noglob = on; break;
@@ -1358,23 +1368,27 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
   bool funcs = false, funcnames = false;  // -f (definitions) / -F (names)
   bool fp = false;                        // -p (display reproducibly)
   size_t i = 1;
+  // `+X' flags remove an attribute rather than adding it (`typeset +n foo').
+  bool rm_integer = false, rm_readonly = false, rm_exported = false;
+  bool rm_nameref = false, rm_lcase = false, rm_ucase = false, rm_capcase = false;
   for (; i < argv.size(); i++) {
     const std::string &a = argv[i];
-    if (a.size() >= 2 && a[0] == '-') {
+    if (a.size() >= 2 && (a[0] == '-' || a[0] == '+')) {
+      bool add = a[0] == '-';
       for (size_t k = 1; k < a.size(); k++) {
         switch (a[k]) {
           case 'f': funcs = true; break;
           case 'F': funcnames = true; break;
           case 'a': mk_array = true; break;
           case 'A': mk_assoc = true; break;
-          case 'i': integer = true; break;
-          case 'r': readonly = true; break;
-          case 'x': exported = true; break;
+          case 'i': (add ? integer : rm_integer) = true; break;
+          case 'r': (add ? readonly : rm_readonly) = true; break;
+          case 'x': (add ? exported : rm_exported) = true; break;
           case 'g': global = true; break;
-          case 'n': nameref = true; break;
-          case 'l': lcase = true; break;
-          case 'u': ucase = true; break;
-          case 'c': capcase = true; break;
+          case 'n': (add ? nameref : rm_nameref) = true; break;
+          case 'l': (add ? lcase : rm_lcase) = true; break;
+          case 'u': (add ? ucase : rm_ucase) = true; break;
+          case 'c': (add ? capcase : rm_capcase) = true; break;
           case 'p': fp = true; break;
           default: break;
         }
@@ -1387,7 +1401,21 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
   if (fp && !funcs && !funcnames) {
     int st = 0;
     if (i >= argv.size()) {
-      for (const auto &kv : sh.vars) declare_print_var(kv.first, kv.second);
+      if (force_local) {
+        // `local -p': only the variables local to the current function scope,
+        // in declaration order (bash), not every shell variable.
+        if (!sh.local_stack.empty()) {
+          std::vector<std::string> seen;
+          for (const auto &pr : sh.local_stack.back()) {
+            if (std::find(seen.begin(), seen.end(), pr.first) != seen.end()) continue;
+            seen.push_back(pr.first);
+            auto it = sh.vars.find(pr.first);
+            if (it != sh.vars.end()) declare_print_var(pr.first, it->second);
+          }
+        }
+      } else {
+        for (const auto &kv : sh.vars) declare_print_var(kv.first, kv.second);
+      }
     } else {
       for (; i < argv.size(); i++) {
         auto it = sh.vars.find(argv[i]);
@@ -1423,6 +1451,29 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     return st;
   }
 
+  // Attribute flags with no name arguments list every variable that carries all
+  // of the requested attributes, in `declare -p' form: `typeset -n' lists all
+  // namerefs, `declare -i' all integers, and so on.
+  if (i >= argv.size() &&
+      (nameref || readonly || integer || exported || mk_array || mk_assoc ||
+       lcase || ucase || capcase)) {
+    for (const auto &kv : sh.vars) {
+      const Variable &v = kv.second;
+      if (nameref && !v.nameref) continue;
+      if (readonly && !v.readonly) continue;
+      if (integer && !v.integer) continue;
+      if (exported && !v.exported) continue;
+      if (mk_array && v.kind != VarKind::Indexed) continue;
+      if (mk_assoc && v.kind != VarKind::Assoc) continue;
+      if (lcase && !v.lcase) continue;
+      if (ucase && !v.ucase) continue;
+      if (capcase && !v.capcase) continue;
+      declare_print_var(kv.first, v);
+    }
+    return 0;
+  }
+
+  int ret = 0;
   for (; i < argv.size(); i++) {
     const std::string &a = argv[i];
     size_t nend = a.find_first_of("[=");
@@ -1432,7 +1483,56 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     // the `+' is part of neither the name nor the value.
     bool append = eq != std::string::npos && eq > 0 && a[eq - 1] == '+';
     if (append && nend == eq) name = a.substr(0, eq - 1);
+    // For a plain scalar assignment, expand the RHS in the ENCLOSING scope
+    // before the variable is localized, so `local x=${x-10}' / `local x=$x'
+    // reference the outer (or temporary-environment) value, as bash does.
+    bool arraylit0 = eq != std::string::npos && a.size() > eq + 2 &&
+                     a[eq + 1] == '(' && a.back() == ')';
+    bool subscript0 = nend != std::string::npos && a[nend] == '[';
+    bool scalar_pre = eq != std::string::npos && !arraylit0 && !subscript0 && !nameref;
+    std::string pre_val;
+    if (scalar_pre) { Expander ex(sh); pre_val = ex.expand_assignment(a.substr(eq + 1)); }
+    // `declare -g name' assigns to the GLOBAL binding even when a local of the
+    // same name shadows it.  Temporarily swap the saved global binding into
+    // `vars', run the normal assignment against it, and restore the local at
+    // the end of the loop body.  (The RHS was already expanded above against the
+    // still-visible local, matching bash.)
+    std::optional<Variable> *gslot = nullptr;
+    Variable held_local;
+    bool had_local = false;
+    if (global) {
+      for (auto &scope : sh.local_stack) {
+        for (auto &e : scope)
+          if (e.first == name) { gslot = &e.second; break; }
+        if (gslot) break;
+      }
+      if (gslot) {
+        auto vit = sh.vars.find(name);
+        if ((had_local = (vit != sh.vars.end()))) held_local = vit->second;
+        if (gslot->has_value()) sh.vars[name] = gslot->value();
+        else sh.vars.erase(name);
+      }
+    }
     if (local && !global) sh.make_local(name);
+    // An array cannot be switched between indexed and associative in place; bash
+    // rejects the redeclaration and leaves the variable unchanged.
+    if (mk_array || mk_assoc) {
+      auto av = sh.vars.find(name);
+      if (av != sh.vars.end()) {
+        if (mk_assoc && av->second.kind == VarKind::Indexed) {
+          std::fprintf(stderr, "%s%s: %s: cannot convert indexed to associative array\n",
+                       sh.err_prefix().c_str(), argv[0].c_str(), name.c_str());
+          ret = 1;
+          continue;
+        }
+        if (mk_array && av->second.kind == VarKind::Assoc) {
+          std::fprintf(stderr, "%s%s: %s: cannot convert associative to indexed array\n",
+                       sh.err_prefix().c_str(), argv[0].c_str(), name.c_str());
+          ret = 1;
+          continue;
+        }
+      }
+    }
     if (mk_assoc) sh.make_array(name, true);
     else if (mk_array) sh.make_array(name, false);
     if (eq != std::string::npos) {
@@ -1441,9 +1541,21 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
       bool subscript = nend != std::string::npos && a[nend] == '[';
       if (arraylit || subscript) {
         apply_assignment_word(sh, a);  // NAME=(...) or NAME[i]=...
-      } else {
+      } else if (nameref) {
+        // `declare -n ref=target': store the target NAME as ref's own value.
+        // Bypass Shell::set's deref so retargeting an existing nameref rewrites
+        // the reference itself rather than writing through to its old target.
         Expander ex(sh);
-        val = ex.expand_assignment(val);  // arg arrives raw (assignment builtin)
+        val = ex.expand_assignment(val);
+        Variable &rv = sh.vars[name];
+        if (rv.readonly) {
+          std::fprintf(stderr, "%s%s: readonly variable\n", sh.err_prefix().c_str(),
+                       name.c_str());
+          return 1;
+        }
+        rv.value = append ? rv.value + val : val;
+      } else {
+        val = pre_val;  // expanded above, in the enclosing scope, before localizing
         // Honor a pre-existing integer attribute too (e.g. `readonly x+=7' on a
         // variable already declared `-i'), not just an `-i' on this command.
         auto exv = sh.vars.find(name);
@@ -1479,8 +1591,25 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     // Mark the nameref last, so the assignment above stored the *target name*
     // as this variable's value rather than being redirected through it.
     if (nameref) v.nameref = true;
+    // `+X' removes attributes.  Applied after the assignment so `typeset +n
+    // foo=other' writes through the still-active nameref to its target before
+    // the reference is torn down, matching bash.
+    if (rm_readonly) v.readonly = false;
+    if (rm_exported) v.exported = false;
+    if (rm_integer) v.integer = false;
+    if (rm_nameref) v.nameref = false;
+    if (rm_ucase) v.ucase = false;
+    if (rm_lcase) v.lcase = false;
+    if (rm_capcase) v.capcase = false;
+    // Restore the local shadow after a `declare -g' assignment to the global.
+    if (gslot) {
+      auto vit = sh.vars.find(name);
+      *gslot = (vit != sh.vars.end()) ? std::optional<Variable>(vit->second) : std::nullopt;
+      if (had_local) sh.vars[name] = held_local;
+      else sh.vars.erase(name);
+    }
   }
-  return 0;
+  return ret;
 }
 
 int bi_let(Shell &sh, const std::vector<std::string> &argv) {
