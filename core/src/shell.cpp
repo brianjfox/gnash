@@ -276,6 +276,19 @@ void Shell::run_err_trap(int status) {
   in_err_trap = false;
 }
 
+int Shell::run_return_trap(int status) {
+  auto it = traps.find("RETURN");
+  if (it == traps.end() || it->second.empty() || in_return_trap) return 0;
+  in_return_trap = true;
+  int saved = last_status;
+  last_status = status;  // $? inside the RETURN trap is the function's return status
+  std::string body = it->second;
+  int st = run_string(body);
+  last_status = saved;
+  in_return_trap = false;
+  return st;
+}
+
 void Shell::run_pending_traps() {
   if (in_trap) return;
   for (int s = 1; s < NSIG; s++) {

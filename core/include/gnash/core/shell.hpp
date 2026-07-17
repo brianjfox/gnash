@@ -152,6 +152,7 @@ class Shell {
   // the command about to run).
   int run_debug_trap(const std::string &cmd_text);
   void run_err_trap(int status);              // run the ERR trap after a failure
+  int run_return_trap(int status);            // run the RETURN trap on func/source return
 
   // --- job control -------------------------------------------------------
   struct Job {
@@ -310,6 +311,7 @@ class Shell {
   int trap_sig = 0;           // $BASH_TRAPSIG: signal number while a trap runs
   bool in_debug_trap = false; // guard: don't fire the DEBUG trap within itself
   bool in_err_trap = false;   // guard: don't fire the ERR trap within itself
+  bool in_return_trap = false;// guard: don't fire the RETURN trap within itself
   int command_number = 1;     // \# prompt escape: commands entered this session
   bool opt_extdebug = false;  // `shopt -s extdebug': enables BASH_ARGC/BASH_ARGV
   // Call-argument stack for $BASH_ARGC/$BASH_ARGV (only maintained under

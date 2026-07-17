@@ -931,7 +931,29 @@ int Executor::run_simple(const SimpleCommand *c) {
     // whole on entry, before the per-command traps inside it.
     if (sh_.opt_functrace && sh_.traps.count("DEBUG") && !sh_.in_debug_trap)
       sh_.run_debug_trap(to_string(fit->second));
+    // Snapshot the RETURN trap so we can tell one the function installs for
+    // itself from an inherited one (only inherited under functrace).
+    auto rtit = sh_.traps.find("RETURN");
+    bool had_return = rtit != sh_.traps.end();
+    std::string return_before = had_return ? rtit->second : std::string();
     status = unwinding() ? sh_.last_status : run(fit->second);
+    // The RETURN trap fires when the function returns, in its own scope, with $?
+    // set to the return status.  It runs when inherited (functrace) or installed
+    // inside the function.
+    {
+      auto rt = sh_.traps.find("RETURN");
+      bool set_now = rt != sh_.traps.end() && !rt->second.empty();
+      bool set_inside = set_now && (!had_return || rt->second != return_before);
+      if (set_now && (sh_.opt_functrace || set_inside)) {
+        int ret_status = sh_.returning ? sh_.exit_status : status;
+        bool save_ret = sh_.returning;
+        int save_es = sh_.exit_status;
+        sh_.returning = false;  // let the trap body run rather than unwind
+        sh_.run_return_trap(ret_status);
+        sh_.returning = save_ret;
+        sh_.exit_status = save_es;
+      }
+    }
     sh_.lineno_base = saved_lineno_base;
     if (!sh_.persona_restore.empty()) {
       if (sh_.persona_restore.back()) sh_.set_personality(*sh_.persona_restore.back());
