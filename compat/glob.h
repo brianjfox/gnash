@@ -15,6 +15,7 @@ extern "C" {
 #define GX_MATCHDOT  0x004  /* match a leading `.' with wildcards       */
 #define GX_MATCHDIRS 0x008  /* match only directory names               */
 #define GX_ALLDIRS   0x010  /* match all directory names                */
+#define GX_NODOTSKIP 0x020  /* allow `.' and `..' to match (globskipdots off) */
 #define GX_GLOBSTAR  0x400  /* enable ** recursive matching             */
 
 /* Nonzero if PATTERN contains any unquoted globbing metacharacters. */

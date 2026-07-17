@@ -267,6 +267,8 @@ class Shell {
   bool cmdsub_ran = false;
   void note_cmdsub(int st) { last_cmdsub_status = st; cmdsub_ran = true; }
   bool opt_errexit = false;   // -e
+  bool opt_keyword = false;   // -k: assignment-form words anywhere are assignments
+  bool opt_physical = false;  // -P: resolve symlinks in cd/pwd; shown in $-/SHELLOPTS
   bool opt_xtrace = false;    // -x
   bool opt_nounset = false;   // -u
   bool opt_noglob = false;    // -f

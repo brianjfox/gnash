@@ -61,15 +61,16 @@ bool sm_match(const std::string &pat, const std::string &name, int smflags) {
 
 // Names in `dirpath` ("" means ".") matching `pat`.
 std::vector<std::string> match_dir(const std::string &dirpath, const std::string &pat,
-                                   int smflags) {
+                                   int smflags, bool skipdots) {
   std::vector<std::string> out;
   DIR *d = opendir(dirpath.empty() ? "." : dirpath.c_str());
   if (!d) return out;
   struct dirent *e;
   while ((e = readdir(d)) != nullptr) {
-    // bash's GLOBSKIPDOTS (on by default): `.' and `..' are never returned.
-    if (e->d_name[0] == '.' && (e->d_name[1] == '\0' ||
-                                (e->d_name[1] == '.' && e->d_name[2] == '\0')))
+    // bash's GLOBSKIPDOTS (on by default): `.' and `..' are excluded; with it
+    // off they are matched like any other name.
+    if (skipdots && e->d_name[0] == '.' &&
+        (e->d_name[1] == '\0' || (e->d_name[1] == '.' && e->d_name[2] == '\0')))
       continue;
     if (sm_match(pat, e->d_name, smflags)) out.emplace_back(e->d_name);
   }
@@ -136,7 +137,8 @@ void glob_recurse(const std::string &dir, const std::string &pat, int smflags, b
     return;
   }
 
-  std::vector<std::string> names = match_dir(dir, head, smflags);
+  std::vector<std::string> names =
+      match_dir(dir, head, smflags, (gxflags & GX_NODOTSKIP) == 0);
   std::sort(names.begin(), names.end());
   for (const std::string &nm : names) {
     std::string full = dir + nm;
