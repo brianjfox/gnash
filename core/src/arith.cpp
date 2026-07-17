@@ -611,6 +611,18 @@ long long eval_arith_msg(Shell &sh, const std::string &expr, const char *cmd_nam
     while (lead < expr.size() && std::isspace(static_cast<unsigned char>(expr[lead]))) lead++;
     std::string display = expr.substr(lead);
     std::string token = expr.substr(ctx.err_pos);
+    // A malformed numeric constant's error token is the number itself, without
+    // the trailing whitespace that padded the expression (`$(( 3425#56 ))' ->
+    // `3425#56', not `3425#56 ').  Operator/operand-expected errors keep their
+    // trailing space, so only trim for the number-constant diagnostics.
+    if (ctx.err_msg == arith_err::kBadBase || ctx.err_msg == arith_err::kBadConst ||
+        ctx.err_msg == arith_err::kBadNumber || ctx.err_msg == arith_err::kTooGreat) {
+      auto rtrim = [](std::string &s) {
+        while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) s.pop_back();
+      };
+      rtrim(display);
+      rtrim(token);
+    }
     std::string prefix = (cmd_name && cmd_name[0]) ? std::string(cmd_name) + ": " : "";
     std::fprintf(stderr, "%s%s%s: %s (error token is \"%s\")\n", sh.err_prefix().c_str(),
                  prefix.c_str(), display.c_str(), ctx.err_msg.c_str(), token.c_str());
