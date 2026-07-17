@@ -1869,31 +1869,54 @@ std::vector<std::string> brace_expand(const std::string &text) {
           if (comma) {
             items = parts;
           } else {
-            // numeric or char range {a..b}
-            size_t dots = inside.find("..");
-            if (dots != std::string::npos) {
-              std::string a = inside.substr(0, dots), b = inside.substr(dots + 2);
-              char *ea = nullptr, *eb = nullptr;
+            // Sequence range {start..end} or {start..end..step}.  The step is
+            // taken as a magnitude (its sign is ignored; direction runs from
+            // start to end); a 0 or absent step means 1.
+            size_t d1 = inside.find("..");
+            if (d1 != std::string::npos) {
+              std::string a = inside.substr(0, d1);
+              std::string rest = inside.substr(d1 + 2);
+              size_t d2 = rest.find("..");
+              std::string b = (d2 == std::string::npos) ? rest : rest.substr(0, d2);
+              std::string stepstr = (d2 == std::string::npos) ? std::string() : rest.substr(d2 + 2);
+              char *ea = nullptr, *eb = nullptr, *es = nullptr;
               long va = std::strtol(a.c_str(), &ea, 10), vb = std::strtol(b.c_str(), &eb, 10);
-              if (ea && *ea == '\0' && eb && *eb == '\0' && !a.empty() && !b.empty()) {
-                // Cap the range length: an enormous {a..b} would otherwise build
-                // billions of strings and abort the shell on bad_alloc.  Beyond
-                // the cap, leave the word unexpanded rather than crash.  (span is
-                // the element count minus one; computed via unsigned to avoid
-                // signed overflow on a huge span.)
+              long step = stepstr.empty() ? 1 : std::strtol(stepstr.c_str(), &es, 10);
+              bool step_ok = stepstr.empty() || (es && *es == '\0');
+              if (step == 0) step = 1;
+              else if (step < 0) step = -step;
+              bool a_num = ea && *ea == '\0' && !a.empty();
+              bool b_num = eb && *eb == '\0' && !b.empty();
+              if (a_num && b_num && step_ok) {
+                // Zero-pad the terms to a common width when either bound is
+                // written with a leading zero (`{00..10}' -> 00 01 ... 10).
+                auto digits = [](const std::string &s) {
+                  size_t p = (!s.empty() && (s[0] == '-' || s[0] == '+')) ? 1 : 0;
+                  return s.substr(p);
+                };
+                std::string da = digits(a), db = digits(b);
+                bool pad = (da.size() > 1 && da[0] == '0') || (db.size() > 1 && db[0] == '0');
+                size_t width = std::max(da.size(), db.size());
+                auto fmt = [&](long v) {
+                  if (!pad) return std::to_string(v);
+                  bool neg = v < 0;
+                  std::string d = std::to_string(neg ? -v : v);
+                  while (d.size() < width) d = "0" + d;
+                  return (neg ? "-" : "") + d;
+                };
                 unsigned long long span =
                     (va <= vb) ? static_cast<unsigned long long>(vb) - static_cast<unsigned long long>(va)
                                : static_cast<unsigned long long>(va) - static_cast<unsigned long long>(vb);
-                if (span < kMaxBraceItems) {
-                  if (va <= vb) for (long v = va; v <= vb; v++) items.push_back(std::to_string(v));
-                  else for (long v = va; v >= vb; v--) items.push_back(std::to_string(v));
+                if (span / static_cast<unsigned long long>(step) < kMaxBraceItems) {
+                  if (va <= vb) for (long v = va; v <= vb; v += step) items.push_back(fmt(v));
+                  else for (long v = va; v >= vb; v -= step) items.push_back(fmt(v));
                 }
-              } else if (a.size() == 1 && b.size() == 1 &&
+              } else if (a.size() == 1 && b.size() == 1 && step_ok &&
                          std::isalpha(static_cast<unsigned char>(a[0])) &&
                          std::isalpha(static_cast<unsigned char>(b[0]))) {
                 char ca = a[0], cb = b[0];
-                if (ca <= cb) for (char v = ca; v <= cb; v++) items.push_back(std::string(1, v));
-                else for (char v = ca; v >= cb; v--) items.push_back(std::string(1, v));
+                if (ca <= cb) for (int v = ca; v <= cb; v += step) items.push_back(std::string(1, static_cast<char>(v)));
+                else for (int v = ca; v >= cb; v -= step) items.push_back(std::string(1, static_cast<char>(v)));
               }
             }
           }
