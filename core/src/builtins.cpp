@@ -2077,6 +2077,31 @@ int signame_to_num(const std::string &s) {
 }
 
 int bi_kill(Shell &sh, const std::vector<std::string> &argv) {
+  // `kill -l [sigspec ...]' / `kill -L ...': list signal names and numbers.
+  if (argv.size() > 1 && (argv[1] == "-l" || argv[1] == "-L")) {
+    if (argv.size() == 2) {  // list them all
+      for (int s = 1; s < NSIG; s++)
+        if (const char *nm = trapname_from_num(s)) std::printf("%2d) SIG%s\n", s, nm);
+      return 0;
+    }
+    int st = 0;
+    for (size_t k = 2; k < argv.size(); k++) {
+      const std::string &a = argv[k];
+      if (!a.empty() && std::isdigit(static_cast<unsigned char>(a[0]))) {
+        int n = std::atoi(a.c_str());
+        if (n > 128) n -= 128;  // a 128+signum exit status names the signal
+        if (const char *nm = trapname_from_num(n)) std::printf("%s\n", nm);
+        else {
+          std::fprintf(stderr, "%skill: %s: invalid signal specification\n",
+                       sh.err_prefix().c_str(), a.c_str());
+          st = 1;
+        }
+      } else {
+        std::printf("%d\n", signame_to_num(a));  // name -> number
+      }
+    }
+    return st;
+  }
   int sig = SIGTERM;
   size_t i = 1;
   if (argv.size() > 1 && argv[1].size() > 1 && argv[1][0] == '-') {
