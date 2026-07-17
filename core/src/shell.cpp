@@ -117,6 +117,7 @@ bool Shell::dynamic_var(const std::string &name, std::string &out) {
   if (name == "BASHPID") { out = std::to_string(static_cast<long>(getpid())); return true; }
   if (name == "BASH_ARGV0") { out = arg0; return true; }  // reflects $0; always set
   if (name == "BASH_COMMAND") { out = bash_command; return true; }  // command being run
+  if (name == "BASH_TRAPSIG") { out = trap_sig ? std::to_string(trap_sig) : ""; return true; }
   if (name == "HISTCMD") { out = std::to_string(history_length); return true; }  // history number
   if (name == "BASH_SUBSHELL") { out = std::to_string(subshell_level); return true; }
   if (name == "EPOCHSECONDS") {
@@ -270,8 +271,11 @@ void Shell::run_pending_traps() {
     if (it == traps.end() || it->second.empty()) continue;
     in_trap = true;
     int saved = last_status;  // the interrupted command's $?
+    int saved_sig = trap_sig;
+    trap_sig = s;             // $BASH_TRAPSIG names the delivering signal
     std::string cmd = it->second;
     run_string(cmd);
+    trap_sig = saved_sig;
     last_status = saved;
     in_trap = false;
   }
