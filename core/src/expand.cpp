@@ -1862,6 +1862,23 @@ std::vector<std::string> brace_expand(const std::string &text) {
             // A backslash escapes the next character (`{abc\,def}' is a single
             // item, not two): keep both so later quote removal strips the `\'.
             if (ic == '\\' && k + 1 < inside.size()) { cur += ic; cur += inside[++k]; continue; }
+            // A quoted comma is not a separator (`{"x,x"}' is one item): copy the
+            // quoted span verbatim, leaving the quotes for later removal.
+            if (ic == '\'') {
+              cur += ic;
+              while (++k < inside.size() && inside[k] != '\'') cur += inside[k];
+              if (k < inside.size()) cur += inside[k];
+              continue;
+            }
+            if (ic == '"') {
+              cur += ic;
+              while (++k < inside.size() && inside[k] != '"') {
+                if (inside[k] == '\\' && k + 1 < inside.size()) cur += inside[k++];
+                cur += inside[k];
+              }
+              if (k < inside.size()) cur += inside[k];
+              continue;
+            }
             if (ic == '{') d++;
             else if (ic == '}') d--;
             if (ic == ',' && d == 0) { parts.push_back(cur); cur.clear(); comma = true; }
