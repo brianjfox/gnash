@@ -39,10 +39,22 @@ void invert_prefix(const Command *c, std::string &out) {
 
 }  // namespace
 
+// The source fd bash prints for a redirection.  An explicit fd is kept; for the
+// dup operators (`>&' / `<&') with no explicit fd bash shows the default it acts
+// on (1 for output, 0 for input), so `>&2' displays as `1>&2'.  Every other
+// redirection with an implicit fd prints none (returns -1).
+int effective_source_fd(const Redirect &r) {
+  if (r.source_fd >= 0) return r.source_fd;
+  if (r.op == RedirOp::DupOutput) return 1;
+  if (r.op == RedirOp::DupInput) return 0;
+  return -1;
+}
+
 void print_redirects(const std::vector<Redirect> &redirs, std::string &out) {
   for (const Redirect &r : redirs) {
     out += ' ';
-    if (r.source_fd >= 0) out += std::to_string(r.source_fd);
+    int sfd = effective_source_fd(r);
+    if (sfd >= 0) out += std::to_string(sfd);
     out += op_string(r.op);
     out += r.target.text;
   }
@@ -220,7 +232,8 @@ struct MPrinter {
 
   void print_redir(const Redirect &r) {
     out += ' ';
-    if (r.source_fd >= 0) out += std::to_string(r.source_fd);
+    int sfd = effective_source_fd(r);
+    if (sfd >= 0) out += std::to_string(sfd);
     switch (r.op) {
       case RedirOp::HereDoc: out += "<<"; out += r.target.text; return;
       case RedirOp::HereDocStrip: out += "<<-"; out += r.target.text; return;
@@ -452,11 +465,15 @@ struct MPrinter {
       return;
     }
     if (const auto *fd = dynamic_cast<const FunctionDef *>(c)) {
+      // A function definition nested in another function's body always prints
+      // in the `function NAME ()' form, regardless of how it was written -- the
+      // outer (top-level) display uses the bare `NAME ()' form instead.
+      out += "function ";
       out += fd->name;
       out += " () ";
       out += '\n';
       ind(I);
-      inline_cmd(fd->body.get(), I);
+      print_func_body(fd->body.get(), I);
       return;
     }
     // [[ ]] / (( )) / coproc / anything else: the single-line rendering.
@@ -475,6 +492,21 @@ struct MPrinter {
     std::string one;
     if (c) c->print(one);
     out += one;
+  }
+
+  // A function body always displays as a `{ ... }' group.  A brace-group body
+  // supplies its own braces; any other compound command (subshell, if, for, ...)
+  // is wrapped in an explicit group, matching bash's named_function_string.
+  void print_func_body(const Command *body, int I) {
+    if (dynamic_cast<const Group *>(body)) {
+      inline_cmd(body, I);
+      return;
+    }
+    out += "{ ";
+    nl(I + 4);
+    inline_cmd(body, I + 4);
+    nl(I);
+    out += '}';
   }
 };
 
@@ -528,7 +560,7 @@ std::string named_function_string(const std::string &name, const Command *body) 
   MPrinter p;
   p.out = name + " () ";
   p.out += '\n';
-  p.inline_cmd(body, 0);
+  p.print_func_body(body, 0);
   return p.out;
 }
 

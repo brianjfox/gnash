@@ -164,7 +164,9 @@ bool fnmatch(std::string_view pat, std::string_view str, int flags) {
 std::vector<std::string> glob(std::string_view pattern, int flags) {
   int sm = FNM_PATHNAME | FNM_EXTMATCH;
   bool matchdot = (flags & GX_MATCHDOT) != 0;
-  if (!matchdot) sm |= FNM_PERIOD;
+  // Mirror bash: a leading `.' is matched explicitly (FNM_PERIOD) unless dotglob
+  // is on, in which case only `.'/`..' still require an explicit dot (FNM_DOTDOT).
+  sm |= matchdot ? FNM_DOTDOT : FNM_PERIOD;
   if (flags & GX_NOCASE) sm |= FNM_CASEFOLD;
 
   std::string pat(pattern);

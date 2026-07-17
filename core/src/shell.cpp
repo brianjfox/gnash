@@ -1081,6 +1081,25 @@ static OpenCtx open_context(const std::string &t) {
   return depth > 0 ? OpenCtx::Subst : OpenCtx::None;
 }
 
+// Whether a trailing backslash in T is literal rather than a line continuation.
+// It is literal when T ends inside an open single-quoted string, since backslash
+// is not special there -- except when that single quote is nested inside an
+// old-style backtick, whose own backslash pre-pass splices `\<newline>' away
+// before the inner quoting is even seen.  A single quote inside `$(...)' (or at
+// top level) keeps the backslash literal; only backticks force the splice.
+static bool squote_backslash_literal(const std::string &t) {
+  bool squote = false, dquote = false, btick = false;
+  for (size_t i = 0; i < t.size(); i++) {
+    char c = t[i];
+    if (squote) { if (c == '\'') squote = false; continue; }
+    if (c == '\\') { if (i + 1 < t.size()) i++; continue; }
+    if (c == '\'' && !dquote) squote = true;
+    else if (c == '"') dquote = !dquote;
+    else if (c == '`') btick = !btick;
+  }
+  return squote && !btick;
+}
+
 int Shell::run_script_lines(const std::string &text) {
   if (is_csh()) return run_string(text);  // csh runs whole-buffer
 
@@ -1173,10 +1192,13 @@ int Shell::run_script_lines(const std::string &text) {
     else if (pending.empty()) pending = line;
     else pending += "\n" + line;
 
-    // A trailing (unescaped) backslash continues onto the next line.
+    // A trailing (unescaped) backslash continues onto the next line -- but not
+    // inside a single-quoted string, where the backslash and newline are both
+    // literal and the quote itself is what carries the command onto the next
+    // line (handled below by the incomplete-parse path).
     size_t nbs = 0;
     while (nbs < pending.size() && pending[pending.size() - 1 - nbs] == '\\') nbs++;
-    if (nbs % 2 == 1) {
+    if (nbs % 2 == 1 && !squote_backslash_literal(pending)) {
       pending.pop_back();
       cont_bslash = true;
       continue;
