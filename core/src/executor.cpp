@@ -590,8 +590,10 @@ int Executor::run_pipeline(const Connection *c) {
       if (i + 1 < n) { close(pipefd[0]); dup2(pipefd[1], 1); close(pipefd[1]); }
       sh_.job_control = false;  // pipeline stage: no nested tty control
       // A pipeline stage is a subshell: without errtrace it does not inherit the
-      // ERR trap (the whole pipeline fires it once in the parent instead).
+      // ERR trap (the whole pipeline fires it once in the parent instead), and
+      // it never inherits the parent's EXIT trap -- only one it sets itself runs.
       if (!sh_.opt_functrace) sh_.traps.erase("ERR");
+      sh_.traps.erase("EXIT");
       // A simple command as a pipeline stage does not raise $BASH_SUBSHELL; a
       // compound one does.  An explicit ( ) subshell counts itself in
       // run_subshell, so don't double-count it here.
@@ -600,6 +602,16 @@ int Executor::run_pipeline(const Connection *c) {
         sh_.subshell_level++;
       Executor ex(sh_);
       int s = ex.run(stages[i]);
+      // Run the stage's own EXIT trap, if it installed one, before exiting.
+      auto eit = sh_.traps.find("EXIT");
+      if (eit != sh_.traps.end()) {
+        std::string cmd = eit->second;
+        sh_.traps.erase(eit);
+        sh_.last_status = s;
+        sh_.exiting = false;
+        sh_.run_string(cmd);
+        if (sh_.exiting) s = sh_.exit_status;
+      }
       std::fflush(nullptr);
       _exit(s & 0xff);
     }
