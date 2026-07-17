@@ -1358,23 +1358,27 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
   bool funcs = false, funcnames = false;  // -f (definitions) / -F (names)
   bool fp = false;                        // -p (display reproducibly)
   size_t i = 1;
+  // `+X' flags remove an attribute rather than adding it (`typeset +n foo').
+  bool rm_integer = false, rm_readonly = false, rm_exported = false;
+  bool rm_nameref = false, rm_lcase = false, rm_ucase = false, rm_capcase = false;
   for (; i < argv.size(); i++) {
     const std::string &a = argv[i];
-    if (a.size() >= 2 && a[0] == '-') {
+    if (a.size() >= 2 && (a[0] == '-' || a[0] == '+')) {
+      bool add = a[0] == '-';
       for (size_t k = 1; k < a.size(); k++) {
         switch (a[k]) {
           case 'f': funcs = true; break;
           case 'F': funcnames = true; break;
           case 'a': mk_array = true; break;
           case 'A': mk_assoc = true; break;
-          case 'i': integer = true; break;
-          case 'r': readonly = true; break;
-          case 'x': exported = true; break;
+          case 'i': (add ? integer : rm_integer) = true; break;
+          case 'r': (add ? readonly : rm_readonly) = true; break;
+          case 'x': (add ? exported : rm_exported) = true; break;
           case 'g': global = true; break;
-          case 'n': nameref = true; break;
-          case 'l': lcase = true; break;
-          case 'u': ucase = true; break;
-          case 'c': capcase = true; break;
+          case 'n': (add ? nameref : rm_nameref) = true; break;
+          case 'l': (add ? lcase : rm_lcase) = true; break;
+          case 'u': (add ? ucase : rm_ucase) = true; break;
+          case 'c': (add ? capcase : rm_capcase) = true; break;
           case 'p': fp = true; break;
           default: break;
         }
@@ -1514,6 +1518,16 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     // Mark the nameref last, so the assignment above stored the *target name*
     // as this variable's value rather than being redirected through it.
     if (nameref) v.nameref = true;
+    // `+X' removes attributes.  Applied after the assignment so `typeset +n
+    // foo=other' writes through the still-active nameref to its target before
+    // the reference is torn down, matching bash.
+    if (rm_readonly) v.readonly = false;
+    if (rm_exported) v.exported = false;
+    if (rm_integer) v.integer = false;
+    if (rm_nameref) v.nameref = false;
+    if (rm_ucase) v.ucase = false;
+    if (rm_lcase) v.lcase = false;
+    if (rm_capcase) v.capcase = false;
   }
   return 0;
 }
