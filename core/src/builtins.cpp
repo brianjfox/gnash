@@ -1441,6 +1441,19 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
       bool subscript = nend != std::string::npos && a[nend] == '[';
       if (arraylit || subscript) {
         apply_assignment_word(sh, a);  // NAME=(...) or NAME[i]=...
+      } else if (nameref) {
+        // `declare -n ref=target': store the target NAME as ref's own value.
+        // Bypass Shell::set's deref so retargeting an existing nameref rewrites
+        // the reference itself rather than writing through to its old target.
+        Expander ex(sh);
+        val = ex.expand_assignment(val);
+        Variable &rv = sh.vars[name];
+        if (rv.readonly) {
+          std::fprintf(stderr, "%s%s: readonly variable\n", sh.err_prefix().c_str(),
+                       name.c_str());
+          return 1;
+        }
+        rv.value = append ? rv.value + val : val;
       } else {
         Expander ex(sh);
         val = ex.expand_assignment(val);  // arg arrives raw (assignment builtin)
