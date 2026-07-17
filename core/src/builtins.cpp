@@ -1473,6 +1473,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     return 0;
   }
 
+  int ret = 0;
   for (; i < argv.size(); i++) {
     const std::string &a = argv[i];
     size_t nend = a.find_first_of("[=");
@@ -1492,6 +1493,25 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     std::string pre_val;
     if (scalar_pre) { Expander ex(sh); pre_val = ex.expand_assignment(a.substr(eq + 1)); }
     if (local && !global) sh.make_local(name);
+    // An array cannot be switched between indexed and associative in place; bash
+    // rejects the redeclaration and leaves the variable unchanged.
+    if (mk_array || mk_assoc) {
+      auto av = sh.vars.find(name);
+      if (av != sh.vars.end()) {
+        if (mk_assoc && av->second.kind == VarKind::Indexed) {
+          std::fprintf(stderr, "%s%s: %s: cannot convert indexed to associative array\n",
+                       sh.err_prefix().c_str(), argv[0].c_str(), name.c_str());
+          ret = 1;
+          continue;
+        }
+        if (mk_array && av->second.kind == VarKind::Assoc) {
+          std::fprintf(stderr, "%s%s: %s: cannot convert associative to indexed array\n",
+                       sh.err_prefix().c_str(), argv[0].c_str(), name.c_str());
+          ret = 1;
+          continue;
+        }
+      }
+    }
     if (mk_assoc) sh.make_array(name, true);
     else if (mk_array) sh.make_array(name, false);
     if (eq != std::string::npos) {
@@ -1561,7 +1581,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     if (rm_lcase) v.lcase = false;
     if (rm_capcase) v.capcase = false;
   }
-  return 0;
+  return ret;
 }
 
 int bi_let(Shell &sh, const std::vector<std::string> &argv) {
