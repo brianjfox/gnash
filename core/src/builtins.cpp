@@ -1895,7 +1895,7 @@ int bi_trap(Shell &sh, const std::vector<std::string> &argv) {
       sh.traps.erase(key);
       sh.set_signal_trap(signo, false);
     } else if (ignore) {
-      sh.traps.erase(key);
+      sh.traps[key] = "";  // an ignored signal lists as `trap -- '' SIG'
       signal(signo, SIG_IGN);
     } else {
       sh.traps[key] = cmd;
