@@ -1556,39 +1556,41 @@ std::vector<std::pair<std::string, std::string>> Expander::split_ifs(const std::
   bool zsh = sh_.is_zsh();
   auto splittable = [&](char m) { return m == '4' || (m == '0' && !zsh); };
   std::vector<std::pair<std::string, std::string>> fields;
-  std::string cur, curm;
-  bool have = false;
   auto is_ifs = [&](char c) { return ifs.find(c) != std::string::npos; };
   auto is_ws = [&](char c) { return c == ' ' || c == '\t' || c == '\n'; };
-  auto flush = [&]() { fields.emplace_back(cur, curm); cur.clear(); curm.clear(); have = false; };
-  size_t i = 0;
-  while (i < s.size()) {
-    char c = s[i];
-    // Quoted ('1') and literal ('2') text is never split, even when it contains
-    // IFS characters; '0'/'4' expansion output is (subject to the rule above).
-    bool q = mask[i] == '1' || mask[i] == '2';
-    (void)q;
-    if (mask[i] == MMARK && c == FIELD_SEP) {
-      flush();
+  auto soft_ifs = [&](size_t i) { return splittable(mask[i]) && is_ifs(s[i]); };
+  auto soft_ws = [&](size_t i) { return soft_ifs(i) && is_ws(s[i]); };
+  // bash's list_string algorithm (lib/sh/split.c): leading IFS whitespace is
+  // skipped, then each iteration extracts one field and consumes a single
+  // delimiter of the form [IFS ws]* [one IFS non-ws]? [IFS ws]*.  This makes
+  // ` :' (whitespace then a non-whitespace IFS char) a single delimiter, so
+  // `IFS=": "; set -- $x' on x="a :" yields just "a" rather than "a" plus a
+  // spurious empty field.  Quoted ('1') and literal ('2') text is never a
+  // delimiter, even when it contains IFS characters.  FIELD_SEP marks a hard
+  // array/`$@' element boundary that always splits (empty elements preserved).
+  size_t n = s.size(), i = 0;
+  while (i < n && soft_ws(i)) i++;  // strip leading IFS whitespace
+  while (i < n) {
+    std::string cur, curm;
+    while (i < n && !soft_ifs(i) && !(mask[i] == MMARK && s[i] == FIELD_SEP)) {
+      cur += s[i];
+      curm += mask[i];
       i++;
+    }
+    fields.emplace_back(cur, curm);
+    if (i >= n) break;
+    if (mask[i] == MMARK && s[i] == FIELD_SEP) {
+      i++;  // hard boundary; skip any IFS whitespace leading the next element
+      while (i < n && soft_ws(i)) i++;
       continue;
     }
-    if (splittable(mask[i]) && is_ifs(c)) {
-      if (is_ws(c)) {
-        if (have) flush();
-        while (i < s.size() && splittable(mask[i]) && is_ifs(s[i]) && is_ws(s[i])) i++;
-      } else {
-        flush();
-        i++;
-      }
-      continue;
+    // Soft IFS delimiter: [ws]* [one non-ws]? [ws]*.
+    while (i < n && soft_ws(i)) i++;
+    if (i < n && soft_ifs(i) && !is_ws(s[i])) {
+      i++;
+      while (i < n && soft_ws(i)) i++;
     }
-    cur += c;
-    curm += mask[i];
-    have = true;
-    i++;
   }
-  if (have) flush();
   return fields;
 }
 
