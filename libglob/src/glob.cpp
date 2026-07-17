@@ -67,6 +67,10 @@ std::vector<std::string> match_dir(const std::string &dirpath, const std::string
   if (!d) return out;
   struct dirent *e;
   while ((e = readdir(d)) != nullptr) {
+    // bash's GLOBSKIPDOTS (on by default): `.' and `..' are never returned.
+    if (e->d_name[0] == '.' && (e->d_name[1] == '\0' ||
+                                (e->d_name[1] == '.' && e->d_name[2] == '\0')))
+      continue;
     if (sm_match(pat, e->d_name, smflags)) out.emplace_back(e->d_name);
   }
   closedir(d);
