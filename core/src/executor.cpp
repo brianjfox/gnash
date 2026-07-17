@@ -764,9 +764,22 @@ int Executor::run_simple(const SimpleCommand *c) {
   }
 
   if (sh_.opt_xtrace) {
-    std::string line = "+";
-    for (const auto &a : assigns) line += " " + a.first + "=" + a.second;
-    for (const auto &a : argv) line += " " + a;
+    // bash's xtrace prefix is $PS4 (default `+ '), decoded for prompt escapes
+    // then word-expanded, so `$LINENO' and friends resolve for the traced line.
+    std::string ps4 = sh_.is_set("PS4") ? sh_.get("PS4") : "+ ";
+    Expander xex(sh_);
+    std::string line = xex.expand_no_split(expand_prompt(sh_, ps4), false, false);
+    bool first = true;
+    for (const auto &a : assigns) {
+      if (!first) line += ' ';
+      line += a.first + "=" + a.second;
+      first = false;
+    }
+    for (const auto &a : argv) {
+      if (!first) line += ' ';
+      line += a;
+      first = false;
+    }
     std::fprintf(stderr, "%s\n", line.c_str());
   }
 
