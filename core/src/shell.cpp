@@ -246,8 +246,12 @@ void Shell::set_signal_trap(int signo, bool active) {
 int Shell::run_debug_trap(const std::string &cmd_text) {
   auto it = traps.find("DEBUG");
   if (it == traps.end() || in_debug_trap) return 0;
-  // Without functrace, the DEBUG trap fires only outside functions.
-  if (!opt_functrace && in_function()) return 0;
+  // Without functrace a function does not inherit the DEBUG trap: inside one it
+  // fires only if the function installed its own (the body differs from what it
+  // was when the innermost function was entered).
+  if (!opt_functrace && in_function() &&
+      (debug_frame.empty() || it->second == debug_frame.back()))
+    return 0;
   in_debug_trap = true;
   bash_command = cmd_text;
   int saved = last_status;  // $? inside the trap is the previous command's status
