@@ -357,16 +357,47 @@ std::string Shell::deref(const std::string &n) const {
   return cur;
 }
 
+bool Shell::nameref_elt(const std::string &n_in, std::string &base,
+                        std::string &sub) const {
+  // Only a nameref may introduce a subscript.  A name that already contains a
+  // `[' is a direct element reference (`a[0]', handled by array_get/array_set),
+  // not a nameref-to-element, and must not be rerouted here.
+  if (n_in.find('[') != std::string::npos) return false;
+  std::string d = deref(n_in);
+  // A `[' in the dereferenced name can only appear because a nameref in the
+  // chain pointed at a subscripted target (`declare -n r=a[2]').
+  size_t lb = d.find('[');
+  if (lb == 0 || lb == std::string::npos || d.back() != ']') return false;
+  base = d.substr(0, lb);
+  sub = d.substr(lb + 1, d.size() - lb - 2);
+  return true;
+}
+
 bool Shell::is_set(const std::string &n_in) const {
   // BASH_ALIASES/BASH_CMDS always exist; BASH_ARGC/BASH_ARGV exist while their
   // (extdebug-only) view is non-empty.
   if (n_in == "BASH_ALIASES" || n_in == "BASH_CMDS") return true;
   if (n_in == "BASH_ARGC" || n_in == "BASH_ARGV") return !argframes.empty();
+  std::string base, sub;
+  if (nameref_elt(n_in, base, sub)) {
+    // A nameref to an array element is "set" iff that element exists.
+    auto it = vars.find(base);
+    if (it == vars.end()) return false;
+    const Variable &v = it->second;
+    if (v.kind == VarKind::Assoc) return v.assoc.count(sub) != 0;
+    bool ok = true;
+    long long k = eval_arith(const_cast<Shell &>(*this), sub, &ok);
+    if (!ok) k = 0;
+    if (v.kind == VarKind::Indexed) return v.idx.count(k) != 0;
+    return k == 0;  // a scalar's element [0] is the scalar itself
+  }
   std::string n = deref(n_in);
   return vars.count(n) != 0;
 }
 
 std::string Shell::get(const std::string &n_in) const {
+  std::string base, sub;
+  if (nameref_elt(n_in, base, sub)) return array_get(base, sub);
   std::string n = deref(n_in);
   auto it = vars.find(n);
   if (it == vars.end()) return std::string();
@@ -755,6 +786,12 @@ void Shell::make_local(const std::string &n) {
 }
 
 bool Shell::get_if_set(const std::string &n_in, std::string &out) const {
+  std::string base, sub;
+  if (nameref_elt(n_in, base, sub)) {
+    if (!is_set(n_in)) return false;
+    out = array_get(base, sub);
+    return true;
+  }
   std::string n = deref(n_in);
   auto it = vars.find(n);
   if (it == vars.end()) return false;
@@ -775,6 +812,21 @@ bool Shell::get_if_set(const std::string &n_in, std::string &out) const {
 }
 
 bool Shell::set(const std::string &n_in, const std::string &v) {
+  // A nameref whose target is an array element (`declare -n r=a[2]'): write
+  // through to that element.  array_set enforces the target's readonly flag.
+  {
+    std::string base, sub;
+    if (nameref_elt(n_in, base, sub)) {
+      auto it = vars.find(base);
+      if (it != vars.end() && it->second.readonly) {
+        std::fprintf(stderr, "%s%s: readonly variable\n", err_prefix().c_str(),
+                     base.c_str());
+        return false;
+      }
+      array_set(base, sub, v);
+      return true;
+    }
+  }
   std::string n = deref(n_in);
   // Assigning BASH_ARGV0 resets $0 (and the name used in error messages), as
   // bash does; still stored so `$BASH_ARGV0' reads back the value.
