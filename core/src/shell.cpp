@@ -711,6 +711,12 @@ void Shell::make_array(const std::string &n_in, bool assoc) {
   bool fresh = !vars.count(n);
   Variable &v = vars[n];
   if (fresh) v.invisible = true;  // `declare -a b' with no value: declared, unset
+  // `declare -a' on an unset nameref (deref lands on the nameref itself)
+  // converts it into a genuine, still-unset array, dropping the reference.
+  if (v.nameref) {
+    v.nameref = false;
+    v.invisible = true;
+  }
   if (v.kind == VarKind::Scalar) {
     // Converting an existing scalar to an indexed array keeps its value as
     // element 0 (`a=abcde; declare -a a' leaves ${a[0]} == abcde), matching
