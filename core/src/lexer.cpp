@@ -82,6 +82,27 @@ struct Lexer {
     return std::isalpha(static_cast<unsigned char>(c0)) || c0 == '_';
   }
 
+  // The word so far is a plain name (`a', `foo_1'): a candidate array-assignment
+  // target whose `[subscript]' should be scanned as one word.
+  static bool is_name_word(const std::string &w) {
+    if (w.empty() || !(std::isalpha(static_cast<unsigned char>(w[0])) || w[0] == '_'))
+      return false;
+    for (char c : w)
+      if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '_')) return false;
+    return true;
+  }
+
+  // Offset of the `]' matching the `[' at START (handling nesting), or npos.
+  std::size_t matching_bracket(std::size_t start) const {
+    int depth = 0;
+    for (std::size_t k = start; k < n; k++) {
+      if (in[k] == '[') depth++;
+      else if (in[k] == ']' && --depth == 0) return k;
+      else if (in[k] == '\n') break;  // a subscript does not span input lines here
+    }
+    return std::string::npos;
+  }
+
   explicit Lexer(const std::string &s) : in(s), n(s.size()) {}
 
   char cur() const { return in[pos]; }
@@ -271,6 +292,20 @@ struct Lexer {
         scan_paren(w);  // compound (array) assignment value: name=(...)
         quoted = true;
         continue;
+      }
+      // An array-assignment subscript `name[...]=' / `name[...]+=' is one word,
+      // spaces and all (`a[7 + 8]=v'); a bare `name[...]' (no `=') is not -- so
+      // `set -- a[1 2]' still splits.  Only scan when a `=' follows the `]'.
+      if (c == '[' && is_name_word(w)) {
+        std::size_t close = matching_bracket(pos);
+        std::size_t after = close == std::string::npos ? n : close + 1;
+        bool assign = after < n && (in[after] == '=' ||
+                      (in[after] == '+' && after + 1 < n && in[after + 1] == '='));
+        if (assign) {
+          w.append(in, pos, close - pos + 1);
+          pos = close + 1;
+          continue;
+        }
       }
       // Extended-glob operator: ?(...) *(...) +(...) @(...) !(...)
       if ((c == '?' || c == '*' || c == '+' || c == '@' || c == '!') &&

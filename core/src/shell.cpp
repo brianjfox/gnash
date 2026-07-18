@@ -1346,8 +1346,10 @@ int Shell::run_string(const std::string &script) {
         std::fprintf(stderr, "%s`%s'\n", pfx.c_str(), src.c_str());
       }
     }
-    last_status = 2;
-    return 2;
+    // A compound-assignment syntax error (`a=(x & y)') is reported by bash with
+    // status 1, not the usual 2.
+    last_status = r.assign_error ? 1 : 2;
+    return last_status;
   }
   if (r.heredoc_eof)  // run anyway, with bash's warning
     std::fprintf(stderr,

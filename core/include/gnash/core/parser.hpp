@@ -23,6 +23,7 @@ struct ParseResult {
   std::string error;    // set when ok == false (may be multiple lines)
   int error_line = 0;   // 1-based source line of the failure
   bool incomplete = false;  // input ended mid-construct (needs more lines)
+  bool assign_error = false;  // a compound-assignment syntax error (`a=(x & y)'): $?=1, not 2
   // A here-document body was delimited by end of input: ok stays true and the
   // command is runnable (bash runs it with a warning), but incomplete is also
   // set so line-at-a-time readers keep accumulating input.
