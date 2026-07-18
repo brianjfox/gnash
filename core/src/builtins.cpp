@@ -842,6 +842,16 @@ int bi_export(Shell &sh, const std::vector<std::string> &argv) {
       continue;
     }
     size_t eq = a.find('=');
+    // `export' cannot target a single array element (`export a[5]'); bash reports
+    // it as an invalid identifier.  (zsh's rules differ, so leave it alone.)
+    size_t br = a.find('[');
+    if (br != std::string::npos && (eq == std::string::npos || br < eq) && !sh.is_zsh()) {
+      std::string tgt = (eq == std::string::npos) ? a : a.substr(0, eq);
+      std::fprintf(stderr, "%sexport: `%s': not a valid identifier\n",
+                   sh.err_prefix().c_str(), tgt.c_str());
+      st = 1;
+      continue;
+    }
     if (eq != std::string::npos) {
       // `export name+=value' appends to the current value.
       bool append = eq > 0 && a[eq - 1] == '+';
@@ -1504,6 +1514,16 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     bool arraylit0 = eq != std::string::npos && a.size() > eq + 2 &&
                      a[eq + 1] == '(' && a.back() == ')';
     bool subscript0 = nend != std::string::npos && a[nend] == '[';
+    // `readonly'/`export' cannot target a single array element (`readonly a[5]')
+    // -- bash reports it as an invalid identifier; declare/typeset/local can.
+    // (zsh's array/readonly rules differ, so leave that personality alone.)
+    if (subscript0 && !sh.is_zsh() && (argv[0] == "readonly" || argv[0] == "export")) {
+      std::string tgt = (eq == std::string::npos) ? a : a.substr(0, eq);
+      std::fprintf(stderr, "%s%s: `%s': not a valid identifier\n", sh.err_prefix().c_str(),
+                   argv[0].c_str(), tgt.c_str());
+      ret = 1;
+      continue;
+    }
     bool scalar_pre = eq != std::string::npos && !arraylit0 && !subscript0 && !nameref;
     std::string pre_val;
     if (scalar_pre) { Expander ex(sh); pre_val = ex.expand_assignment(a.substr(eq + 1)); }
