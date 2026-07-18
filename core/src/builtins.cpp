@@ -876,14 +876,25 @@ int bi_export(Shell &sh, const std::vector<std::string> &argv) {
 int bi_unset(Shell &sh, const std::vector<std::string> &argv) {
   bool funcs = false;
   bool noref = false;  // `-n': remove the nameref itself, not its target
+  int ret = 0;
   for (size_t i = 1; i < argv.size(); i++) {
     if (argv[i] == "-f") { funcs = true; continue; }
     if (argv[i] == "-v") { funcs = false; continue; }
     if (argv[i] == "-n") { noref = true; continue; }
-    if (funcs) sh.functions.erase(argv[i]);
-    else sh.unset(argv[i], false, noref);
+    if (funcs) { sh.functions.erase(argv[i]); continue; }
+    // A readonly variable cannot be unset.  Resolve through a nameref (unless
+    // -n) so the target that is actually readonly is the one reported.
+    std::string tgt = noref ? argv[i] : sh.deref(argv[i]);
+    auto it = sh.vars.find(tgt);
+    if (it != sh.vars.end() && it->second.readonly) {
+      std::fprintf(stderr, "%sunset: %s: cannot unset: readonly variable\n",
+                   sh.err_prefix().c_str(), tgt.c_str());
+      ret = 1;
+      continue;
+    }
+    sh.unset(argv[i], false, noref);
   }
-  return 0;
+  return ret;
 }
 
 // Quote a scalar value for `set' output: bare if it is "simple", else single
