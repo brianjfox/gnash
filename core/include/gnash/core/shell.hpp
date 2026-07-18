@@ -40,6 +40,8 @@ struct Variable {
   bool ucase = false;    // `declare -u': uppercase the value on every assignment
   bool lcase = false;    // `declare -l': lowercase the value on every assignment
   bool capcase = false;  // `declare -c': capitalize the value on every assignment
+  bool invisible = false;  // declared with no value (`declare -a b'): unset, so
+                           // `declare -p' prints it without a `=' / `=()' value
 };
 
 class Shell {

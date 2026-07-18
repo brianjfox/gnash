@@ -935,7 +935,10 @@ void declare_print_var(const std::string &name, const Variable &v) {
   if (v.ucase) f += 'u';
   std::string decl = "declare -" + (f.empty() ? std::string("-") : f);
   decl += ' ' + name;
-  if (v.kind == VarKind::Indexed) {
+  if (v.invisible) {
+    // Declared with no value (`declare -a b'): bash prints just the attributes
+    // and name, no `=' / `=()'.
+  } else if (v.kind == VarKind::Indexed) {
     decl += "=(";
     bool first = true;
     for (const auto &kv : v.idx) {
