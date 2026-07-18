@@ -875,11 +875,13 @@ int bi_export(Shell &sh, const std::vector<std::string> &argv) {
 
 int bi_unset(Shell &sh, const std::vector<std::string> &argv) {
   bool funcs = false;
+  bool noref = false;  // `-n': remove the nameref itself, not its target
   for (size_t i = 1; i < argv.size(); i++) {
     if (argv[i] == "-f") { funcs = true; continue; }
     if (argv[i] == "-v") { funcs = false; continue; }
+    if (argv[i] == "-n") { noref = true; continue; }
     if (funcs) sh.functions.erase(argv[i]);
-    else sh.unset(argv[i]);
+    else sh.unset(argv[i], false, noref);
   }
   return 0;
 }
@@ -1619,7 +1621,16 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
         sh.set(name, val);
       }
     }
-    Variable &v = sh.vars[name];
+    // Applying an attribute to an existing nameref (without a `-n'/`+n' on this
+    // command) follows the reference and applies it to the target, creating the
+    // target if needed -- e.g. `readonly ref' marks ref's target readonly.  bash
+    // resolves the nameref because -n is not present.
+    std::string aname = name;
+    if (!nameref && !rm_nameref) {
+      auto nit = sh.vars.find(name);
+      if (nit != sh.vars.end() && nit->second.nameref) aname = sh.deref(name);
+    }
+    Variable &v = sh.vars[aname];
     if (readonly) v.readonly = true;
     if (exported) v.exported = true;
     if (integer) v.integer = true;
