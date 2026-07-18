@@ -1251,7 +1251,20 @@ int Executor::run_for(const ForCommand *c) {
     std::fprintf(stderr, "%s\n", line.c_str());
   }
   for (const std::string &item : items) {
-    sh_.set(c->var, item);
+    // A nameref loop variable is special: each iteration *retargets* the
+    // reference to name ITEM rather than writing ITEM through to its current
+    // target (bash treats `for ref in a b c' like successive `declare -n
+    // ref=a/b/c').  A readonly nameref cannot be retargeted.
+    auto vit = sh_.vars.find(c->var);
+    if (vit != sh_.vars.end() && vit->second.nameref) {
+      if (vit->second.readonly)
+        std::fprintf(stderr, "%s%s: readonly variable\n", sh_.err_prefix().c_str(),
+                     c->var.c_str());
+      else
+        vit->second.value = item;
+    } else {
+      sh_.set(c->var, item);
+    }
     st = run(c->body.get());
     if (sh_.break_count) { sh_.break_count--; break; }
     if (sh_.continue_count) { sh_.continue_count--; continue; }
