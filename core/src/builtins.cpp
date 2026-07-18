@@ -1724,6 +1724,10 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
             std::fprintf(stderr, "%s%s: `%s': not a valid identifier\n",
                          sh.err_prefix().c_str(), argv[0].c_str(), val.c_str());
           ret = 1;
+          // At global scope the still-invisible nameref is discarded (a later
+          // `declare -p' reports it as not found); a function-local one made by
+          // this scope persists.
+          if (!sh.in_function()) sh.vars.erase(name);
           continue;
         }
         sh.set(name, val);
