@@ -276,6 +276,18 @@ struct Parser {
     return n;
   }
 
+  // `&' backgrounds only the command immediately before it.  Because the list
+  // is built left-associatively, that command is LEFT->second when LEFT is a
+  // `;'/newline sequence -- so `A; B &' becomes `A; (B &)', not `(A; B) &'.
+  static CommandPtr background_tail(CommandPtr left, CommandPtr right) {
+    if (auto *cn = dynamic_cast<Connection *>(left.get());
+        cn && (cn->conn == Connector::Semi || cn->conn == Connector::Newline)) {
+      cn->second = connect(Connector::Amp, std::move(cn->second), std::move(right));
+      return left;
+    }
+    return connect(Connector::Amp, std::move(left), std::move(right));
+  }
+
   CommandPtr parse_list(std::initializer_list<const char *> stops) {
     newline_list();
     if (at_list_end(stops)) return nullptr;
@@ -293,11 +305,14 @@ struct Parser {
       advance();
       newline_list();
       if (at_list_end(stops)) {
-        if (conn == Connector::Amp) left = connect(Connector::Amp, std::move(left), nullptr);
+        if (conn == Connector::Amp) left = background_tail(std::move(left), nullptr);
         break;
       }
       CommandPtr right = parse_and_or(stops);
-      left = connect(conn, std::move(left), std::move(right));
+      if (conn == Connector::Amp)
+        left = background_tail(std::move(left), std::move(right));
+      else
+        left = connect(conn, std::move(left), std::move(right));
     }
     return left;
   }
