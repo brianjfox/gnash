@@ -278,10 +278,13 @@ struct Parser {
 
   // `&' backgrounds only the command immediately before it.  Because the list
   // is built left-associatively, that command is LEFT->second when LEFT is a
-  // `;'/newline sequence -- so `A; B &' becomes `A; (B &)', not `(A; B) &'.
+  // list-level sequence (`;', newline, or an earlier `&') -- so `A; B &' becomes
+  // `A; (B &)' and `A & B &' becomes `A & (B &)', two separate jobs, rather than
+  // backgrounding the whole preceding list in one child.
   static CommandPtr background_tail(CommandPtr left, CommandPtr right) {
     if (auto *cn = dynamic_cast<Connection *>(left.get());
-        cn && (cn->conn == Connector::Semi || cn->conn == Connector::Newline)) {
+        cn && (cn->conn == Connector::Semi || cn->conn == Connector::Newline ||
+               cn->conn == Connector::Amp)) {
       cn->second = connect(Connector::Amp, std::move(cn->second), std::move(right));
       return left;
     }
