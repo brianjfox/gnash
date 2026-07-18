@@ -1433,6 +1433,9 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
         // `declare -p' with attribute flags (`-pa', `-pi', `-pr', ...) lists
         // only the variables carrying those attributes, not every variable.
         for (const auto &kv : sh.vars) {
+          const std::string &nm = kv.first;
+          if (nm.empty() || !(std::isalpha(static_cast<unsigned char>(nm[0])) || nm[0] == '_'))
+            continue;  // skip special parameters like $, ?, # (not real variables)
           const Variable &v = kv.second;
           if (mk_array && v.kind != VarKind::Indexed) continue;
           if (mk_assoc && v.kind != VarKind::Assoc) continue;
@@ -1488,6 +1491,9 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
       (nameref || readonly || integer || exported || mk_array || mk_assoc ||
        lcase || ucase || capcase)) {
     for (const auto &kv : sh.vars) {
+      const std::string &nm = kv.first;
+      if (nm.empty() || !(std::isalpha(static_cast<unsigned char>(nm[0])) || nm[0] == '_'))
+        continue;  // skip special parameters like $, ?, # (not real variables)
       const Variable &v = kv.second;
       if (nameref && !v.nameref) continue;
       if (readonly && !v.readonly) continue;
