@@ -1125,6 +1125,14 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
         }
         return names;
       }
+      // ${!ref} where ref is a nameref expands to the NAME of the referenced
+      // variable, not a second level of indirection (bash special-cases a
+      // nameref here).
+      auto nit = sh.vars.find(iname);
+      if (q == b.size() && nit != sh.vars.end() && nit->second.nameref) {
+        std::string tname = sh.deref(iname);
+        return length ? std::to_string(tname.size()) : tname;
+      }
       // The value of INAME is the parameter to expand; any operator that
       // follows applies to the indirected parameter.
       std::string target = sh.get(iname);

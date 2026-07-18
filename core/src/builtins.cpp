@@ -876,14 +876,25 @@ int bi_export(Shell &sh, const std::vector<std::string> &argv) {
 int bi_unset(Shell &sh, const std::vector<std::string> &argv) {
   bool funcs = false;
   bool noref = false;  // `-n': remove the nameref itself, not its target
+  int ret = 0;
   for (size_t i = 1; i < argv.size(); i++) {
     if (argv[i] == "-f") { funcs = true; continue; }
     if (argv[i] == "-v") { funcs = false; continue; }
     if (argv[i] == "-n") { noref = true; continue; }
-    if (funcs) sh.functions.erase(argv[i]);
-    else sh.unset(argv[i], false, noref);
+    if (funcs) { sh.functions.erase(argv[i]); continue; }
+    // A readonly variable cannot be unset.  Resolve through a nameref (unless
+    // -n) so the target that is actually readonly is the one reported.
+    std::string tgt = noref ? argv[i] : sh.deref(argv[i]);
+    auto it = sh.vars.find(tgt);
+    if (it != sh.vars.end() && it->second.readonly) {
+      std::fprintf(stderr, "%sunset: %s: cannot unset: readonly variable\n",
+                   sh.err_prefix().c_str(), tgt.c_str());
+      ret = 1;
+      continue;
+    }
+    sh.unset(argv[i], false, noref);
   }
-  return 0;
+  return ret;
 }
 
 // Quote a scalar value for `set' output: bare if it is "simple", else single
@@ -1433,6 +1444,9 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
         // `declare -p' with attribute flags (`-pa', `-pi', `-pr', ...) lists
         // only the variables carrying those attributes, not every variable.
         for (const auto &kv : sh.vars) {
+          const std::string &nm = kv.first;
+          if (nm.empty() || !(std::isalpha(static_cast<unsigned char>(nm[0])) || nm[0] == '_'))
+            continue;  // skip special parameters like $, ?, # (not real variables)
           const Variable &v = kv.second;
           if (mk_array && v.kind != VarKind::Indexed) continue;
           if (mk_assoc && v.kind != VarKind::Assoc) continue;
@@ -1488,6 +1502,9 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
       (nameref || readonly || integer || exported || mk_array || mk_assoc ||
        lcase || ucase || capcase)) {
     for (const auto &kv : sh.vars) {
+      const std::string &nm = kv.first;
+      if (nm.empty() || !(std::isalpha(static_cast<unsigned char>(nm[0])) || nm[0] == '_'))
+        continue;  // skip special parameters like $, ?, # (not real variables)
       const Variable &v = kv.second;
       if (nameref && !v.nameref) continue;
       if (readonly && !v.readonly) continue;

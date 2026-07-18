@@ -54,6 +54,10 @@ class Shell {
   // Follow a `declare -n' nameref chain to the ultimate target name (with a
   // cycle guard); returns n unchanged when it is not a nameref.
   std::string deref(const std::string &n) const;
+  // If following N's nameref chain lands on a subscripted target `base[sub]'
+  // (`declare -n ref=arr[2]'), split it into BASE and SUB (raw subscript text,
+  // evaluated by array_get/array_set) and return true; otherwise false.
+  bool nameref_elt(const std::string &n, std::string &base, std::string &sub) const;
   std::string get(const std::string &n) const;  // "" if unset
   bool get_if_set(const std::string &n, std::string &out) const;
   // Assign N=V; false if N is readonly (an error is printed).
