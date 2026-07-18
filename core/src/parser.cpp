@@ -77,6 +77,7 @@ struct Parser {
   std::size_t i = 0;
   bool err = false;
   bool incomplete = false;
+  bool assign_error = false;  // compound-assignment syntax error (`a=(x & y)')
   std::string errmsg;
   int err_line = 0;  // source line of the first failure
   // Stack of open compound commands (opener word/char + its line), so an EOF
@@ -453,9 +454,15 @@ struct Parser {
       }
       if (cur().type == Tok::Word) {
         int wf = cur().quoted ? W_QUOTED : 0;
-        if (still_prefix && is_name_assignment(cur().text))
+        if (still_prefix && is_name_assignment(cur().text)) {
+          std::string bad = array_literal_bad_token(cur().text);
+          if (!bad.empty()) {  // e.g. `a=(x & y)': invalid in a compound assignment
+            fail("near unexpected token `" + bad + "'");
+            assign_error = true;  // bash reports $?=1 for this, not the usual 2
+            return sc;
+          }
           wf |= W_ASSIGNMENT;
-        else
+        } else
           still_prefix = false;
         sc->words.push_back(Word{cur().text, wf});
         advance();
@@ -487,6 +494,30 @@ struct Parser {
     }
     if (i < s.size() && s[i] == '+') i++;
     return i < s.size() && s[i] == '=';
+  }
+
+  // If W is an array-literal assignment `name=(...)' whose contents contain a
+  // token that is invalid there -- a control operator (`&' `|' `;' `&&' `||'),
+  // a redirection, or `(' -- return that token's spelling; else "".  bash
+  // accepts only words, `[sub]=' elements, and newlines inside `(...)'.
+  static std::string array_literal_bad_token(const std::string &w) {
+    std::size_t i = 0;
+    if (i >= w.size() || !(std::isalpha(static_cast<unsigned char>(w[i])) || w[i] == '_'))
+      return "";
+    while (i < w.size() && (std::isalnum(static_cast<unsigned char>(w[i])) || w[i] == '_')) i++;
+    if (i < w.size() && w[i] == '[')
+      for (; i < w.size(); i++) if (w[i] == ']') { i++; break; }
+    if (i < w.size() && w[i] == '+') i++;
+    if (i >= w.size() || w[i] != '=') return "";
+    i++;  // past `='
+    if (i >= w.size() || w[i] != '(' || w.back() != ')') return "";  // not an array literal
+    for (const Token &t : tokenize(w.substr(i + 1, w.size() - i - 2))) {
+      if (t.type == Tok::Eof || t.type == Tok::Word || t.type == Tok::Newline ||
+          t.type == Tok::IoNumber)
+        continue;
+      return tok_to_text(t);
+    }
+    return "";
   }
 
   CommandPtr parse_subshell() {
@@ -964,6 +995,7 @@ struct Parser {
       res.error = errmsg;
       res.error_line = err_line;
       res.incomplete = incomplete;
+      res.assign_error = assign_error;
       res.command.reset();
       return res;
     }
