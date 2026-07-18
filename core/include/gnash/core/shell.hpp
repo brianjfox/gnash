@@ -61,8 +61,10 @@ class Shell {
   void set_exported(const std::string &n, const std::string &v);
   void export_name(const std::string &n);
   // Remove N.  A readonly variable is left in place unless FORCE is set
-  // (bash's unbind_variable_noref, used by getopts to clear OPTARG).
-  void unset(const std::string &n, bool force = false);
+  // (bash's unbind_variable_noref, used by getopts to clear OPTARG).  When
+  // NOREF is set (`unset -n'), the named nameref variable itself is removed
+  // rather than the variable it points at.
+  void unset(const std::string &n, bool force = false, bool noref = false);
 
   // --- arrays ------------------------------------------------------------
   std::vector<std::string> array_values(const std::string &n) const;

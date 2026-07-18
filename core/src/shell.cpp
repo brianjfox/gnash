@@ -841,13 +841,13 @@ void Shell::set_exported(const std::string &n_in, const std::string &v) {
 
 void Shell::export_name(const std::string &n) { vars[n].exported = true; }
 
-void Shell::unset(const std::string &n_in, bool force) {
+void Shell::unset(const std::string &n_in, bool force, bool noref) {
   if (n_in == "HISTSIZE" && history_loaded) unstifle_history();
-  // `unset name' on a nameref removes the target; only `unset -n' (not modeled
-  // here) removes the nameref itself.  Following the ref matches common usage.
-  // FORCE mirrors bash's unbind_variable_noref: remove the named variable
-  // itself (no nameref following) even when it is readonly.
-  std::string n = force ? n_in : deref(n_in);
+  // `unset name' on a nameref removes the target; `unset -n name' (NOREF)
+  // removes the nameref variable itself.  Following the ref matches common
+  // usage.  FORCE mirrors bash's unbind_variable_noref: remove the named
+  // variable itself (no nameref following) even when it is readonly.
+  std::string n = (force || noref) ? n_in : deref(n_in);
   if (n == "POSIXLY_CORRECT") opt_posix = false;  // unsetting leaves POSIX mode
   auto it = vars.find(n);
   if (it != vars.end() && (force || !it->second.readonly)) vars.erase(it);
