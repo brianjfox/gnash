@@ -54,6 +54,19 @@ class Shell {
   // Follow a `declare -n' nameref chain to the ultimate target name (with a
   // cycle guard); returns n unchanged when it is not a nameref.
   std::string deref(const std::string &n) const;
+  // Like deref, but sets CIRCULAR when the chain forms a cycle (a self
+  // reference `v->v' or a longer loop).  On a cycle it returns the last name
+  // walked before the loop closed; the warning-issuing caller uses the
+  // original NAME for the diagnostic, matching bash's find_variable_nameref.
+  std::string deref_ex(const std::string &n, bool &circular) const;
+  // The global (pre-function) binding of NAME: when a local scope has shadowed
+  // NAME, the saved outer Variable; otherwise the entry in `vars'.  bash
+  // resolves a circular nameref to global scope, so a write through one lands
+  // here.  Creates the saved slot if the global did not exist.
+  Variable &global_var_ref(const std::string &name);
+  // Read-only counterpart of global_var_ref: the global binding of NAME, or
+  // nullptr if there is none (nothing was shadowed and `vars' has no entry).
+  const Variable *global_var_ptr(const std::string &name) const;
   // If following N's nameref chain lands on a subscripted target `base[sub]'
   // (`declare -n ref=arr[2]'), split it into BASE and SUB (raw subscript text,
   // evaluated by array_get/array_set) and return true; otherwise false.
@@ -62,6 +75,10 @@ class Shell {
   // (`foo' or `foo[2]').  bash rejects anything else (`/', `a b', `9x').
   static bool valid_nameref_target(const std::string &s);
   std::string get(const std::string &n) const;  // "" if unset
+  // Like get, but does not warn when N resolves through a circular nameref.
+  // Used for the internal old-value read of an append/arithmetic assignment,
+  // which bash performs silently (only the write itself warns).
+  std::string get_quiet(const std::string &n) const;
   bool get_if_set(const std::string &n, std::string &out) const;
   // Assign N=V; false if N is readonly (an error is printed).
   bool set(const std::string &n, const std::string &v);

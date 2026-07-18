@@ -6,6 +6,7 @@
 #include "gnash/core/shell.hpp"
 
 #include <algorithm>
+#include <set>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
@@ -357,6 +358,44 @@ std::string Shell::deref(const std::string &n) const {
   return cur;
 }
 
+std::string Shell::deref_ex(const std::string &n, bool &circular) const {
+  circular = false;
+  std::string cur = n;
+  std::set<std::string> seen;
+  for (;;) {
+    auto it = vars.find(cur);
+    if (it == vars.end() || !it->second.nameref) return cur;
+    const std::string &tgt = it->second.value;
+    if (tgt.empty()) return cur;  // untargeted nameref: not circular
+    if (tgt == cur || seen.count(tgt)) {  // self reference or a longer loop
+      circular = true;
+      return cur;
+    }
+    seen.insert(cur);
+    cur = tgt;
+  }
+}
+
+Variable &Shell::global_var_ref(const std::string &name) {
+  for (auto &scope : local_stack) {  // front = outermost (nearest to global)
+    for (auto &e : scope)
+      if (e.first == name) {
+        if (!e.second) e.second = Variable{};  // global didn't exist; create it
+        return *e.second;
+      }
+  }
+  return vars[name];
+}
+
+const Variable *Shell::global_var_ptr(const std::string &name) const {
+  for (const auto &scope : local_stack) {  // front = outermost
+    for (const auto &e : scope)
+      if (e.first == name) return e.second ? &*e.second : nullptr;
+  }
+  auto it = vars.find(name);
+  return it == vars.end() ? nullptr : &it->second;
+}
+
 bool Shell::valid_nameref_target(const std::string &s) {
   if (s.empty()) return false;
   if (!(std::isalpha(static_cast<unsigned char>(s[0])) || s[0] == '_')) return false;
@@ -415,16 +454,40 @@ bool Shell::is_set(const std::string &n_in) const {
   return it != vars.end();
 }
 
-std::string Shell::get(const std::string &n_in) const {
-  std::string base, sub;
-  if (nameref_elt(n_in, base, sub)) return array_get(base, sub);
-  std::string n = deref(n_in);
-  auto it = vars.find(n);
-  if (it == vars.end()) return std::string();
-  const Variable &v = it->second;
+static std::string scalar_of(const Variable &v) {
   if (v.kind == VarKind::Indexed) return v.idx.count(0) ? v.idx.at(0) : std::string();
   if (v.kind == VarKind::Assoc) return v.assoc.count("0") ? v.assoc.at("0") : std::string();
   return v.value;
+}
+
+std::string Shell::get(const std::string &n_in) const {
+  std::string base, sub;
+  if (nameref_elt(n_in, base, sub)) return array_get(base, sub);
+  bool circular = false;
+  std::string n = deref_ex(n_in, circular);
+  if (circular) {
+    // bash warns and, at function scope, resolves the reference at global
+    // scope (find_variable_nameref); at global scope it resolves to nothing.
+    std::fprintf(stderr, "%swarning: %s: circular name reference\n",
+                 err_prefix().c_str(), n_in.c_str());
+    const Variable *g = in_function() ? global_var_ptr(n_in) : nullptr;
+    return g ? scalar_of(*g) : std::string();
+  }
+  auto it = vars.find(n);
+  return it == vars.end() ? std::string() : scalar_of(it->second);
+}
+
+std::string Shell::get_quiet(const std::string &n_in) const {
+  std::string base, sub;
+  if (nameref_elt(n_in, base, sub)) return array_get(base, sub);
+  bool circular = false;
+  std::string n = deref_ex(n_in, circular);
+  if (circular) {
+    const Variable *g = in_function() ? global_var_ptr(n_in) : nullptr;
+    return g ? scalar_of(*g) : std::string();
+  }
+  auto it = vars.find(n);
+  return it == vars.end() ? std::string() : scalar_of(it->second);
 }
 
 // ---- arrays ---------------------------------------------------------------
@@ -812,7 +875,28 @@ bool Shell::get_if_set(const std::string &n_in, std::string &out) const {
     out = array_get(base, sub);
     return true;
   }
-  std::string n = deref(n_in);
+  bool circular = false;
+  std::string n = deref_ex(n_in, circular);
+  if (circular) {
+    // Same resolution as get(): warn, and at function scope fall through to the
+    // global binding; a global-scope cycle resolves to nothing (unset).
+    std::fprintf(stderr, "%swarning: %s: circular name reference\n",
+                 err_prefix().c_str(), n_in.c_str());
+    const Variable *g = in_function() ? global_var_ptr(n_in) : nullptr;
+    if (!g) return false;
+    if (g->kind == VarKind::Indexed) {
+      if (!g->idx.count(0)) return false;
+      out = g->idx.at(0);
+      return true;
+    }
+    if (g->kind == VarKind::Assoc) {
+      if (!g->assoc.count("0")) return false;
+      out = g->assoc.at("0");
+      return true;
+    }
+    out = g->value;
+    return true;
+  }
   auto it = vars.find(n);
   if (it == vars.end()) return false;
   // A nameref with no (or a self) target -- deref stops on it -- is unset.
@@ -849,7 +933,36 @@ bool Shell::set(const std::string &n_in, const std::string &v) {
       return true;
     }
   }
-  std::string n = deref(n_in);
+  bool circular = false;
+  std::string n = deref_ex(n_in, circular);
+  // A circular nameref (self reference `v->v' or a longer loop).  At function
+  // scope bash reports the loop as exceeding the max nameref depth and binds
+  // the value at global scope; at global scope it warns and the assignment has
+  // no persistent effect.
+  if (circular) {
+    if (!in_function()) {
+      std::fprintf(stderr, "%swarning: %s: circular name reference\n",
+                   err_prefix().c_str(), n_in.c_str());
+      return true;
+    }
+    std::fprintf(stderr, "%swarning: %s: maximum nameref depth (8) exceeded\n",
+                 err_prefix().c_str(), n_in.c_str());
+    Variable &g = global_var_ref(n_in);
+    if (g.readonly) {
+      std::fprintf(stderr, "%s%s: readonly variable\n", err_prefix().c_str(),
+                   n_in.c_str());
+      return false;
+    }
+    if (g.kind == VarKind::Indexed) {
+      g.idx[0] = v;
+    } else if (g.kind == VarKind::Assoc) {
+      if (!g.assoc.count("0")) g.assoc_seq.push_back("0");
+      g.assoc["0"] = v;
+    } else {
+      g.value = v;
+    }
+    return true;
+  }
   // Assigning to a nameref that has no target yet sets its target (`declare -n
   // r; r=x' points r at x); the value must be a valid identifier.  deref stops
   // on such a nameref, so n still names it.  bash rejects a non-identifier here.

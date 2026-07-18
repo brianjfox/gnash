@@ -757,7 +757,11 @@ int Executor::run_simple(const SimpleCommand *c) {
           sh_.set(pa.first, pa.second);
         }
         std::string v = ex.expand_assignment(a.value);
-        std::string cur = is_arr ? sh_.array_get(a.name, "0") : sh_.get(a.name);
+        // Only the old value is needed for `+=' / integer arithmetic; reading it
+        // for a plain assignment would spuriously resolve a circular nameref.
+        std::string cur = (integer || a.append)
+                              ? (is_arr ? sh_.array_get(a.name, "0") : sh_.get_quiet(a.name))
+                              : std::string();
         for (auto it = prior.rbegin(); it != prior.rend(); ++it) {
           if (it->second) sh_.vars[it->first] = *it->second;
           else sh_.vars.erase(it->first);
