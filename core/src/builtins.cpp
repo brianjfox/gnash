@@ -1644,6 +1644,17 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
           std::fprintf(stderr, "%swarning: %s: circular name reference\n",
                        sh.err_prefix().c_str(), name.c_str());
         }
+        // An explicit empty target (`declare -n r=') is rejected as an invalid
+        // identifier and does not create the nameref (bash reports the empty
+        // name); at global scope no variable survives, in a function the local
+        // that was just made stays as a plain variable.
+        if (tgt.empty()) {
+          std::fprintf(stderr, "%s%s: `': not a valid identifier\n",
+                       sh.err_prefix().c_str(), argv[0].c_str());
+          ret = 1;
+          if (!preexist) sh.vars.erase(name);
+          continue;
+        }
         // The target must be a valid nameref target (`foo' or `foo[2]').  bash
         // rejects anything else and does not create the variable.
         if (!tgt.empty() && !Shell::valid_nameref_target(tgt)) {
@@ -1692,8 +1703,16 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
         if (nrit != sh.vars.end() && nrit->second.nameref &&
             nrit->second.value.empty() && !val.empty() &&
             !Shell::valid_nameref_target(val)) {
-          std::fprintf(stderr, "%s%s: `%s': not a valid identifier\n",
-                       sh.err_prefix().c_str(), argv[0].c_str(), val.c_str());
+          // At function scope bash validates the value as a nameref target
+          // ("invalid variable name for name reference"); at global scope it
+          // reports it as a plain invalid identifier.
+          if (sh.in_function())
+            std::fprintf(stderr,
+                         "%s%s: `%s': invalid variable name for name reference\n",
+                         sh.err_prefix().c_str(), argv[0].c_str(), val.c_str());
+          else
+            std::fprintf(stderr, "%s%s: `%s': not a valid identifier\n",
+                         sh.err_prefix().c_str(), argv[0].c_str(), val.c_str());
           ret = 1;
           continue;
         }
