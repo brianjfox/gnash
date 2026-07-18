@@ -1608,14 +1608,49 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
         auto pv = sh.vars.find(name);
         std::string tgt =
             (append && pv != sh.vars.end()) ? pv->second.value + val : val;
-        // A nameref may not point at itself (`declare -n r=r').  At function
-        // scope a same-name target instead refers to the enclosing variable
-        // (bash warns of a circular reference rather than erroring), so only
-        // reject a self reference outside a function.
-        if (tgt == name && !sh.in_function()) {
-          std::fprintf(stderr,
-                       "%s%s: %s: nameref variable self references not allowed\n",
+        // A nameref may not point at itself (`declare -n r=r'), either directly
+        // or via one of its own elements (`r=r[0]').  At function scope a
+        // same-name target instead refers to the enclosing variable, so bash
+        // warns of a circular reference rather than erroring.
+        bool selfref = (tgt == name);
+        if (!selfref && !tgt.empty()) {
+          size_t lb = tgt.find('[');
+          if (lb != std::string::npos && tgt.back() == ']' &&
+              tgt.substr(0, lb) == name)
+            selfref = true;
+        }
+        if (selfref && !sh.in_function()) {
+          // A direct `=' self reference is rejected by the declare builtin, so
+          // the message carries the builtin name.  One that only becomes a self
+          // reference after `+=' concatenation slips past that check and is
+          // caught later while binding the value, which prints it bare.
+          if (append)
+            std::fprintf(stderr,
+                         "%s%s: nameref variable self references not allowed\n",
+                         sh.err_prefix().c_str(), name.c_str());
+          else
+            std::fprintf(stderr,
+                         "%s%s: %s: nameref variable self references not allowed\n",
+                         sh.err_prefix().c_str(), argv[0].c_str(), name.c_str());
+          ret = 1;
+          if (!preexist) sh.vars.erase(name);
+          continue;
+        }
+        if (selfref) {
+          // Warn once with the builtin prefix and once without, matching bash's
+          // declare.def (builtin_warning) plus bind_variable_value.
+          std::fprintf(stderr, "%s%s: warning: %s: circular name reference\n",
                        sh.err_prefix().c_str(), argv[0].c_str(), name.c_str());
+          std::fprintf(stderr, "%swarning: %s: circular name reference\n",
+                       sh.err_prefix().c_str(), name.c_str());
+        }
+        // An explicit empty target (`declare -n r=') is rejected as an invalid
+        // identifier and does not create the nameref (bash reports the empty
+        // name); at global scope no variable survives, in a function the local
+        // that was just made stays as a plain variable.
+        if (tgt.empty()) {
+          std::fprintf(stderr, "%s%s: `': not a valid identifier\n",
+                       sh.err_prefix().c_str(), argv[0].c_str());
           ret = 1;
           if (!preexist) sh.vars.erase(name);
           continue;
@@ -1668,8 +1703,16 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
         if (nrit != sh.vars.end() && nrit->second.nameref &&
             nrit->second.value.empty() && !val.empty() &&
             !Shell::valid_nameref_target(val)) {
-          std::fprintf(stderr, "%s%s: `%s': not a valid identifier\n",
-                       sh.err_prefix().c_str(), argv[0].c_str(), val.c_str());
+          // At function scope bash validates the value as a nameref target
+          // ("invalid variable name for name reference"); at global scope it
+          // reports it as a plain invalid identifier.
+          if (sh.in_function())
+            std::fprintf(stderr,
+                         "%s%s: `%s': invalid variable name for name reference\n",
+                         sh.err_prefix().c_str(), argv[0].c_str(), val.c_str());
+          else
+            std::fprintf(stderr, "%s%s: `%s': not a valid identifier\n",
+                         sh.err_prefix().c_str(), argv[0].c_str(), val.c_str());
           ret = 1;
           continue;
         }
