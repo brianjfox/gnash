@@ -518,6 +518,8 @@ int Executor::run_connection(const Connection *c) {
         signal(SIGTSTP, SIG_DFL);
         sh_.job_control = false;  // background: descendants must not touch the tty
         sh_.subshell_level++;
+        sh_.traps.erase("CHLD");  // the parent fires CHLD when it reaps this job
+        sh_.pending_sigchld = 0;
         Executor ex(sh_);
         int s = ex.run(c->first.get());
         std::fflush(nullptr);
@@ -594,6 +596,8 @@ int Executor::run_pipeline(const Connection *c) {
       // it never inherits the parent's EXIT trap -- only one it sets itself runs.
       if (!sh_.opt_functrace) sh_.traps.erase("ERR");
       sh_.traps.erase("EXIT");
+      sh_.traps.erase("CHLD");  // the parent fires CHLD for the stage as a whole
+      sh_.pending_sigchld = 0;
       // A simple command as a pipeline stage does not raise $BASH_SUBSHELL; a
       // compound one does.  An explicit ( ) subshell counts itself in
       // run_subshell, so don't double-count it here.
@@ -631,6 +635,7 @@ int Executor::run_pipeline(const Connection *c) {
     int wst = 0;
     waitpid(pids[i], &wst, WUNTRACED);
     if (WIFSTOPPED(wst)) { any_stopped = true; pstat.push_back(128 + WSTOPSIG(wst)); continue; }
+    sh_.note_child_reaped();  // a pipeline stage that terminated
     int s = WIFEXITED(wst) ? WEXITSTATUS(wst) : (128 + WTERMSIG(wst));
     pstat.push_back(s);
     if (i == pids.size() - 1) last_st = s;
@@ -1091,6 +1096,7 @@ int Executor::run_simple(const SimpleCommand *c) {
       if (sh_.interactive)
         std::fprintf(stderr, "\n[%d]+  Stopped                 %s\n", j->id, cmd.c_str());
     } else {
+      sh_.note_child_reaped();  // a foreground subshell that terminated
       status = WIFEXITED(wst) ? WEXITSTATUS(wst) : (128 + WTERMSIG(wst));
     }
   }
@@ -1123,6 +1129,8 @@ int Executor::run_subshell(const Subshell *c) {
     // A subshell does not inherit the parent's EXIT trap; only one it sets for
     // itself runs when it exits.
     sh_.traps.erase("EXIT");
+    sh_.traps.erase("CHLD");  // the parent fires CHLD for the subshell as a whole
+    sh_.pending_sigchld = 0;
     // (external): a lone simple command can exec in place, no second fork.
     if (dynamic_cast<const SimpleCommand *>(c->body.get())) sh_.can_exec_replace = true;
     Executor ex(sh_);
@@ -1144,6 +1152,7 @@ int Executor::run_subshell(const Subshell *c) {
   }
   int wst = 0;
   waitpid(pid, &wst, 0);
+  sh_.note_child_reaped();  // a foreground external command that terminated
   return WIFEXITED(wst) ? WEXITSTATUS(wst) : 128;
 }
 

@@ -146,6 +146,8 @@ class Shell {
   bool in_trap = false;                       // guard against trap recursion
   void set_signal_trap(int signo, bool active);  // (de)install the shared handler
   void run_pending_traps();                   // run traps for signals received
+  void note_child_reaped();                   // count a reaped child for the SIGCHLD trap
+  int pending_sigchld = 0;                     // children reaped, awaiting the CHLD trap
   // Run the DEBUG trap (if set) before a command, with $BASH_COMMAND set to
   // CMD_TEXT.  Only fires inside functions when functrace (-T) is enabled.
   // Run the DEBUG trap; returns its exit status (extdebug: non-zero skips

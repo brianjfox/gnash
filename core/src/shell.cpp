@@ -235,6 +235,10 @@ const char *signum_to_trapname(int sig) {
 
 void Shell::set_signal_trap(int signo, bool active) {
   if (signo <= 0 || signo >= NSIG) return;
+  // SIGCHLD is reaped synchronously and its trap is delivered from the reap
+  // counter (note_child_reaped), so leave its disposition at the default rather
+  // than installing the async handler -- otherwise the trap would fire twice.
+  if (signo == SIGCHLD) return;
   struct sigaction sa;
   std::memset(&sa, 0, sizeof sa);
   sigemptyset(&sa.sa_mask);
@@ -293,8 +297,26 @@ int Shell::run_return_trap(int status) {
   return st;
 }
 
+void Shell::note_child_reaped() {
+  // bash runs the SIGCHLD trap once for each terminated child; only count while
+  // such a trap is installed.
+  if (traps.count("CHLD")) pending_sigchld++;
+}
+
 void Shell::run_pending_traps() {
   if (in_trap) return;
+  // The SIGCHLD trap fires once per child reaped since the last check.
+  while (pending_sigchld > 0) {
+    auto it = traps.find("CHLD");
+    if (it == traps.end() || it->second.empty()) { pending_sigchld = 0; break; }
+    pending_sigchld--;
+    in_trap = true;
+    int saved = last_status;
+    std::string cmd = it->second;
+    run_string(cmd);
+    last_status = saved;
+    in_trap = false;
+  }
   for (int s = 1; s < NSIG; s++) {
     if (!g_trap_pending[s]) continue;
     g_trap_pending[s] = 0;
@@ -1384,6 +1406,8 @@ std::string Shell::run_and_capture(const std::string &script, int *status) {
     close(fds[1]);
     job_control = false;  // command substitution: no nested tty control
     subshell_level++;  // $BASH_SUBSHELL
+    traps.erase("CHLD");  // the parent fires CHLD for the substitution as a whole
+    pending_sigchld = 0;
     subshell_leaf = true;  // a lone external here can exec in place (no 2nd fork)
     // Command substitution unsets errexit in the subshell unless the caller has
     // enabled `shopt -s inherit_errexit'; so `$(false; echo ok)' still runs the
@@ -1402,6 +1426,7 @@ std::string Shell::run_and_capture(const std::string &script, int *status) {
   close(fds[0]);
   int wst = 0;
   waitpid(pid, &wst, 0);
+  note_child_reaped();  // a command-substitution child terminated
   if (status) *status = WIFEXITED(wst) ? WEXITSTATUS(wst) : 128;
   // Strip trailing newlines, as command substitution does.
   while (!out.empty() && out.back() == '\n') out.pop_back();
