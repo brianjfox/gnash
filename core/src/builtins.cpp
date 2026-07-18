@@ -1546,6 +1546,16 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
       ret = 1;
       continue;
     }
+    // A nameref cannot itself be an array element (`declare -n a[128]'): bash
+    // rejects the subscripted name outright.  (A subscript in the *value*,
+    // `declare -n r=a[2]', has `=' before `[' so subscript0 is false.)
+    if (subscript0 && nameref) {
+      std::string tgt = (eq == std::string::npos) ? a : a.substr(0, eq);
+      std::fprintf(stderr, "%s%s: %s: reference variable cannot be an array\n",
+                   sh.err_prefix().c_str(), argv[0].c_str(), tgt.c_str());
+      ret = 1;
+      continue;
+    }
     bool scalar_pre = eq != std::string::npos && !arraylit0 && !subscript0 && !nameref;
     std::string pre_val;
     if (scalar_pre) { Expander ex(sh); pre_val = ex.expand_assignment(a.substr(eq + 1)); }
@@ -1741,7 +1751,15 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     // (`r=/; declare -n r') -- or which names itself -- is rejected; bash leaves
     // the variable unchanged without the attribute.  (The `=val' form validated
     // its value above.)
-    if (nameref && v.value == name && !sh.in_function()) {
+    if (nameref && (v.kind == VarKind::Indexed || v.kind == VarKind::Assoc)) {
+      // An existing array/associative variable cannot be turned into a nameref;
+      // bash rejects the `-n' and leaves the array (and any assignment made by
+      // this same command) intact.
+      std::fprintf(stderr,
+                   "%s%s: %s: reference variable cannot be an array\n",
+                   sh.err_prefix().c_str(), argv[0].c_str(), name.c_str());
+      ret = 1;
+    } else if (nameref && v.value == name && !sh.in_function()) {
       std::fprintf(stderr,
                    "%s%s: %s: nameref variable self references not allowed\n",
                    sh.err_prefix().c_str(), argv[0].c_str(), name.c_str());
