@@ -158,6 +158,7 @@ void Shell::background_job(Job &j, bool cont) {
 int Shell::wait_for_pid(long pid) {
   int st = 0;
   if (waitpid(static_cast<pid_t>(pid), &st, 0) < 0) return 127;
+  note_child_reaped();
   int rc = WIFEXITED(st) ? WEXITSTATUS(st)
                          : (WIFSIGNALED(st) ? 128 + WTERMSIG(st) : 128);
   for (auto &j : jobs)
@@ -169,10 +170,10 @@ int Shell::wait_for_pid(long pid) {
 int Shell::wait_all() {
   int st = 0;
   for (auto &j : jobs) {
-    if (!j.done) st = wait_job(j);
+    if (!j.done) { st = wait_job(j); if (j.done) for (size_t k = 0; k < j.pids.size(); k++) note_child_reaped(); }
   }
   int wst;
-  while (waitpid(-1, &wst, 0) > 0) {}  // reap any stragglers
+  while (waitpid(-1, &wst, 0) > 0) note_child_reaped();  // reap any stragglers
   return st;
 }
 
@@ -193,6 +194,7 @@ bool Shell::check_job_events() {
         }
       }
     }
+    if (!WIFSTOPPED(wst)) note_child_reaped();  // a background child terminated
   }
   for (const Job &j : jobs)
     if ((j.done || j.stopped) && !j.notified) return true;
