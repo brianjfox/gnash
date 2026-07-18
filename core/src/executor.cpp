@@ -913,8 +913,19 @@ int Executor::run_simple(const SimpleCommand *c) {
       auto it = sh_.vars.find(a.first);
       restore.push_back({a.first,
                          it == sh_.vars.end() ? std::nullopt : std::optional<Variable>(it->second)});
-      sh_.set(a.first, a.second);
-      sh_.vars[a.first].exported = true;  // visible to the command's children
+      if (it != sh_.vars.end() && it->second.nameref) {
+        // A temporary assignment to a nameref shadows it with a plain binding
+        // for the duration of the command; it does not write through to the
+        // target variable (bash discards the temp binding afterward, leaving
+        // the nameref and its target unchanged).
+        Variable v;
+        v.value = a.second;
+        v.exported = true;
+        sh_.vars[a.first] = v;
+      } else {
+        sh_.set(a.first, a.second);
+        sh_.vars[a.first].exported = true;  // visible to the command's children
+      }
     }
   };
   auto undo_temp = [&]() {
