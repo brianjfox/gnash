@@ -1604,13 +1604,39 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
         // the reference itself rather than writing through to its old target.
         Expander ex(sh);
         val = ex.expand_assignment(val);
+        bool preexist = sh.vars.count(name) != 0;
+        auto pv = sh.vars.find(name);
+        std::string tgt =
+            (append && pv != sh.vars.end()) ? pv->second.value + val : val;
+        // A nameref may not point at itself (`declare -n r=r').  At function
+        // scope a same-name target instead refers to the enclosing variable
+        // (bash warns of a circular reference rather than erroring), so only
+        // reject a self reference outside a function.
+        if (tgt == name && !sh.in_function()) {
+          std::fprintf(stderr,
+                       "%s%s: %s: nameref variable self references not allowed\n",
+                       sh.err_prefix().c_str(), argv[0].c_str(), name.c_str());
+          ret = 1;
+          if (!preexist) sh.vars.erase(name);
+          continue;
+        }
+        // The target must be a valid nameref target (`foo' or `foo[2]').  bash
+        // rejects anything else and does not create the variable.
+        if (!tgt.empty() && !Shell::valid_nameref_target(tgt)) {
+          std::fprintf(stderr,
+                       "%s%s: `%s': invalid variable name for name reference\n",
+                       sh.err_prefix().c_str(), argv[0].c_str(), tgt.c_str());
+          ret = 1;
+          if (!preexist) sh.vars.erase(name);  // no half-created variable
+          continue;
+        }
         Variable &rv = sh.vars[name];
         if (rv.readonly) {
           std::fprintf(stderr, "%s%s: readonly variable\n", sh.err_prefix().c_str(),
                        name.c_str());
           return 1;
         }
-        rv.value = append ? rv.value + val : val;
+        rv.value = tgt;
       } else {
         val = pre_val;  // expanded above, in the enclosing scope, before localizing
         // Honor a pre-existing integer attribute too (e.g. `readonly x+=7' on a
@@ -1635,6 +1661,18 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
             cfirst = false;
           }
         }
+        // Retargeting an existing empty nameref via `declare r=val' validates
+        // the value like a plain assignment, but the diagnostic carries the
+        // builtin name (Shell::set would print it bare).
+        auto nrit = sh.vars.find(name);
+        if (nrit != sh.vars.end() && nrit->second.nameref &&
+            nrit->second.value.empty() && !val.empty() &&
+            !Shell::valid_nameref_target(val)) {
+          std::fprintf(stderr, "%s%s: `%s': not a valid identifier\n",
+                       sh.err_prefix().c_str(), argv[0].c_str(), val.c_str());
+          ret = 1;
+          continue;
+        }
         sh.set(name, val);
       }
     }
@@ -1655,8 +1693,25 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     if (lcase) v.lcase = true;
     if (capcase) v.capcase = true;
     // Mark the nameref last, so the assignment above stored the *target name*
-    // as this variable's value rather than being redirected through it.
-    if (nameref) v.nameref = true;
+    // as this variable's value rather than being redirected through it.  Adding
+    // `-n' to a variable whose existing value is not a valid nameref target
+    // (`r=/; declare -n r') -- or which names itself -- is rejected; bash leaves
+    // the variable unchanged without the attribute.  (The `=val' form validated
+    // its value above.)
+    if (nameref && v.value == name && !sh.in_function()) {
+      std::fprintf(stderr,
+                   "%s%s: %s: nameref variable self references not allowed\n",
+                   sh.err_prefix().c_str(), argv[0].c_str(), name.c_str());
+      ret = 1;
+    } else if (nameref && !v.value.empty() && v.value != name &&
+               !Shell::valid_nameref_target(v.value)) {
+      std::fprintf(stderr,
+                   "%s%s: `%s': invalid variable name for name reference\n",
+                   sh.err_prefix().c_str(), argv[0].c_str(), v.value.c_str());
+      ret = 1;
+    } else if (nameref) {
+      v.nameref = true;
+    }
     // `+X' removes attributes.  Applied after the assignment so `typeset +n
     // foo=other' writes through the still-active nameref to its target before
     // the reference is torn down, matching bash.
