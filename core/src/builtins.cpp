@@ -1415,7 +1415,21 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
           }
         }
       } else {
-        for (const auto &kv : sh.vars) declare_print_var(kv.first, kv.second);
+        // `declare -p' with attribute flags (`-pa', `-pi', `-pr', ...) lists
+        // only the variables carrying those attributes, not every variable.
+        for (const auto &kv : sh.vars) {
+          const Variable &v = kv.second;
+          if (mk_array && v.kind != VarKind::Indexed) continue;
+          if (mk_assoc && v.kind != VarKind::Assoc) continue;
+          if (nameref && !v.nameref) continue;
+          if (readonly && !v.readonly) continue;
+          if (integer && !v.integer) continue;
+          if (exported && !v.exported) continue;
+          if (lcase && !v.lcase) continue;
+          if (ucase && !v.ucase) continue;
+          if (capcase && !v.capcase) continue;
+          declare_print_var(kv.first, v);
+        }
       }
     } else {
       for (; i < argv.size(); i++) {
