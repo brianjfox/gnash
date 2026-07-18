@@ -1621,7 +1621,16 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
         sh.set(name, val);
       }
     }
-    Variable &v = sh.vars[name];
+    // Applying an attribute to an existing nameref (without a `-n'/`+n' on this
+    // command) follows the reference and applies it to the target, creating the
+    // target if needed -- e.g. `readonly ref' marks ref's target readonly.  bash
+    // resolves the nameref because -n is not present.
+    std::string aname = name;
+    if (!nameref && !rm_nameref) {
+      auto nit = sh.vars.find(name);
+      if (nit != sh.vars.end() && nit->second.nameref) aname = sh.deref(name);
+    }
+    Variable &v = sh.vars[aname];
     if (readonly) v.readonly = true;
     if (exported) v.exported = true;
     if (integer) v.integer = true;
