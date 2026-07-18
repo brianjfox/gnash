@@ -933,6 +933,7 @@ int Executor::run_simple(const SimpleCommand *c) {
       sh_.argframes.emplace_back(argv.begin() + 1, argv.end());
     }
     sh_.push_scope();
+    sh_.debug_frame.push_back(sh_.traps.count("DEBUG") ? sh_.traps["DEBUG"] : std::string());
     sh_.persona_restore.push_back(std::nullopt);  // for `personality -L' / `emulate -L'
     // Run the body under the lineno_base captured at definition time so $LINENO
     // reports absolute source lines regardless of the caller's input block.
@@ -972,6 +973,7 @@ int Executor::run_simple(const SimpleCommand *c) {
       sh_.persona_restore.pop_back();
     }
     sh_.pop_scope();
+    sh_.debug_frame.pop_back();
     if (pushed_argframe && !sh_.argframes.empty()) sh_.argframes.pop_back();
     sh_.pop_src_frame();
     sh_.call_stack.pop_back();

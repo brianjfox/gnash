@@ -312,6 +312,10 @@ class Shell {
   bool in_debug_trap = false; // guard: don't fire the DEBUG trap within itself
   bool in_err_trap = false;   // guard: don't fire the ERR trap within itself
   bool in_return_trap = false;// guard: don't fire the RETURN trap within itself
+  // The DEBUG trap body as it stood when each active function was entered.  A
+  // DEBUG trap the function installs for itself (the body differs from entry)
+  // fires without functrace; an inherited one does not.
+  std::vector<std::string> debug_frame;
   int command_number = 1;     // \# prompt escape: commands entered this session
   bool opt_extdebug = false;  // `shopt -s extdebug': enables BASH_ARGC/BASH_ARGV
   // Call-argument stack for $BASH_ARGC/$BASH_ARGV (only maintained under
