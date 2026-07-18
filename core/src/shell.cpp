@@ -357,6 +357,23 @@ std::string Shell::deref(const std::string &n) const {
   return cur;
 }
 
+bool Shell::valid_nameref_target(const std::string &s) {
+  if (s.empty()) return false;
+  if (!(std::isalpha(static_cast<unsigned char>(s[0])) || s[0] == '_')) return false;
+  size_t i = 1;
+  for (; i < s.size(); i++) {
+    char c = s[i];
+    if (std::isalnum(static_cast<unsigned char>(c)) || c == '_') continue;
+    if (c == '[') break;  // an array subscript may follow the identifier
+    return false;
+  }
+  // A subscript, if present, must be non-empty and close the string
+  // (`foo[x]': `[' at i, `]' last, at least one char between).
+  if (i < s.size() && s[i] == '[')
+    return s.back() == ']' && s.size() - i > 2;
+  return true;
+}
+
 bool Shell::nameref_elt(const std::string &n_in, std::string &base,
                         std::string &sub) const {
   // Only a nameref may introduce a subscript.  A name that already contains a
@@ -833,6 +850,18 @@ bool Shell::set(const std::string &n_in, const std::string &v) {
     }
   }
   std::string n = deref(n_in);
+  // Assigning to a nameref that has no target yet sets its target (`declare -n
+  // r; r=x' points r at x); the value must be a valid identifier.  deref stops
+  // on such a nameref, so n still names it.  bash rejects a non-identifier here.
+  {
+    auto it = vars.find(n);
+    if (it != vars.end() && it->second.nameref && it->second.value.empty() &&
+        !v.empty() && !valid_nameref_target(v)) {
+      std::fprintf(stderr, "%s`%s': not a valid identifier\n", err_prefix().c_str(),
+                   v.c_str());
+      return false;
+    }
+  }
   // Assigning BASH_ARGV0 resets $0 (and the name used in error messages), as
   // bash does; still stored so `$BASH_ARGV0' reads back the value.
   if (n == "BASH_ARGV0") { arg0 = v; shell_name = v; }

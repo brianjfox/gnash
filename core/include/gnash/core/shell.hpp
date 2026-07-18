@@ -58,6 +58,9 @@ class Shell {
   // (`declare -n ref=arr[2]'), split it into BASE and SUB (raw subscript text,
   // evaluated by array_get/array_set) and return true; otherwise false.
   bool nameref_elt(const std::string &n, std::string &base, std::string &sub) const;
+  // A valid nameref target: an identifier, optionally with an array subscript
+  // (`foo' or `foo[2]').  bash rejects anything else (`/', `a b', `9x').
+  static bool valid_nameref_target(const std::string &s);
   std::string get(const std::string &n) const;  // "" if unset
   bool get_if_set(const std::string &n, std::string &out) const;
   // Assign N=V; false if N is readonly (an error is printed).
