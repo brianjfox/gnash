@@ -392,7 +392,10 @@ bool Shell::is_set(const std::string &n_in) const {
     return k == 0;  // a scalar's element [0] is the scalar itself
   }
   std::string n = deref(n_in);
-  return vars.count(n) != 0;
+  auto it = vars.find(n);
+  // A nameref with no (or a self) target -- deref stops on it -- is unset.
+  if (it != vars.end() && it->second.nameref) return false;
+  return it != vars.end();
 }
 
 std::string Shell::get(const std::string &n_in) const {
@@ -795,6 +798,8 @@ bool Shell::get_if_set(const std::string &n_in, std::string &out) const {
   std::string n = deref(n_in);
   auto it = vars.find(n);
   if (it == vars.end()) return false;
+  // A nameref with no (or a self) target -- deref stops on it -- is unset.
+  if (it->second.nameref) return false;
   const Variable &v = it->second;
   // An array in scalar context is its element 0 (indexed) / "0" (assoc).
   if (v.kind == VarKind::Indexed) {
