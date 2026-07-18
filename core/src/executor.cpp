@@ -268,6 +268,15 @@ void apply_array_assign(Shell &sh, Expander &ex, const Assign &a) {
   auto vit = sh.vars.find(a.name);
   bool integer = vit != sh.vars.end() && vit->second.integer;
   if (a.sub) {
+    // A compound value `(...)' cannot be assigned to a single element in bash
+    // (`a[0]=(x y)').  zsh has its own array semantics, so only enforce this
+    // outside the zsh personality.
+    if (a.is_array && !sh.is_zsh()) {
+      std::fprintf(stderr, "%s%s[%s]: cannot assign list to array member\n",
+                   sh.err_prefix().c_str(), a.name.c_str(), a.sub->c_str());
+      sh.last_status = 1;
+      return;
+    }
     // zsh array subscripts are 1-based; translate to the internal 0-based index
     // (a no-op under other personalities / for associative arrays).
     std::string sub = sh.zsh_subscript(a.name, ex.expand_no_split(*a.sub));

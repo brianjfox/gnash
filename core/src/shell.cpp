@@ -540,6 +540,7 @@ void Shell::array_set(const std::string &n_in, const std::string &sub, const std
   }
   Variable &v = vars[n];
   if (v.readonly) return;
+  v.invisible = false;  // an assignment makes a declared-but-unset array visible
   if (v.kind == VarKind::Assoc) {
     assoc_put(v, sub, val);
     return;
@@ -593,7 +594,9 @@ int Shell::array_count(const std::string &n_in) const {
 
 void Shell::make_array(const std::string &n_in, bool assoc) {
   std::string n = deref(n_in);
+  bool fresh = !vars.count(n);
   Variable &v = vars[n];
+  if (fresh) v.invisible = true;  // `declare -a b' with no value: declared, unset
   if (v.kind == VarKind::Scalar) {
     // Converting an existing scalar to an indexed array keeps its value as
     // element 0 (`a=abcde; declare -a a' leaves ${a[0]} == abcde), matching
@@ -614,6 +617,7 @@ void Shell::array_assign(
   std::string n = deref(n_in);
   Variable &v = vars[n];
   if (v.readonly) return;
+  v.invisible = false;  // even `b=()' makes a declared-but-unset array visible
   if (!append) {
     v.idx.clear();
     v.assoc.clear();
