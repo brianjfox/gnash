@@ -13,3 +13,7 @@ tests/bash-tests/
 
 # Stray shell binary copies made for testing (e.g. cp gnash bash)
 /bash
+
+# Claude Code local settings (machine-specific, not shared)
+.claude/settings.local.json
+.claude/settings.local.json.*
