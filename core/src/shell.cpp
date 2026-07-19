@@ -1194,6 +1194,10 @@ void Shell::set_personality(const std::string &name) {
     // empty and only surfaces in `declare'/`set' listings.
     for (const char *nm : {"BASH_ARGC", "BASH_ARGV", "DIRSTACK"})
       if (!vars.count(nm)) array_assign(nm, {}, false, false);
+    // BASH_ALIASES / BASH_CMDS are the associative equivalents (empty stored
+    // arrays; virtual_array serves the live alias/hash tables for reads).
+    for (const char *nm : {"BASH_ALIASES", "BASH_CMDS"})
+      if (!vars.count(nm)) array_assign(nm, {}, false, true);
   }
 
   // Let an interactive REPL re-apply persona-dependent readline hooks when the
