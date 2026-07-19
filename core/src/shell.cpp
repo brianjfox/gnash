@@ -449,9 +449,12 @@ bool Shell::is_set(const std::string &n_in) const {
   }
   std::string n = deref(n_in);
   auto it = vars.find(n);
+  if (it == vars.end()) return false;
   // A nameref with no (or a self) target -- deref stops on it -- is unset.
-  if (it != vars.end() && it->second.nameref) return false;
-  return it != vars.end();
+  if (it->second.nameref) return false;
+  // A declared-but-unset (invisible) variable is not "set" for `-v'.
+  if (it->second.invisible) return false;
+  return true;
 }
 
 static std::string scalar_of(const Variable &v) {
@@ -838,8 +841,17 @@ void Shell::sync_source_arrays() {
     sources.push_back(it->source);
   set_indexed("BASH_SOURCE", sources);
 
-  if (!src_frames.back().is_func) {  // FUNCNAME/BASH_LINENO exist only in functions
-    unset("FUNCNAME"); unset("BASH_LINENO");
+  if (!src_frames.back().is_func) {
+    // At the base (script) frame bash still exposes BASH_LINENO=([0]="0") and an
+    // invisible FUNCNAME (a declared array with no value).
+    set_indexed("BASH_LINENO", {"0"});
+    Variable &fn = vars["FUNCNAME"];
+    fn.kind = VarKind::Indexed;
+    fn.idx.clear();
+    fn.assoc.clear();
+    fn.assoc_seq.clear();
+    fn.value.clear();
+    fn.invisible = true;
     return;
   }
   std::vector<std::string> names, lines;
@@ -1177,6 +1189,11 @@ void Shell::set_personality(const std::string &name) {
       set("BASH_LOADABLES_PATH",
           "/usr/local/lib/bash:/usr/lib/bash:/opt/local/lib/bash:"
           "/usr/pkg/lib/bash:/opt/pkg/lib/bash:.");
+    // bash always lists these as (empty) indexed arrays; their live values are
+    // served dynamically by virtual_array for reads, so the stored array stays
+    // empty and only surfaces in `declare'/`set' listings.
+    for (const char *nm : {"BASH_ARGC", "BASH_ARGV", "DIRSTACK"})
+      if (!vars.count(nm)) array_assign(nm, {}, false, false);
   }
 
   // Let an interactive REPL re-apply persona-dependent readline hooks when the
