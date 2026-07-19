@@ -1624,7 +1624,19 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
       std::string val = a.substr(eq + 1);
       bool arraylit = val.size() >= 2 && val.front() == '(' && val.back() == ')';
       bool subscript = nend != std::string::npos && a[nend] == '[';
-      if (arraylit || subscript) {
+      // A quoted compound value (`declare -a d='(...)'`) is an array literal
+      // when the target is an array: unwrap one layer of matched outer quotes so
+      // the parentheses are recognized and the elements expanded.  Any subscript
+      // is dropped -- the compound replaces the whole array, as in bash.
+      auto cur = sh.vars.find(name);
+      bool arrayvar = cur != sh.vars.end() &&
+          (cur->second.kind == VarKind::Indexed || cur->second.kind == VarKind::Assoc);
+      if (!arraylit && arrayvar && val.size() >= 4 &&
+          (val.front() == '\'' || val.front() == '"') && val.back() == val.front() &&
+          val[1] == '(' && val[val.size() - 2] == ')') {
+        apply_assignment_word(sh, name + (append ? "+=" : "=") +
+                                      val.substr(1, val.size() - 2));
+      } else if (arraylit || subscript) {
         apply_assignment_word(sh, a);  // NAME=(...) or NAME[i]=...
       } else if (nameref) {
         // `declare -n ref=target': store the target NAME as ref's own value.
