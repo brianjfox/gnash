@@ -229,6 +229,12 @@ parse_array_elems(Shell &sh, Expander &ex, const std::string &name, bool integer
                   bool whole_append, const std::string &parenval) {
   std::vector<std::pair<std::optional<std::string>, std::string>> out;
   std::string inner = parenval.substr(1, parenval.size() - 2);
+  // For an indexed array, validate explicit subscripts and resolve negatives
+  // against the highest index seen so far (bash processes the list left to
+  // right); an associative array takes any string as a key.
+  auto tvit = sh.vars.find(sh.deref(name));
+  bool assoc = tvit != sh.vars.end() && tvit->second.kind == VarKind::Assoc;
+  long long maxidx = -1;
   for (const Token &t : tokenize(inner)) {
     if (t.type == Tok::Eof) break;
     if (t.type != Tok::Word) continue;
@@ -242,6 +248,29 @@ parse_array_elems(Shell &sh, Expander &ex, const std::string &name, bool integer
       if (app || plain) {
         std::string sub = ex.expand_no_split(e.substr(1, rb - 1));
         std::string val = ex.expand_no_split(e.substr(rb + (app ? 3 : 2)));
+        if (!assoc) {
+          // bash stops the whole compound assignment at the first bad subscript
+          // (the array has already been cleared, so the partial result stands).
+          if (sub.empty()) {
+            std::fprintf(stderr, "%s%s: bad array subscript\n",
+                         sh.err_prefix().c_str(), e.c_str());
+            break;
+          }
+          if (sub == "*" || sub == "@") {
+            std::fprintf(stderr, "%s%s: cannot assign to non-numeric index\n",
+                         sh.err_prefix().c_str(), e.c_str());
+            break;
+          }
+          bool ok = true;
+          long long k = eval_arith(sh, sub, &ok);
+          if (ok && k < 0) k += maxidx + 1;  // resolve negative against running max
+          if (ok && k < 0) {
+            std::fprintf(stderr, "%s%s: bad array subscript\n",
+                         sh.err_prefix().c_str(), e.c_str());
+            break;
+          }
+          if (ok) { sub = std::to_string(k); if (k > maxidx) maxidx = k; }
+        }
         if (app) {  // resolve against the current element (fresh assign cleared
                     // it, so the base is 0 unless this is a whole-array append)
           std::string base = whole_append ? sh.array_get(name, sh.zsh_subscript(name, sub)) : "0";
@@ -256,8 +285,10 @@ parse_array_elems(Shell &sh, Expander &ex, const std::string &name, bool integer
         continue;
       }
     }
-    for (const std::string &f : ex.expand_args({Word{e, t.quoted ? W_QUOTED : 0}}))
+    for (const std::string &f : ex.expand_args({Word{e, t.quoted ? W_QUOTED : 0}})) {
       out.emplace_back(std::nullopt, f);
+      if (!assoc) maxidx++;  // a positional element lands at the next index
+    }
   }
   return out;
 }
