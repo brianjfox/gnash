@@ -449,9 +449,12 @@ bool Shell::is_set(const std::string &n_in) const {
   }
   std::string n = deref(n_in);
   auto it = vars.find(n);
+  if (it == vars.end()) return false;
   // A nameref with no (or a self) target -- deref stops on it -- is unset.
-  if (it != vars.end() && it->second.nameref) return false;
-  return it != vars.end();
+  if (it->second.nameref) return false;
+  // A declared-but-unset (invisible) variable is not "set" for `-v'.
+  if (it->second.invisible) return false;
+  return true;
 }
 
 static std::string scalar_of(const Variable &v) {
