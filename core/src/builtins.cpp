@@ -882,6 +882,24 @@ int bi_unset(Shell &sh, const std::vector<std::string> &argv) {
     if (argv[i] == "-v") { funcs = false; continue; }
     if (argv[i] == "-n") { noref = true; continue; }
     if (funcs) { sh.functions.erase(argv[i]); continue; }
+    // `unset name[sub]' removes a single array element (or the whole array for
+    // a `@'/`*' subscript), not a variable literally named "name[sub]".
+    size_t lb = argv[i].find('[');
+    if (!noref && lb != std::string::npos && !argv[i].empty() &&
+        argv[i].back() == ']') {
+      std::string base = argv[i].substr(0, lb);
+      std::string sub = argv[i].substr(lb + 1, argv[i].size() - lb - 2);
+      std::string bd = sh.deref(base);
+      auto bit = sh.vars.find(bd);
+      if (bit != sh.vars.end() && bit->second.readonly) {
+        std::fprintf(stderr, "%sunset: %s: cannot unset: readonly variable\n",
+                     sh.err_prefix().c_str(), bd.c_str());
+        ret = 1;
+        continue;
+      }
+      sh.array_unset(base, sub);
+      continue;
+    }
     // A readonly variable cannot be unset.  Resolve through a nameref (unless
     // -n) so the target that is actually readonly is the one reported.
     std::string tgt = noref ? argv[i] : sh.deref(argv[i]);

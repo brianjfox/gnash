@@ -671,6 +671,42 @@ void Shell::array_set(const std::string &n_in, const std::string &sub, const std
   if (k == 0) v.value = val;
 }
 
+void Shell::array_unset(const std::string &n_in, const std::string &sub) {
+  std::string n = deref(n_in);
+  auto it = vars.find(n);
+  if (it == vars.end()) return;  // unsetting an element of a missing array: no-op
+  Variable &v = it->second;
+  if (v.readonly) return;
+  // `unset a[@]' / `unset a[*]' clears every element but leaves the (now empty)
+  // array in place -- bash still reports `declare -a a=()' afterward.
+  if (sub == "@" || sub == "*") {
+    v.idx.clear();
+    v.assoc.clear();
+    v.assoc_seq.clear();
+    v.value.clear();
+    return;
+  }
+  if (v.kind == VarKind::Assoc) {
+    v.assoc.erase(sub);
+    v.assoc_seq.erase(std::remove(v.assoc_seq.begin(), v.assoc_seq.end(), sub),
+                      v.assoc_seq.end());
+    return;
+  }
+  bool ok = true;
+  long long k = eval_arith(*this, sub, &ok);
+  if (!ok) return;
+  // A negative index counts back from the highest assigned index (`a[-1]').
+  if (k < 0 && v.kind == VarKind::Indexed && !v.idx.empty())
+    k += v.idx.rbegin()->first + 1;
+  if (k < 0) return;  // still out of range: bash reports a bad subscript
+  if (v.kind == VarKind::Indexed) {
+    v.idx.erase(k);
+    if (k == 0) v.value.clear();  // element 0 is mirrored in the scalar field
+  } else if (v.kind == VarKind::Scalar && k == 0) {
+    vars.erase(it);  // a scalar's only element is itself
+  }
+}
+
 bool Shell::is_array(const std::string &n_in) const {
   std::string n = deref(n_in);
   auto it = vars.find(n);

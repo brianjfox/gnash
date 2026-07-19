@@ -107,6 +107,9 @@ class Shell {
   bool virtual_array(const std::string &name,
                      std::vector<std::pair<std::string, std::string>> &pairs) const;
   void array_set(const std::string &n, const std::string &sub, const std::string &v);
+  // Remove one element of an array (`unset a[2]'); a `@'/`*' subscript unsets
+  // the whole array.  A negative index on an indexed array counts from the end.
+  void array_unset(const std::string &n, const std::string &sub);
   int array_count(const std::string &n) const;
   // True when NAME holds an indexed or associative array (not a scalar); used
   // by the zsh personality, where a bare `$array' expands to all its elements.
