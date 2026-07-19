@@ -1620,6 +1620,9 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     }
     if (mk_assoc) sh.make_array(name, true);
     else if (mk_array) sh.make_array(name, false);
+    // A subscripted name implies an indexed array even without `-a'
+    // (`declare -r c[100]' creates an empty readonly array c).
+    else if (subscript0) sh.make_array(name, false);
     if (eq != std::string::npos) {
       std::string val = a.substr(eq + 1);
       bool arraylit = val.size() >= 2 && val.front() == '(' && val.back() == ')';
