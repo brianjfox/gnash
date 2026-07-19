@@ -882,6 +882,24 @@ int bi_unset(Shell &sh, const std::vector<std::string> &argv) {
     if (argv[i] == "-v") { funcs = false; continue; }
     if (argv[i] == "-n") { noref = true; continue; }
     if (funcs) { sh.functions.erase(argv[i]); continue; }
+    // `unset name[sub]' removes a single array element (or the whole array for
+    // a `@'/`*' subscript), not a variable literally named "name[sub]".
+    size_t lb = argv[i].find('[');
+    if (!noref && lb != std::string::npos && !argv[i].empty() &&
+        argv[i].back() == ']') {
+      std::string base = argv[i].substr(0, lb);
+      std::string sub = argv[i].substr(lb + 1, argv[i].size() - lb - 2);
+      std::string bd = sh.deref(base);
+      auto bit = sh.vars.find(bd);
+      if (bit != sh.vars.end() && bit->second.readonly) {
+        std::fprintf(stderr, "%sunset: %s: cannot unset: readonly variable\n",
+                     sh.err_prefix().c_str(), bd.c_str());
+        ret = 1;
+        continue;
+      }
+      sh.array_unset(base, sub);
+      continue;
+    }
     // A readonly variable cannot be unset.  Resolve through a nameref (unless
     // -n) so the target that is actually readonly is the one reported.
     std::string tgt = noref ? argv[i] : sh.deref(argv[i]);
@@ -1602,11 +1620,26 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     }
     if (mk_assoc) sh.make_array(name, true);
     else if (mk_array) sh.make_array(name, false);
+    // A subscripted name implies an indexed array even without `-a'
+    // (`declare -r c[100]' creates an empty readonly array c).
+    else if (subscript0) sh.make_array(name, false);
     if (eq != std::string::npos) {
       std::string val = a.substr(eq + 1);
       bool arraylit = val.size() >= 2 && val.front() == '(' && val.back() == ')';
       bool subscript = nend != std::string::npos && a[nend] == '[';
-      if (arraylit || subscript) {
+      // A quoted compound value (`declare -a d='(...)'`) is an array literal
+      // when the target is an array: unwrap one layer of matched outer quotes so
+      // the parentheses are recognized and the elements expanded.  Any subscript
+      // is dropped -- the compound replaces the whole array, as in bash.
+      auto cur = sh.vars.find(name);
+      bool arrayvar = cur != sh.vars.end() &&
+          (cur->second.kind == VarKind::Indexed || cur->second.kind == VarKind::Assoc);
+      if (!arraylit && arrayvar && val.size() >= 4 &&
+          (val.front() == '\'' || val.front() == '"') && val.back() == val.front() &&
+          val[1] == '(' && val[val.size() - 2] == ')') {
+        apply_assignment_word(sh, name + (append ? "+=" : "=") +
+                                      val.substr(1, val.size() - 2));
+      } else if (arraylit || subscript) {
         apply_assignment_word(sh, a);  // NAME=(...) or NAME[i]=...
       } else if (nameref) {
         // `declare -n ref=target': store the target NAME as ref's own value.

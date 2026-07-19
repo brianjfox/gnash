@@ -263,6 +263,30 @@ parse_array_elems(Shell &sh, Expander &ex, const std::string &name, bool integer
 }
 
 void apply_array_assign(Shell &sh, Expander &ex, const Assign &a) {
+  // Assigning to any part of a readonly array is an error (bash names the array,
+  // not the element).
+  {
+    auto rit = sh.vars.find(sh.deref(a.name));
+    if (rit != sh.vars.end() && rit->second.readonly) {
+      std::fprintf(stderr, "%s%s: readonly variable\n", sh.err_prefix().c_str(),
+                   a.name.c_str());
+      sh.last_status = 1;
+      return;
+    }
+  }
+  // An empty subscript (`b[]=x') is always a bad array subscript.  The special
+  // `*'/`@' selectors are bad for an indexed array but are ordinary literal keys
+  // for an associative one (`a[@]=x' stores under the key "@").
+  if (a.sub) {
+    auto sit = sh.vars.find(sh.deref(a.name));
+    bool assoc = sit != sh.vars.end() && sit->second.kind == VarKind::Assoc;
+    if (a.sub->empty() || (!assoc && (*a.sub == "*" || *a.sub == "@"))) {
+      std::fprintf(stderr, "%s%s[%s]: bad array subscript\n", sh.err_prefix().c_str(),
+                   a.name.c_str(), a.sub->c_str());
+      sh.last_status = 1;
+      return;
+    }
+  }
   // An integer-attributed array (`declare -i') evaluates each element value as
   // an arithmetic expression, and `+=' adds rather than string-appends.
   auto vit = sh.vars.find(a.name);
