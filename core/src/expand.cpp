@@ -835,8 +835,13 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
               for (char c : items[k]) { out += c; mask += '1'; }
             }
           } else {
+            // Unquoted ${a[@]} / ${a[*]}: an empty element produces no word (it
+            // splits away), so skip it rather than emitting an empty field.
+            bool first = true;
             for (size_t k = 0; k < items.size(); k++) {
-              if (k) { out += FIELD_SEP; mask += MMARK; }
+              if (items[k].empty()) continue;
+              if (!first) { out += FIELD_SEP; mask += MMARK; }
+              first = false;
               for (char c : items[k]) { out += c; mask += '0'; }
             }
           }
