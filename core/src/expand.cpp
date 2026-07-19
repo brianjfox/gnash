@@ -906,29 +906,55 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
       // ${a[@]:off:len} / ${@:off:len}: array/positional slice.
       std::string slname, soffx, slenx; char ssel; bool shaslen = false;
       if (slice_ref(body, slname, ssel, soffx, slenx, shaslen)) {
-        std::vector<std::string> list;
-        if (slname.empty()) {  // positionals: index 0 is $0
-          list.push_back(sh_.arg0);
-          for (const auto &pp : sh_.positional) list.push_back(pp);
-        } else {
-          list = sh_.array_values(slname);
-        }
-        long long n = static_cast<long long>(list.size());
         bool ok = true;
         long long off = eval_arith(sh_, expand_no_split(soffx, false, false), &ok);
         if (!ok) off = 0;
-        if (off < 0) { off += n; if (off < 0) off = 0; }
-        long long count;
-        if (shaslen) {
-          long long len = eval_arith(sh_, expand_no_split(slenx, false, false), &ok);
-          if (!ok) len = 0;
-          count = (len < 0) ? (n + len - off) : len;  // negative len = offset from end
-        } else {
-          count = n - off;
-        }
         std::vector<std::string> slice;
-        for (long long k = off; k < n && static_cast<long long>(slice.size()) < count; k++)
-          if (k >= 0) slice.push_back(list[static_cast<size_t>(k)]);
+        // For an indexed array, `offset' is an array-index threshold: bash takes
+        // up to `length' set elements whose index is >= offset (a negative
+        // offset counts back from the highest index).  Positional parameters and
+        // associative arrays slice by position in their value list instead.
+        auto vit = slname.empty() ? sh_.vars.end() : sh_.vars.find(sh_.deref(slname));
+        bool indexed = vit != sh_.vars.end() && vit->second.kind == VarKind::Indexed;
+        if (indexed) {
+          std::vector<std::string> keys = sh_.array_keys(slname);
+          std::vector<std::string> vals = sh_.array_values(slname);
+          long long maxidx = keys.empty() ? -1 : std::strtoll(keys.back().c_str(), nullptr, 10);
+          if (off < 0) { off += maxidx + 1; }
+          long long count;
+          if (shaslen) {
+            long long len = eval_arith(sh_, expand_no_split(slenx, false, false), &ok);
+            if (!ok) len = 0;
+            count = (len < 0) ? (maxidx + 1 + len - off) : len;
+          } else {
+            count = static_cast<long long>(keys.size());
+          }
+          for (size_t k = 0; k < keys.size() &&
+                             static_cast<long long>(slice.size()) < count; k++) {
+            long long ix = std::strtoll(keys[k].c_str(), nullptr, 10);
+            if (ix >= off) slice.push_back(vals[k]);
+          }
+        } else {
+          std::vector<std::string> list;
+          if (slname.empty()) {  // positionals: index 0 is $0
+            list.push_back(sh_.arg0);
+            for (const auto &pp : sh_.positional) list.push_back(pp);
+          } else {
+            list = sh_.array_values(slname);
+          }
+          long long n = static_cast<long long>(list.size());
+          if (off < 0) { off += n; if (off < 0) off = 0; }
+          long long count;
+          if (shaslen) {
+            long long len = eval_arith(sh_, expand_no_split(slenx, false, false), &ok);
+            if (!ok) len = 0;
+            count = (len < 0) ? (n + len - off) : len;  // negative len = offset from end
+          } else {
+            count = n - off;
+          }
+          for (long long k = off; k < n && static_cast<long long>(slice.size()) < count; k++)
+            if (k >= 0) slice.push_back(list[static_cast<size_t>(k)]);
+        }
         if (ssel == '*' && dq) {
           std::string is = sh_.ifs();
           std::string j = is.empty() ? std::string() : std::string(1, is[0]);
