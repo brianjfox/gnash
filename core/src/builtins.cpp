@@ -950,6 +950,41 @@ std::string declare_quote(const std::string &v) {
   return r + "\"";
 }
 
+// True if KEY contains a shell metacharacter (bash's sh_contains_shell_metas),
+// used to decide whether an associative-array subscript must be quoted.
+static bool sub_has_metas(const std::string &s) {
+  for (size_t i = 0; i < s.size(); i++) {
+    switch (s[i]) {
+      case ' ': case '\t': case '\n':
+      case '\'': case '"': case '\\':
+      case '|': case '&': case ';':
+      case '(': case ')': case '<': case '>':
+      case '!': case '{': case '}':
+      case '*': case '[': case '?': case ']':
+      case '^': case '$': case '`':
+        return true;
+      case '~':
+        if (i == 0 || s[i - 1] == '=' || s[i - 1] == ':') return true;
+        break;
+      case '#':
+        if (i == 0) return true;
+        break;
+    }
+  }
+  return false;
+}
+
+// Quote an associative-array subscript for `declare -p' the way bash does:
+// ANSI-C ($'...') for non-printing bytes, double quotes when it holds a shell
+// metacharacter or is the lone `*'/`@' selector, otherwise bare.
+std::string declare_sub_quote(const std::string &k) {
+  if (q_needs_ansic(k)) return q_ansic(k);
+  if (!sub_has_metas(k) && k != "*" && k != "@") return k;
+  std::string r = "\"";
+  for (char c : k) { if (c == '"' || c == '\\' || c == '$' || c == '`') r += '\\'; r += c; }
+  return r + "\"";
+}
+
 // `declare -p NAME': the attribute flags plus the reproducible assignment.
 void declare_print_var(const std::string &name, const Variable &v) {
   // Attribute letters in bash's fixed order (var_attribute_string):
@@ -984,7 +1019,7 @@ void declare_print_var(const std::string &name, const Variable &v) {
     for (const auto &k : Shell::assoc_order(v)) {
       if (!first) decl += ' ';
       first = false;
-      decl += "[" + k + "]=" + declare_quote(v.assoc.at(k));
+      decl += "[" + declare_sub_quote(k) + "]=" + declare_quote(v.assoc.at(k));
     }
     // bash prints a space before the closing paren for a non-empty assoc.
     decl += first ? ")" : " )";
@@ -1010,9 +1045,10 @@ void set_print_var(const std::string &name, const Variable &v) {
     for (const auto &k : Shell::assoc_order(v)) {
       if (!first) s += ' ';
       first = false;
-      s += "[" + k + "]=" + set_elem(v.assoc.at(k));
+      s += "[" + declare_sub_quote(k) + "]=" + set_elem(v.assoc.at(k));
     }
-    std::printf("%s)\n", s.c_str());
+    // bash prints a trailing space before `)' for a non-empty associative array.
+    std::printf("%s%s)\n", s.c_str(), first ? "" : " ");
   } else {
     std::printf("%s=%s\n", name.c_str(), set_quote(v.value).c_str());
   }

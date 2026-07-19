@@ -235,6 +235,10 @@ parse_array_elems(Shell &sh, Expander &ex, const std::string &name, bool integer
   auto tvit = sh.vars.find(sh.deref(name));
   bool assoc = tvit != sh.vars.end() && tvit->second.kind == VarKind::Assoc;
   long long maxidx = -1;
+  // An associative array whose list already used `[key]=value' form is in
+  // subscript mode: a later bare word is an error.  An all-bare list is a valid
+  // flat key/value list, so only reject a bare word once a subscript was seen.
+  bool saw_sub = false;
   for (const Token &t : tokenize(inner)) {
     if (t.type == Tok::Eof) break;
     if (t.type != Tok::Word) continue;
@@ -282,12 +286,21 @@ parse_array_elems(Shell &sh, Expander &ex, const std::string &name, bool integer
           }
         }
         out.emplace_back(sub, val);
+        saw_sub = true;
         continue;
       }
     }
+    // An associative array in subscript mode cannot take a bare value: bash
+    // reports the offending word and stops the assignment.
+    if (assoc && saw_sub) {
+      std::fprintf(stderr,
+                   "%s%s: %s: must use subscript when assigning associative array\n",
+                   sh.err_prefix().c_str(), name.c_str(), e.c_str());
+      break;
+    }
     for (const std::string &f : ex.expand_args({Word{e, t.quoted ? W_QUOTED : 0}})) {
       out.emplace_back(std::nullopt, f);
-      if (!assoc) maxidx++;  // a positional element lands at the next index
+      maxidx++;  // a positional element lands at the next index
     }
   }
   return out;
