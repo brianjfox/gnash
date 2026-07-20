@@ -575,6 +575,32 @@ int bi_cd(Shell &sh, const std::vector<std::string> &argv) {
     dir = argv[i];
   }
   if (dir.empty()) return 1;
+  // CDPATH search: for a relative target that is not `.'/`..'-anchored, try each
+  // CDPATH entry; on a match via a non-`.' entry, bash prints the new directory.
+  bool anchored = dir[0] == '/' ||
+                  (dir[0] == '.' &&
+                   (dir.size() == 1 || dir[1] == '/' ||
+                    (dir[1] == '.' && (dir.size() == 2 || dir[2] == '/'))));
+  if (!anchored) {
+    std::string cdp = sh.get("CDPATH");
+    size_t start = 0;
+    while (!cdp.empty() && start <= cdp.size()) {
+      size_t e = cdp.find(':', start);
+      std::string ent = cdp.substr(start, e == std::string::npos ? std::string::npos : e - start);
+      std::string base = ent.empty() ? "." : ent;
+      std::string cand = base + "/" + dir;
+      struct stat sb;
+      if (stat(cand.c_str(), &sb) == 0 && S_ISDIR(sb.st_mode)) {
+        int r = change_dir(sh, cand, physical);
+        // bash echoes the new directory when a non-empty CDPATH entry is used
+        // (an empty entry means the current directory and stays quiet).
+        if (r == 0 && !ent.empty()) std::printf("%s\n", logical_pwd(sh).c_str());
+        return r;
+      }
+      if (e == std::string::npos) break;
+      start = e + 1;
+    }
+  }
   return change_dir(sh, dir, physical);
 }
 
