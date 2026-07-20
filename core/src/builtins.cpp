@@ -2898,7 +2898,12 @@ int bi_ulimit(Shell &sh, const std::vector<std::string> &argv) {
 
 // ---- enable --------------------------------------------------------------
 int bi_enable(Shell &sh, const std::vector<std::string> &argv) {
-  bool disable = false, all = false;
+  // The POSIX special builtins, listed by `enable -s'.
+  static const std::set<std::string> kSpecial = {
+      ".",      ":",    "break", "continue", "eval",  "exec",
+      "exit",   "export", "readonly", "return", "set", "shift",
+      "source", "times", "trap",  "unset"};
+  bool disable = false, all = false, special = false;
   size_t i = 1;
   for (; i < argv.size(); i++) {
     const std::string &a = argv[i];
@@ -2907,11 +2912,13 @@ int bi_enable(Shell &sh, const std::vector<std::string> &argv) {
     for (size_t k = 1; k < a.size(); k++) {
       if (a[k] == 'n') disable = true;
       else if (a[k] == 'a') all = true;
+      else if (a[k] == 's') special = true;
       else if (a[k] == 'p') { /* posix reusable list: like default */ }
     }
   }
   if (i >= argv.size()) {  // list
     for (const std::string &nm : builtin_names_sorted()) {
+      if (special && !kSpecial.count(nm)) continue;
       bool off = sh.disabled_builtins.count(nm) != 0;
       if (all) std::printf("enable %s%s\n", off ? "-n " : "", nm.c_str());
       else if (disable) { if (off) std::printf("enable -n %s\n", nm.c_str()); }
