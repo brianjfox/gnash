@@ -2042,8 +2042,32 @@ const char *trapname_from_num(int sig) {
     case SIGXFSZ: return "XFSZ"; case SIGVTALRM: return "VTALRM";
     case SIGPROF: return "PROF"; case SIGWINCH: return "WINCH";
     case SIGUSR1: return "USR1"; case SIGUSR2: return "USR2";
+#ifdef SIGEMT
+    case SIGEMT: return "EMT";
+#endif
+#ifdef SIGIO
+    case SIGIO: return "IO";
+#endif
+#ifdef SIGINFO
+    case SIGINFO: return "INFO";
+#endif
     default: return nullptr;
   }
+}
+
+// `kill -l' / `trap -l': list every named signal in bash's 5-column layout,
+// tab-separated with the number right-justified to the widest signal number.
+void print_signal_list() {
+  std::vector<std::pair<int, const char *>> sigs;
+  for (int s = 1; s < NSIG; s++)
+    if (const char *nm = trapname_from_num(s)) sigs.emplace_back(s, nm);
+  int width = sigs.empty() ? 1
+                           : static_cast<int>(std::to_string(sigs.back().first).size());
+  for (size_t k = 0; k < sigs.size(); k++) {
+    std::printf("%*d) SIG%s", width, sigs[k].first, sigs[k].second);
+    std::printf((k + 1) % 5 == 0 ? "\n" : "\t");
+  }
+  if (sigs.size() % 5 != 0) std::printf("\n");
 }
 
 // bash's trap -p sort order: EXIT (signal 0) first, then real signals by
@@ -2116,11 +2140,7 @@ int bi_trap(Shell &sh, const std::vector<std::string> &argv) {
   }
 
   // -l: list the signal names (like `kill -l').
-  if (opt_l) {
-    for (int s = 1; s < NSIG; s++)
-      if (const char *nm = trapname_from_num(s)) std::printf("%2d) SIG%s\n", s, nm);
-    return 0;
-  }
+  if (opt_l) { print_signal_list(); return 0; }
 
   // -P: print just the action(s) of the named signal(s); at least one required.
   if (opt_P) {
@@ -2446,11 +2466,7 @@ int signame_to_num(const std::string &s) {
 int bi_kill(Shell &sh, const std::vector<std::string> &argv) {
   // `kill -l [sigspec ...]' / `kill -L ...': list signal names and numbers.
   if (argv.size() > 1 && (argv[1] == "-l" || argv[1] == "-L")) {
-    if (argv.size() == 2) {  // list them all
-      for (int s = 1; s < NSIG; s++)
-        if (const char *nm = trapname_from_num(s)) std::printf("%2d) SIG%s\n", s, nm);
-      return 0;
-    }
+    if (argv.size() == 2) { print_signal_list(); return 0; }  // list them all
     int st = 0;
     for (size_t k = 2; k < argv.size(); k++) {
       const std::string &a = argv[k];
@@ -3830,40 +3846,71 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
     sh.lineno_base = saved_base;
     sh.error_context = saved_ctx;
   } else if (cmd == "source" || cmd == ".") {
-    if (argv.size() > 1 && sh.opt_restricted &&
-        argv[1].find('/') != std::string::npos) {
+    // `-p PATH' gives an explicit colon-separated search path (bash 5.2+).
+    size_t ai = 1;
+    bool pflag = false;
+    std::string ppath;
+    for (; ai < argv.size(); ai++) {
+      if (argv[ai] == "--") { ai++; break; }
+      if (argv[ai] == "-p") { pflag = true; if (ai + 1 < argv.size()) ppath = argv[++ai]; continue; }
+      break;
+    }
+    if (ai >= argv.size()) {
+      std::fprintf(stderr, "%s%s: filename argument required\n", sh.err_prefix().c_str(),
+                   cmd.c_str());
+      std::fprintf(stderr, "%s: usage: %s [-p path] filename [arguments]\n",
+                   cmd.c_str(), cmd.c_str());
+      return 2;
+    }
+    const std::string &fname = argv[ai];
+    if (sh.opt_restricted && fname.find('/') != std::string::npos) {
       std::fprintf(stderr, "%s%s: %s: restricted\n", sh.err_prefix().c_str(),
-                   cmd.c_str(), argv[1].c_str());
+                   cmd.c_str(), fname.c_str());
       return 1;
     }
-    if (argv.size() > 1) {
-      // Like bash: a filename without a slash is looked up on PATH first, then
-      // (as a fallback) in the current directory.
-      std::string path = argv[1];
-      if (path.find('/') == std::string::npos && access(path.c_str(), R_OK) != 0) {
-        const char *penv = std::getenv("PATH");
-        std::string ps = penv ? penv : "";
-        size_t start = 0;
-        while (start <= ps.size()) {
-          size_t e = ps.find(':', start);
-          std::string dir = ps.substr(start, e == std::string::npos ? std::string::npos : e - start);
-          if (dir.empty()) dir = ".";
-          std::string cand = dir + "/" + argv[1];
-          if (access(cand.c_str(), R_OK) == 0) { path = cand; break; }
-          if (e == std::string::npos) break;
-          start = e + 1;
-        }
+    // Resolve the file: a name with a slash is used as-is; otherwise search the
+    // `-p' path, or $PATH when the `sourcepath' shopt is on, falling back to the
+    // current directory.
+    std::string path = fname;
+    auto search = [&](const std::string &plist) -> bool {
+      size_t start = 0;
+      while (start <= plist.size()) {
+        size_t e = plist.find(':', start);
+        std::string dir = plist.substr(start, e == std::string::npos ? std::string::npos : e - start);
+        if (dir.empty()) dir = ".";
+        std::string cand = dir + "/" + fname;
+        if (access(cand.c_str(), R_OK) == 0) { path = cand; return true; }
+        if (e == std::string::npos) break;
+        start = e + 1;
       }
+      return false;
+    };
+    bool giveup = false;
+    if (fname.find('/') != std::string::npos) {
+      // used directly
+    } else if (pflag) {
+      // `-p' searches only the given path; a miss is a hard failure.
+      if (!search(ppath)) {
+        std::fprintf(stderr, "%s%s: %s: file not found\n", sh.err_prefix().c_str(),
+                     cmd.c_str(), fname.c_str());
+        st = 1;
+        giveup = true;
+      }
+    } else if (sh.shopt_opts["sourcepath"] && access(fname.c_str(), R_OK) != 0) {
+      const char *penv = std::getenv("PATH");
+      search(penv ? penv : "");  // on a miss, path stays fname (current directory)
+    }
+    if (!giveup) {
       std::ifstream f(path);
       if (f) {
         std::ostringstream ss; ss << f.rdbuf();
         // Extra arguments become the sourced file's positional parameters
         // (`. file a b'); with none, it inherits the caller's positionals.
         std::vector<std::string> saved_pos;
-        bool set_pos = argv.size() > 2;
+        bool set_pos = argv.size() > ai + 1;
         if (set_pos) {
           saved_pos = sh.positional;
-          sh.positional.assign(argv.begin() + 2, argv.end());
+          sh.positional.assign(argv.begin() + ai + 1, argv.end());
         }
         // A sourced file becomes the innermost BASH_SOURCE frame; use the
         // resolved path (bash records the PATH-found path, not the bare name),
@@ -3877,10 +3924,9 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
         if (sh.returning) { sh.returning = false; st = sh.exit_status; }
         sh.pop_src_frame();
         if (set_pos) sh.positional = saved_pos;
-      }
-      else {
+      } else {
         std::fprintf(stderr, "%s%s: %s\n", sh.err_prefix().c_str(),
-                     argv[1].c_str(), std::strerror(errno));
+                     fname.c_str(), std::strerror(errno));
         st = 1;
       }
     }

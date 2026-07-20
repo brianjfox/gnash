@@ -1081,16 +1081,23 @@ int Executor::run_simple(const SimpleCommand *c) {
     undo_temp();
   } else if ((apply_temp(), run_builtin(sh_, argv, &status))) {
     // A preceding `VAR=val builtin' applies to the builtin (e.g. IFS=, read),
-    // then is restored -- except that posix mode makes assignments before the
-    // POSIX special builtins permanent.
+    // then is restored.  Two exceptions keep it permanent: the assignment
+    // builtins `export'/`readonly' (and `declare -x', which exports too) always
+    // do, and in posix mode so do all the POSIX special builtins.
     builtin = true;
-    if (sh_.opt_posix) {
+    bool persist = argv[0] == "export" || argv[0] == "readonly";
+    if (!persist && (argv[0] == "declare" || argv[0] == "typeset")) {
+      for (size_t k = 1; k < argv.size() && argv[k].size() > 1 && argv[k][0] == '-'; k++)
+        if (argv[k].find('x') != std::string::npos) { persist = true; break; }
+    }
+    if (!persist && sh_.opt_posix) {
       static const std::set<std::string> kSpecial = {
           ":",      ".",     "break", "continue", "eval",  "exec",
           "exit",   "export", "readonly", "return", "set", "shift",
           "source", "times", "trap",  "unset"};
-      if (kSpecial.count(argv[0])) restore.clear();
+      if (kSpecial.count(argv[0])) persist = true;
     }
+    if (persist) restore.clear();
     undo_temp();
   } else {
     undo_temp();  // not a builtin after all: the external path sets its own env
