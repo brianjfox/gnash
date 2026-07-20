@@ -575,6 +575,32 @@ int bi_cd(Shell &sh, const std::vector<std::string> &argv) {
     dir = argv[i];
   }
   if (dir.empty()) return 1;
+  // CDPATH search: for a relative target that is not `.'/`..'-anchored, try each
+  // CDPATH entry; on a match via a non-`.' entry, bash prints the new directory.
+  bool anchored = dir[0] == '/' ||
+                  (dir[0] == '.' &&
+                   (dir.size() == 1 || dir[1] == '/' ||
+                    (dir[1] == '.' && (dir.size() == 2 || dir[2] == '/'))));
+  if (!anchored) {
+    std::string cdp = sh.get("CDPATH");
+    size_t start = 0;
+    while (!cdp.empty() && start <= cdp.size()) {
+      size_t e = cdp.find(':', start);
+      std::string ent = cdp.substr(start, e == std::string::npos ? std::string::npos : e - start);
+      std::string base = ent.empty() ? "." : ent;
+      std::string cand = base + "/" + dir;
+      struct stat sb;
+      if (stat(cand.c_str(), &sb) == 0 && S_ISDIR(sb.st_mode)) {
+        int r = change_dir(sh, cand, physical);
+        // bash echoes the new directory when a non-empty CDPATH entry is used
+        // (an empty entry means the current directory and stays quiet).
+        if (r == 0 && !ent.empty()) std::printf("%s\n", logical_pwd(sh).c_str());
+        return r;
+      }
+      if (e == std::string::npos) break;
+      start = e + 1;
+    }
+  }
   return change_dir(sh, dir, physical);
 }
 
@@ -2160,15 +2186,102 @@ int bi_trap(Shell &sh, const std::vector<std::string> &argv) {
   return 0;
 }
 
-int bi_umask(const std::vector<std::string> &argv) {
-  if (argv.size() < 2) {
-    mode_t m = umask(0);
-    umask(m);
-    std::printf("%04o\n", m);
-    return 0;
+// Apply a chmod-style symbolic mode (`u=rwx,g-w,a+x') to ALLOWED (the file
+// permission bits the umask permits).  Returns false on a malformed clause.
+static bool umask_symbolic(const std::string &s, mode_t &allowed) {
+  size_t i = 0;
+  while (i < s.size()) {
+    int who = 0;
+    for (; i < s.size(); i++) {
+      if (s[i] == 'u') who |= 0700;
+      else if (s[i] == 'g') who |= 0070;
+      else if (s[i] == 'o') who |= 0007;
+      else if (s[i] == 'a') who |= 0777;
+      else break;
+    }
+    if (who == 0) who = 0777;  // no who: default to `a'
+    // One who may carry several chained operators (`u=r+w-x').
+    bool got_op = false;
+    while (i < s.size() && (s[i] == '=' || s[i] == '+' || s[i] == '-')) {
+      got_op = true;
+      char op = s[i++];
+      int perms = 0;
+      for (; i < s.size(); i++) {
+        if (s[i] == 'r') perms |= 0444;
+        else if (s[i] == 'w') perms |= 0222;
+        else if (s[i] == 'x') perms |= 0111;
+        else break;
+      }
+      int bits = who & perms;
+      if (op == '=') allowed = (allowed & ~who) | bits;
+      else if (op == '+') allowed |= bits;
+      else allowed &= ~bits;
+    }
+    if (!got_op) return false;
+    if (i < s.size() && s[i] == ',') i++;
+    else if (i < s.size()) return false;
   }
-  mode_t m = static_cast<mode_t>(std::strtol(argv[1].c_str(), nullptr, 8));
-  umask(m);
+  return true;
+}
+
+static std::string umask_to_symbolic(mode_t mask) {
+  mode_t allowed = ~mask & 0777;
+  std::string r;
+  const char *who = "ugo";
+  for (int k = 0; k < 3; k++) {
+    int bits = (allowed >> (6 - 3 * k)) & 7;
+    if (k) r += ',';
+    r += who[k];
+    r += '=';
+    if (bits & 4) r += 'r';
+    if (bits & 2) r += 'w';
+    if (bits & 1) r += 'x';
+  }
+  return r;
+}
+
+int bi_umask(const std::vector<std::string> &argv) {
+  bool sym = false, print = false;
+  size_t i = 1;
+  for (; i < argv.size() && argv[i].size() >= 2 && argv[i][0] == '-'; i++) {
+    for (size_t k = 1; k < argv[i].size(); k++) {
+      if (argv[i][k] == 'S') sym = true;
+      else if (argv[i][k] == 'p') print = true;
+      else {
+        std::fprintf(stderr, "umask: -%c: invalid option\n", argv[i][k]);
+        std::fprintf(stderr, "umask: usage: umask [-p] [-S] [mode]\n");
+        return 2;
+      }
+    }
+  }
+  mode_t cur = umask(0);
+  umask(cur);
+  bool have_mode = i < argv.size();
+  if (have_mode) {
+    const std::string &mode = argv[i];
+    if (!mode.empty() && std::isdigit(static_cast<unsigned char>(mode[0]))) {
+      cur = static_cast<mode_t>(std::strtol(mode.c_str(), nullptr, 8)) & 0777;
+    } else {
+      mode_t allowed = ~cur & 0777;
+      if (!umask_symbolic(mode, allowed)) {
+        std::fprintf(stderr, "umask: `%s': invalid symbolic mode operator\n",
+                     mode.c_str());
+        return 1;
+      }
+      cur = ~allowed & 0777;
+    }
+    umask(cur);
+  }
+  // Print when no mode was given, or when -S/-p explicitly asks for output.
+  if (!have_mode || sym || print) {
+    char oct[8];
+    std::snprintf(oct, sizeof(oct), "%04o", cur);
+    std::string body = sym ? umask_to_symbolic(cur) : std::string(oct);
+    if (print)
+      std::printf("umask %s%s\n", sym ? "-S " : "", body.c_str());
+    else
+      std::printf("%s\n", body.c_str());
+  }
   return 0;
 }
 
@@ -2811,7 +2924,12 @@ int bi_ulimit(Shell &sh, const std::vector<std::string> &argv) {
 
 // ---- enable --------------------------------------------------------------
 int bi_enable(Shell &sh, const std::vector<std::string> &argv) {
-  bool disable = false, all = false;
+  // The POSIX special builtins, listed by `enable -s'.
+  static const std::set<std::string> kSpecial = {
+      ".",      ":",    "break", "continue", "eval",  "exec",
+      "exit",   "export", "readonly", "return", "set", "shift",
+      "source", "times", "trap",  "unset"};
+  bool disable = false, all = false, special = false;
   size_t i = 1;
   for (; i < argv.size(); i++) {
     const std::string &a = argv[i];
@@ -2820,11 +2938,13 @@ int bi_enable(Shell &sh, const std::vector<std::string> &argv) {
     for (size_t k = 1; k < a.size(); k++) {
       if (a[k] == 'n') disable = true;
       else if (a[k] == 'a') all = true;
+      else if (a[k] == 's') special = true;
       else if (a[k] == 'p') { /* posix reusable list: like default */ }
     }
   }
   if (i >= argv.size()) {  // list
     for (const std::string &nm : builtin_names_sorted()) {
+      if (special && !kSpecial.count(nm)) continue;
       bool off = sh.disabled_builtins.count(nm) != 0;
       if (all) std::printf("enable %s%s\n", off ? "-n " : "", nm.c_str());
       else if (disable) { if (off) std::printf("enable -n %s\n", nm.c_str()); }
@@ -3737,6 +3857,14 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
       std::ifstream f(path);
       if (f) {
         std::ostringstream ss; ss << f.rdbuf();
+        // Extra arguments become the sourced file's positional parameters
+        // (`. file a b'); with none, it inherits the caller's positionals.
+        std::vector<std::string> saved_pos;
+        bool set_pos = argv.size() > 2;
+        if (set_pos) {
+          saved_pos = sh.positional;
+          sh.positional.assign(argv.begin() + 2, argv.end());
+        }
         // A sourced file becomes the innermost BASH_SOURCE frame; use the
         // resolved path (bash records the PATH-found path, not the bare name),
         // so ${BASH_SOURCE[0]} lets a script locate itself.  The call line is
@@ -3748,8 +3876,13 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
         // shell (bash semantics; e.g. /etc/bashrc does `[ -z "$PS1" ] && return').
         if (sh.returning) { sh.returning = false; st = sh.exit_status; }
         sh.pop_src_frame();
+        if (set_pos) sh.positional = saved_pos;
       }
-      else { std::fprintf(stderr, "gnash: %s: %s\n", argv[1].c_str(), std::strerror(errno)); st = 1; }
+      else {
+        std::fprintf(stderr, "%s%s: %s\n", sh.err_prefix().c_str(),
+                     argv[1].c_str(), std::strerror(errno));
+        st = 1;
+      }
     }
   } else if (cmd == "local") {
     st = bi_declare(sh, argv, true, false);

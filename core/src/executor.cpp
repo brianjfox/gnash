@@ -1270,7 +1270,9 @@ int Executor::run_loop(const LoopCommand *c) {
     if (!go) break;
     st = run(c->body.get());
     if (sh_.break_count) { sh_.break_count--; break; }
-    if (sh_.continue_count) { sh_.continue_count--; continue; }
+    // `continue N' with N>1 stops this loop and propagates the remaining count
+    // to the enclosing loop; N==1 continues this loop.
+    if (sh_.continue_count) { if (--sh_.continue_count) break; else continue; }
   }
   return st;
 }
@@ -1304,7 +1306,9 @@ int Executor::run_for(const ForCommand *c) {
       if (!c->a_cond.empty() && aeval(c->a_cond) == 0) break;
       st = run(c->body.get());
       if (sh_.break_count) { sh_.break_count--; break; }
-      if (sh_.continue_count) sh_.continue_count--;
+      // `continue N' with N>1 propagates to the enclosing loop; N==1 runs the
+      // update and re-tests, the normal continue path.
+      if (sh_.continue_count) { if (--sh_.continue_count) break; }
       if (unwinding()) break;
       aeval(c->a_update);
     }
@@ -1339,7 +1343,7 @@ int Executor::run_for(const ForCommand *c) {
     }
     st = run(c->body.get());
     if (sh_.break_count) { sh_.break_count--; break; }
-    if (sh_.continue_count) { sh_.continue_count--; continue; }
+    if (sh_.continue_count) { if (--sh_.continue_count) break; else continue; }
     if (unwinding()) break;
   }
   return st;
