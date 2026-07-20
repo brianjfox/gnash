@@ -2042,8 +2042,32 @@ const char *trapname_from_num(int sig) {
     case SIGXFSZ: return "XFSZ"; case SIGVTALRM: return "VTALRM";
     case SIGPROF: return "PROF"; case SIGWINCH: return "WINCH";
     case SIGUSR1: return "USR1"; case SIGUSR2: return "USR2";
+#ifdef SIGEMT
+    case SIGEMT: return "EMT";
+#endif
+#ifdef SIGIO
+    case SIGIO: return "IO";
+#endif
+#ifdef SIGINFO
+    case SIGINFO: return "INFO";
+#endif
     default: return nullptr;
   }
+}
+
+// `kill -l' / `trap -l': list every named signal in bash's 5-column layout,
+// tab-separated with the number right-justified to the widest signal number.
+void print_signal_list() {
+  std::vector<std::pair<int, const char *>> sigs;
+  for (int s = 1; s < NSIG; s++)
+    if (const char *nm = trapname_from_num(s)) sigs.emplace_back(s, nm);
+  int width = sigs.empty() ? 1
+                           : static_cast<int>(std::to_string(sigs.back().first).size());
+  for (size_t k = 0; k < sigs.size(); k++) {
+    std::printf("%*d) SIG%s", width, sigs[k].first, sigs[k].second);
+    std::printf((k + 1) % 5 == 0 ? "\n" : "\t");
+  }
+  if (sigs.size() % 5 != 0) std::printf("\n");
 }
 
 // bash's trap -p sort order: EXIT (signal 0) first, then real signals by
@@ -2116,11 +2140,7 @@ int bi_trap(Shell &sh, const std::vector<std::string> &argv) {
   }
 
   // -l: list the signal names (like `kill -l').
-  if (opt_l) {
-    for (int s = 1; s < NSIG; s++)
-      if (const char *nm = trapname_from_num(s)) std::printf("%2d) SIG%s\n", s, nm);
-    return 0;
-  }
+  if (opt_l) { print_signal_list(); return 0; }
 
   // -P: print just the action(s) of the named signal(s); at least one required.
   if (opt_P) {
@@ -2446,11 +2466,7 @@ int signame_to_num(const std::string &s) {
 int bi_kill(Shell &sh, const std::vector<std::string> &argv) {
   // `kill -l [sigspec ...]' / `kill -L ...': list signal names and numbers.
   if (argv.size() > 1 && (argv[1] == "-l" || argv[1] == "-L")) {
-    if (argv.size() == 2) {  // list them all
-      for (int s = 1; s < NSIG; s++)
-        if (const char *nm = trapname_from_num(s)) std::printf("%2d) SIG%s\n", s, nm);
-      return 0;
-    }
+    if (argv.size() == 2) { print_signal_list(); return 0; }  // list them all
     int st = 0;
     for (size_t k = 2; k < argv.size(); k++) {
       const std::string &a = argv[k];
