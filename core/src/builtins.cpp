@@ -3831,6 +3831,14 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
       std::ifstream f(path);
       if (f) {
         std::ostringstream ss; ss << f.rdbuf();
+        // Extra arguments become the sourced file's positional parameters
+        // (`. file a b'); with none, it inherits the caller's positionals.
+        std::vector<std::string> saved_pos;
+        bool set_pos = argv.size() > 2;
+        if (set_pos) {
+          saved_pos = sh.positional;
+          sh.positional.assign(argv.begin() + 2, argv.end());
+        }
         // A sourced file becomes the innermost BASH_SOURCE frame; use the
         // resolved path (bash records the PATH-found path, not the bare name),
         // so ${BASH_SOURCE[0]} lets a script locate itself.  The call line is
@@ -3842,8 +3850,13 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
         // shell (bash semantics; e.g. /etc/bashrc does `[ -z "$PS1" ] && return').
         if (sh.returning) { sh.returning = false; st = sh.exit_status; }
         sh.pop_src_frame();
+        if (set_pos) sh.positional = saved_pos;
       }
-      else { std::fprintf(stderr, "gnash: %s: %s\n", argv[1].c_str(), std::strerror(errno)); st = 1; }
+      else {
+        std::fprintf(stderr, "%s%s: %s\n", sh.err_prefix().c_str(),
+                     argv[1].c_str(), std::strerror(errno));
+        st = 1;
+      }
     }
   } else if (cmd == "local") {
     st = bi_declare(sh, argv, true, false);
