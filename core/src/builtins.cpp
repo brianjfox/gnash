@@ -1100,9 +1100,18 @@ bool set_o_option(Shell &sh, const std::string &o, bool on) {
     else return false;  // cannot clear restricted; caller reports the error
   }
   // `set -o vi'/`set -o emacs' switch the readline editing mode (they are
-  // mutually exclusive); `+o' flips to the other.
-  else if (o == "vi") { if (on) rl_vi_editing_mode(0, 0); else rl_emacs_editing_mode(0, 0); }
-  else if (o == "emacs") { if (on) rl_emacs_editing_mode(0, 0); else rl_vi_editing_mode(0, 0); }
+  // mutually exclusive); `+o' flips to the other.  The stored flags let the
+  // state be reported even in a non-interactive shell, as bash does.
+  else if (o == "vi") {
+    if (on) rl_vi_editing_mode(0, 0); else rl_emacs_editing_mode(0, 0);
+    sh.opt_vi = on; sh.opt_emacs = !on;
+  }
+  else if (o == "emacs") {
+    if (on) rl_emacs_editing_mode(0, 0); else rl_vi_editing_mode(0, 0);
+    sh.opt_emacs = on; sh.opt_vi = !on;
+  }
+  else if (o == "monitor") sh.opt_monitor = on;
+  else if (o == "privileged") sh.opt_privileged = on;
   else return false;
   return true;
 }
@@ -1116,18 +1125,20 @@ std::vector<std::pair<std::string, bool>> set_option_states(Shell &sh) {
   bool i = sh.interactive;
   return {
       {"allexport", false},   {"braceexpand", true},
-      {"emacs", i && rl_editing_mode == 1}, {"errexit", sh.opt_errexit},
+      {"emacs", i ? (rl_editing_mode == 1) : sh.opt_emacs},
+      {"errexit", sh.opt_errexit},
       {"errtrace", sh.opt_functrace}, {"functrace", sh.opt_functrace},
       {"hashall", true},      {"histexpand", sh.opt_histexpand},
       {"history", sh.opt_history}, {"ignoreeof", false},
       {"interactive-comments", true}, {"keyword", sh.opt_keyword},
-      {"monitor", i},         {"noclobber", false},
+      {"monitor", sh.job_control || sh.opt_monitor}, {"noclobber", false},
       {"noexec", sh.opt_noexec}, {"noglob", sh.opt_noglob},
       {"nolog", false},       {"notify", false},
       {"nounset", sh.opt_nounset}, {"onecmd", false},
       {"physical", sh.opt_physical}, {"pipefail", sh.opt_pipefail},
-      {"posix", sh.opt_posix}, {"privileged", false},
-      {"verbose", sh.opt_verbose}, {"vi", i && rl_editing_mode == 0},
+      {"posix", sh.opt_posix}, {"privileged", sh.opt_privileged},
+      {"verbose", sh.opt_verbose},
+      {"vi", i ? (rl_editing_mode == 0) : sh.opt_vi},
       {"xtrace", sh.opt_xtrace}};
 }
 
@@ -1166,6 +1177,8 @@ int bi_set(Shell &sh, const std::vector<std::string> &argv) {
           case 'T': sh.opt_functrace = on; break;  // DEBUG/RETURN trap inheritance
           case 'E': sh.opt_functrace = on; break;  // errtrace: ERR trap inheritance
           case 'H': sh.opt_histexpand = on; break;  // `!' history expansion
+          case 'm': sh.opt_monitor = on; break;     // monitor: job control
+          case 'p': sh.opt_privileged = on; break;  // privileged mode
           case 'r':  // restricted: can be turned on, never off
             if (on) sh.opt_restricted = true;
             else {

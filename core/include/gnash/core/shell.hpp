@@ -323,6 +323,12 @@ class Shell {
 
   bool opt_posix = false;       // -o posix
   bool opt_restricted = false;  // -r / -o restricted / rbash: restricted shell
+  // State-only options: recorded for `set -o'/`shopt -o' reporting even when
+  // non-interactive (no functional effect there, matching bash).
+  bool opt_emacs = false;       // -o emacs: emacs command-line editing mode
+  bool opt_vi = false;          // -o vi: vi command-line editing mode
+  bool opt_monitor = false;     // -m / -o monitor: job control
+  bool opt_privileged = false;  // -p / -o privileged
   // Set when a top-level $((...)) / $[...] arithmetic expansion failed (bad
   // expression or an assignment to a readonly variable); run_simple aborts the
   // current command (bash aborts but the shell continues).
