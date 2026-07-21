@@ -4,6 +4,7 @@
 // lexer.cpp -- shell tokenizer (see lexer.hpp).
 
 #include "gnash/core/lexer.hpp"
+#include "gnash/core/subscript.hpp"
 
 #include <cctype>
 
@@ -92,15 +93,11 @@ struct Lexer {
     return true;
   }
 
-  // Offset of the `]' matching the `[' at START (handling nesting), or npos.
+  // Offset of the `]' closing the array subscript opened by the `[' at START,
+  // or npos.  Delegates to the shared quote-aware scanner so an escaped/quoted
+  // `]' or one inside a substitution does not close the subscript.
   std::size_t matching_bracket(std::size_t start) const {
-    int depth = 0;
-    for (std::size_t k = start; k < n; k++) {
-      if (in[k] == '[') depth++;
-      else if (in[k] == ']' && --depth == 0) return k;
-      else if (in[k] == '\n') break;  // a subscript does not span input lines here
-    }
-    return std::string::npos;
+    return skip_subscript(in, start);
   }
 
   explicit Lexer(const std::string &s) : in(s), n(s.size()) {}

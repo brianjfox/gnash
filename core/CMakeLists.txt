@@ -5,6 +5,7 @@
 add_library(gnash_core STATIC
   src/ast.cpp
   src/lexer.cpp
+  src/subscript.cpp
   src/parser.cpp
   src/shell.cpp
   src/arith.cpp
