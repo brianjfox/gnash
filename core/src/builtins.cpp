@@ -3548,20 +3548,67 @@ static void compgen_files(const std::string &word, bool dirs_only, std::vector<s
   closedir(d);
 }
 
+// bash's compopts[]/compacts[] tables, giving `complete -p' its canonical order
+// and naming compgen/complete's `-o' options and `-A' actions.
+static const char *const kCompOpts[] = {
+    "bashdefault", "default", "dirnames", "filenames", "fullquote",
+    "noquote", "nosort", "nospace", "plusdirs", nullptr};
+struct CompActEnt { const char *name; char opt; };
+static const CompActEnt kCompActs[] = {
+    {"alias", 'a'},   {"arrayvar", 0},  {"binding", 0},  {"builtin", 'b'},
+    {"command", 'c'}, {"directory", 'd'}, {"disabled", 0}, {"enabled", 0},
+    {"export", 'e'},  {"file", 'f'},    {"function", 0}, {"helptopic", 0},
+    {"hostname", 0},  {"group", 'g'},   {"job", 'j'},    {"keyword", 'k'},
+    {"running", 0},   {"service", 's'}, {"setopt", 0},   {"shopt", 0},
+    {"signal", 0},    {"stopped", 0},   {"user", 'u'},   {"variable", 'v'},
+    {nullptr, 0}};
+
+// bash's sh_single_quote: wrap in single quotes, embedded ' becomes '\''.
+static std::string comp_squote(const std::string &s) {
+  std::string r = "'";
+  for (char c : s) { if (c == '\'') r += "'\\''"; else r += c; }
+  return r + "'";
+}
+
+// FNV variant matching bash's hash_string / gnash's assoc_hash_string, so the
+// compspec listing walks the same 512-bucket table order bash does.
+static unsigned comp_hash(const std::string &s) {
+  unsigned i = 2166136261u;
+  for (unsigned char c : s) { i += (i << 1) + (i << 4) + (i << 7) + (i << 8) + (i << 24); i ^= c; }
+  return i;
+}
+
+// The pseudo-topics `help' knows about beyond the builtins, for `-A helptopic'.
+static const char *const kHelpSpecials[] = {
+    "!", "%", "(( ... ))", "[[ ... ]]", "{ ... }", "case", "coproc", "for",
+    "for ((", "function", "if", "select", "time", "until", "variables",
+    "while", nullptr};
+
 // Collect the raw candidate list for compgen's actions (before prefix filter).
-static void compgen_collect(Shell &sh, const std::vector<char> &actions, const std::string &word,
-                            std::vector<std::string> &c) {
-  for (char a : actions) {
-    switch (a) {
-      case 'b': for (const auto &n : builtin_names_sorted()) c.push_back(n); break;
-      case 'k': for (int i = 0; kReservedWords[i]; i++) c.push_back(kReservedWords[i]); break;
-      case 'v': for (const auto &kv : sh.vars) c.push_back(kv.first); break;
-      case 'e': for (const auto &kv : sh.vars) if (kv.second.exported) c.push_back(kv.first); break;
-      case 'a': for (const auto &kv : sh.aliases) c.push_back(kv.first); break;
-      case 'F': for (const auto &kv : sh.functions) c.push_back(kv.first); break;
-      case 'f': compgen_files(word, false, c); break;
-      case 'd': compgen_files(word, true, c); break;
-      case 'c': {  // command names: keywords, builtins, functions, aliases, PATH
+static void compgen_collect(Shell &sh, const std::vector<std::string> &actions,
+                            const std::string &word, std::vector<std::string> &c) {
+  for (const std::string &act : actions) {
+    if (act == "builtin") { for (const auto &n : builtin_names_sorted()) c.push_back(n); }
+    else if (act == "enabled" || act == "disabled") {
+      // gnash has no disabled builtins; `enabled' is every builtin.
+      if (act == "enabled") for (const auto &n : builtin_names_sorted()) c.push_back(n);
+    }
+    else if (act == "helptopic") {
+      std::vector<std::string> t = builtin_names_sorted();
+      for (const char *const *s = kHelpSpecials; *s; s++) t.push_back(*s);
+      std::sort(t.begin(), t.end());
+      for (const auto &n : t) c.push_back(n);
+    }
+    else if (act == "setopt") { for (const auto &o : set_option_states(sh)) c.push_back(o.first); }
+    else if (act == "shopt") { for (const auto &kv : sh.shopt_opts) c.push_back(kv.first); }
+    else if (act == "keyword") { for (int i = 0; kReservedWords[i]; i++) c.push_back(kReservedWords[i]); }
+    else if (act == "variable") { for (const auto &kv : sh.vars) c.push_back(kv.first); }
+    else if (act == "export") { for (const auto &kv : sh.vars) if (kv.second.exported) c.push_back(kv.first); }
+    else if (act == "alias") { for (const auto &kv : sh.aliases) c.push_back(kv.first); }
+    else if (act == "function") { for (const auto &kv : sh.functions) c.push_back(kv.first); }
+    else if (act == "file") { compgen_files(word, false, c); }
+    else if (act == "directory") { compgen_files(word, true, c); }
+    else if (act == "command") {  // command names: keywords, builtins, functions, aliases, PATH
         for (int i = 0; kReservedWords[i]; i++) c.push_back(kReservedWords[i]);
         for (const auto &n : builtin_names_sorted()) c.push_back(n);
         for (const auto &kv : sh.functions) c.push_back(kv.first);
@@ -3584,100 +3631,246 @@ static void compgen_collect(Shell &sh, const std::vector<char> &actions, const s
           if (q == std::string::npos) break;
           p = q + 1;
         }
-        break;
-      }
-      default: break;
     }
+    // Unhandled actions (arrayvar/binding/hostname/job/signal/...) yield nothing.
   }
 }
 
+// Map a compgen short action flag to its action name (subset of kCompActs).
+static const char *compgen_short_action(char o) {
+  for (const CompActEnt *e = kCompActs; e->name; e++)
+    if (e->opt == o) return e->name;
+  return nullptr;
+}
+static bool compgen_valid_action(const std::string &a) {
+  for (const CompActEnt *e = kCompActs; e->name; e++)
+    if (a == e->name) return true;
+  return false;
+}
+static bool compgen_valid_option(const std::string &o) {
+  for (const char *const *p = kCompOpts; *p; p++) if (o == *p) return true;
+  return false;
+}
+static bool valid_identifier(const std::string &s) {
+  if (s.empty() || (!std::isalpha((unsigned char)s[0]) && s[0] != '_')) return false;
+  for (char c : s) if (!std::isalnum((unsigned char)c) && c != '_') return false;
+  return true;
+}
+
 int bi_compgen(Shell &sh, const std::vector<std::string> &argv) {
+  static const char *const kUsage =
+      "compgen: usage: compgen [-V varname] [-abcdefgjksuv] [-o option] "
+      "[-A action] [-G globpat] [-W wordlist] [-F function] [-C command] "
+      "[-X filterpat] [-P prefix] [-S suffix] [word]\n";
   std::vector<std::string> words;
-  std::vector<char> actions;
-  std::string prefix, suffix, word;
+  std::vector<std::string> actions;
+  std::string prefix, suffix, word, filterpat, varname;
+  bool has_filter = false, has_var = false;
   size_t i = 1;
-  auto optarg = [&](const std::string &a, size_t &k) -> std::string {
+  auto optarg = [&](const std::string &a) -> std::string {
     if (a.size() > 2) return a.substr(2);
     return (i + 1 < argv.size()) ? argv[++i] : std::string();
-    (void)k;
   };
   for (; i < argv.size(); i++) {
     const std::string &a = argv[i];
     if (a == "--") { i++; break; }
     if (a.size() < 2 || a[0] != '-') break;
     char o = a[1];
-    size_t k = 0;
-    if (o == 'W') { std::istringstream iss(optarg(a, k)); std::string w; while (iss >> w) words.push_back(w); }
-    else if (o == 'P') prefix = optarg(a, k);
-    else if (o == 'S') suffix = optarg(a, k);
+    if (o == 'W') { std::istringstream iss(optarg(a)); std::string w; while (iss >> w) words.push_back(w); }
+    else if (o == 'P') prefix = optarg(a);
+    else if (o == 'S') suffix = optarg(a);
+    else if (o == 'X') { filterpat = optarg(a); has_filter = true; }
+    else if (o == 'V') { varname = optarg(a); has_var = true; }
     else if (o == 'A') {
-      std::string act = optarg(a, k);
-      if (act == "function") actions.push_back('F');
-      else if (act == "builtin") actions.push_back('b');
-      else if (act == "keyword") actions.push_back('k');
-      else if (act == "variable") actions.push_back('v');
-      else if (act == "export") actions.push_back('e');
-      else if (act == "alias") actions.push_back('a');
-      else if (act == "command") actions.push_back('c');
-      else if (act == "file") actions.push_back('f');
-      else if (act == "directory") actions.push_back('d');
-    } else if (std::strchr("bkvecafd", o)) {
-      for (size_t j = 1; j < a.size(); j++) actions.push_back(a[j]);
-    } else if (std::strchr("GXoFC", o)) {
-      optarg(a, k);  // consume the argument of unsupported generators
+      std::string act = optarg(a);
+      if (!compgen_valid_action(act)) {
+        std::fflush(stdout);
+        std::fprintf(stderr, "%scompgen: %s: invalid action name\n", sh.err_prefix().c_str(), act.c_str());
+        return 1;
+      }
+      actions.push_back(act);
+    } else if (o == 'o') {
+      std::string opt = optarg(a);
+      if (!compgen_valid_option(opt)) {
+        std::fflush(stdout);
+        std::fprintf(stderr, "%scompgen: %s: invalid option name\n", sh.err_prefix().c_str(), opt.c_str());
+        return 1;
+      }
+    } else if (o == 'G' || o == 'F' || o == 'C') {
+      optarg(a);  // consume the argument of an unsupported generator
+    } else if (compgen_short_action(o)) {
+      for (size_t j = 1; j < a.size(); j++)
+        if (const char *ac = compgen_short_action(a[j])) actions.push_back(ac);
+    } else {
+      std::fflush(stdout);
+      std::fprintf(stderr, "%scompgen: -%c: invalid option\n", sh.err_prefix().c_str(), o);
+      std::fprintf(stderr, "%s", kUsage);
+      return 2;
     }
+  }
+  if (has_var && !valid_identifier(varname)) {
+    std::fflush(stdout);
+    std::fprintf(stderr, "%scompgen: `%s': not a valid identifier\n", sh.err_prefix().c_str(), varname.c_str());
+    return 1;
   }
   if (i < argv.size()) word = argv[i];
 
   std::vector<std::string> cands = words;
   compgen_collect(sh, actions, word, cands);
 
-  int printed = 0;
+  // -X filterpat removes candidates that match; a leading `!' inverts (keeps
+  // only matches).  The prefix/suffix are applied after filtering.
+  bool invert = has_filter && !filterpat.empty() && filterpat[0] == '!';
+  std::string fpat = invert ? filterpat.substr(1) : filterpat;
+  std::vector<std::string> results;
   for (const std::string &c : cands) {
     if (!word.empty() && c.compare(0, word.size(), word) != 0) continue;
-    std::printf("%s%s%s\n", prefix.c_str(), c.c_str(), suffix.c_str());
-    printed++;
+    if (has_filter && !fpat.empty()) {
+      std::string p = fpat, t = c;
+      bool m = strmatch(p.data(), t.data(), FNM_EXTMATCH) == 0;
+      if (m != invert) continue;  // drop matches (or non-matches when inverted)
+    }
+    results.push_back(prefix + c + suffix);
   }
-  return printed ? 0 : 1;
+  if (has_var) {  // store the results in the named array instead of printing
+    std::vector<std::pair<std::optional<std::string>, std::string>> elems;
+    for (const auto &r : results) elems.push_back({std::nullopt, r});
+    sh.array_assign(varname, elems, false, false);
+    return results.empty() ? 1 : 0;
+  }
+  for (const std::string &r : results) std::printf("%s\n", r.c_str());
+  return results.empty() ? 1 : 0;
 }
 
-// Reconstruct a `complete' spec string (best effort) for -p output.
+// bash's `complete -p' reconstruction (builtins/complete.def:print_one_completion):
+// options and actions are emitted in a fixed canonical order, not the order the
+// user gave them.  These tables mirror bash's compopts[]/compacts[].
+// Reconstruct a `complete' spec string in bash's canonical order for -p output.
 int bi_complete(Shell &sh, const std::vector<std::string> &argv) {
+  static const char *const kUsage =
+      "complete: usage: complete [-abcdefgjksuv] [-pr] [-DEI] [-o option] "
+      "[-A action] [-G globpat] [-W wordlist] [-F function] [-C command] "
+      "[-X filterpat] [-P prefix] [-S suffix] [name ...]\n";
   bool print = false, remove = false;
-  std::string spec;  // the option part, reused as the stored spec
-  size_t i = 1;
+  std::set<std::string> o_set, act_set;
+  std::string g_arg, w_arg, p_arg, s_arg, x_arg, c_arg, f_arg;
+  bool has_g = false, has_w = false, has_p = false, has_s = false,
+       has_x = false, has_c = false, has_f = false;
   std::vector<std::string> names;
-  for (; i < argv.size(); i++) {
+  auto short_action = [](char o) -> const char * {
+    for (const CompActEnt *e = kCompActs; e->name; e++)
+      if (e->opt == o) return e->name;
+    return nullptr;
+  };
+  for (size_t i = 1; i < argv.size(); i++) {
     const std::string &a = argv[i];
     if (a == "-p") { print = true; continue; }
     if (a == "-r") { remove = true; continue; }
-    if (a.size() >= 2 && a[0] == '-') {
-      spec += (spec.empty() ? "" : " ") + a;
-      // options that take an argument
-      if (std::strchr("WFCGXPSAo", a[1]) && a.size() == 2 && i + 1 < argv.size()) {
-        std::string arg = argv[++i];
-        spec += " " + (a[1] == 'W' || a[1] == 'F' || a[1] == 'C' ? "'" + arg + "'" : arg);
+    if (a.size() >= 2 && a[0] == '-' && a != "--") {
+      auto takes = [&](std::string &dst, bool &has) {
+        has = true;
+        if (a.size() > 2) dst = a.substr(2);
+        else if (i + 1 < argv.size()) dst = argv[++i];
+      };
+      char o = a[1];
+      switch (o) {
+        case 'o': { std::string v; bool h; takes(v, h); o_set.insert(v); break; }
+        case 'A': { std::string v; bool h; takes(v, h); act_set.insert(v); break; }
+        case 'G': takes(g_arg, has_g); break;
+        case 'W': takes(w_arg, has_w); break;
+        case 'P': takes(p_arg, has_p); break;
+        case 'S': takes(s_arg, has_s); break;
+        case 'X': takes(x_arg, has_x); break;
+        case 'C': takes(c_arg, has_c); break;
+        case 'F': takes(f_arg, has_f); break;
+        default:
+          if (const char *act = short_action(o)) act_set.insert(act);
+          else {
+            std::fflush(stdout);
+            std::fprintf(stderr, "%scomplete: -%c: invalid option\n",
+                         sh.err_prefix().c_str(), o);
+            std::fprintf(stderr, "%s", kUsage);
+            return 2;
+          }
       }
       continue;
     }
+    if (a == "--") continue;
     names.push_back(a);
   }
+
   if (remove) {
-    if (names.empty()) sh.completions.clear();
-    else for (const auto &n : names) sh.completions.erase(n);
+    if (names.empty()) { sh.completions.clear(); sh.completion_order.clear(); }
+    else
+      for (const auto &n : names) {
+        if (sh.completions.erase(n)) {
+          auto &ord = sh.completion_order;
+          ord.erase(std::remove(ord.begin(), ord.end(), n), ord.end());
+        } else {
+          std::fflush(stdout);
+          std::fprintf(stderr, "%scomplete: %s: no completion specification\n",
+                       sh.err_prefix().c_str(), n.c_str());
+          return 1;
+        }
+      }
     return 0;
+  }
+
+  // Build the canonical spec text (empty for a bare `complete name').
+  std::string spec;
+  auto add = [&](const std::string &s) { if (!spec.empty()) spec += ' '; spec += s; };
+  for (const char *const *o = kCompOpts; *o; o++)
+    if (o_set.count(*o)) add(std::string("-o ") + *o);
+  for (const CompActEnt *e = kCompActs; e->name; e++)  // short flags first
+    if (e->opt && act_set.count(e->name)) add(std::string("-") + e->opt);
+  for (const CompActEnt *e = kCompActs; e->name; e++)  // then long-only -A actions
+    if (e->opt == 0 && act_set.count(e->name)) add(std::string("-A ") + e->name);
+  if (has_g) add("-G " + comp_squote(g_arg));
+  if (has_w) add("-W " + comp_squote(w_arg));
+  if (has_p) add("-P " + comp_squote(p_arg));
+  if (has_s) add("-S " + comp_squote(s_arg));
+  if (has_x) add("-X " + comp_squote(x_arg));
+  if (has_c) add("-C " + comp_squote(c_arg));
+  if (has_f) add("-F " + (sub_has_metas(f_arg) ? comp_squote(f_arg) : f_arg));
+
+  auto emit = [&](const std::string &name, const std::string &sp) {
+    if (sp.empty()) std::printf("complete %s\n", name.c_str());
+    else std::printf("complete %s %s\n", sp.c_str(), name.c_str());
+  };
+  // List all compspecs in bash's hash-table walk order: bucket asc (bash's
+  // prog_completes has COMPLETE_HASH_BUCKETS=512), newest-first within a bucket.
+  auto walk_order = [&]() {
+    std::vector<std::string> ord;
+    struct E { unsigned bucket; size_t seq; const std::string *name; };
+    std::vector<E> es;
+    for (size_t k = 0; k < sh.completion_order.size(); k++) {
+      const std::string &n = sh.completion_order[k];
+      if (sh.completions.count(n)) es.push_back({comp_hash(n) & 511u, k, &n});
+    }
+    std::stable_sort(es.begin(), es.end(), [](const E &a, const E &b) {
+      if (a.bucket != b.bucket) return a.bucket < b.bucket;
+      return a.seq > b.seq;
+    });
+    for (const auto &e : es) ord.push_back(*e.name);
+    return ord;
+  };
+
+  // Options but no name (and not -p/-r) is a usage error; a bare `complete'
+  // with nothing at all lists every compspec.
+  if (!print && names.empty() && !spec.empty()) {
+    std::fflush(stdout);
+    std::fprintf(stderr, "%s", kUsage);
+    return 2;
   }
   if (print || names.empty()) {
     if (names.empty()) {
-      for (const auto &kv : sh.completions)
-        std::printf("complete %s %s\n", kv.second.c_str(), kv.first.c_str());
+      for (const auto &n : walk_order()) emit(n, sh.completions[n]);
       return 0;
     }
     int st = 0;
     for (const auto &n : names) {
       auto it = sh.completions.find(n);
-      if (it != sh.completions.end())
-        std::printf("complete %s %s\n", it->second.c_str(), n.c_str());
+      if (it != sh.completions.end()) emit(n, it->second);
       else {
         std::fflush(stdout);
         std::fprintf(stderr, "%scomplete: %s: no completion specification\n",
@@ -3687,11 +3880,33 @@ int bi_complete(Shell &sh, const std::vector<std::string> &argv) {
     }
     return st;
   }
-  for (const auto &n : names) sh.completions[n] = spec;
+  for (const auto &n : names) {
+    if (!sh.completions.count(n)) sh.completion_order.push_back(n);
+    sh.completions[n] = spec;
+  }
   return 0;
 }
 
-int bi_compopt(Shell &sh, const std::vector<std::string> &) {
+int bi_compopt(Shell &sh, const std::vector<std::string> &argv) {
+  // bash validates -o/+o option names before reporting that no completion is in
+  // progress; an unknown name errors first.
+  for (size_t i = 1; i < argv.size(); i++) {
+    const std::string &a = argv[i];
+    if ((a == "-o" || a == "+o") && i + 1 < argv.size()) {
+      const std::string &opt = argv[++i];
+      if (!compgen_valid_option(opt)) {
+        std::fprintf(stderr, "%scompopt: %s: invalid option name\n",
+                     sh.err_prefix().c_str(), opt.c_str());
+        return 1;
+      }
+    } else if (a == "-D" || a == "-E" || a == "-I") {
+      continue;
+    } else if (!a.empty() && (a[0] == '-' || a[0] == '+') && a != "--") {
+      std::fprintf(stderr, "%scompopt: %c%c: invalid option\n",
+                   sh.err_prefix().c_str(), a[0], a.size() > 1 ? a[1] : ' ');
+      return 2;
+    }
+  }
   std::fprintf(stderr, "%scompopt: not currently executing completion function\n",
                sh.err_prefix().c_str());
   return 1;  // gnash never runs a completion function, so this always applies
