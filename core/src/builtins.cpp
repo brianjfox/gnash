@@ -2769,17 +2769,28 @@ int bi_shopt(Shell &sh, const std::vector<std::string> &argv) {
         case 'q': quiet_q = true; break;
         case 'p': print_p = true; break;
         case 'o': o_names = true; break;
-        default: break;
+        default:
+          std::fprintf(stderr, "%sshopt: -%c: invalid option\n",
+                       sh.err_prefix().c_str(), a[k]);
+          std::fprintf(stderr, "shopt: usage: shopt [-pqsu] [-o] [optname ...]\n");
+          return 2;
       }
     }
   }
 
   if (o_names) {
+    // `-p' reproduces as `set -o'/`set +o' commands; otherwise a NAME<TAB>state
+    // two-column listing (bash's list_minus_o_opts, field width 15).
+    auto show_o = [&](const std::string &n, bool on) {
+      if (quiet_q) return;
+      if (print_p) std::printf("set %co %s\n", on ? '-' : '+', n.c_str());
+      else std::printf("%-15s\t%s\n", n.c_str(), on ? "on" : "off");
+    };
     if (i >= argv.size()) {  // list set -o options
       for (const auto &o : set_option_states(sh)) {
         if (set_s && !o.second) continue;
         if (unset_u && o.second) continue;
-        if (!quiet_q) std::printf("set %co %s\n", o.second ? '-' : '+', o.first.c_str());
+        show_o(o.first, o.second);
       }
       return 0;
     }
@@ -2791,14 +2802,14 @@ int bi_shopt(Shell &sh, const std::vector<std::string> &argv) {
         if (o.first == n) { found = true; cur = o.second; }
       if (!found) {
         if (!quiet_q)
-          std::fprintf(stderr, "%sshopt: %s: invalid shell option name\n",
+          std::fprintf(stderr, "%sshopt: %s: invalid option name\n",
                        sh.err_prefix().c_str(), n.c_str());
         st = 1;
         continue;
       }
       if (set_s || unset_u) set_o_option(sh, n, set_s);
       else if (quiet_q) { if (!cur) st = 1; }
-      else std::printf("set %co %s\n", cur ? '-' : '+', n.c_str());
+      else show_o(n, cur);
     }
     return st;
   }
