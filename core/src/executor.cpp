@@ -1050,12 +1050,14 @@ int Executor::run_simple(const SimpleCommand *c) {
     status = unwinding() ? sh_.last_status : run(fit->second);
     // The RETURN trap fires when the function returns, in its own scope, with $?
     // set to the return status.  It runs when inherited (functrace) or installed
-    // inside the function.
+    // inside the function.  A function invoked while the DEBUG trap is running
+    // (e.g. the DEBUG-trap handler itself) does not inherit the RETURN trap --
+    // bash restores its default at entry when signal_in_progress(DEBUG_TRAP).
     {
       auto rt = sh_.traps.find("RETURN");
       bool set_now = rt != sh_.traps.end() && !rt->second.empty();
       bool set_inside = set_now && (!had_return || rt->second != return_before);
-      if (set_now && (sh_.opt_functrace || set_inside)) {
+      if (set_now && (sh_.opt_functrace || set_inside) && !sh_.in_debug_trap) {
         int ret_status = sh_.returning ? sh_.exit_status : status;
         bool save_ret = sh_.returning;
         int save_es = sh_.exit_status;
