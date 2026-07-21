@@ -836,9 +836,13 @@ int Executor::run_simple(const SimpleCommand *c) {
           else sh_.vars.erase(it->first);
         }
         if (integer) {
+          // An integer-attributed assignment evaluates the RHS as arithmetic;
+          // a malformed value (`i=0#4') prints bash's diagnostic and aborts the
+          // assignment with status 1 rather than silently storing 0.
           bool ok = true;
-          long long rv = eval_arith(sh_, v, &ok);
-          if (a.append) rv = eval_arith(sh_, cur, &ok) + rv;
+          long long rv = eval_arith_msg(sh_, v, "", &ok);
+          if (ok && a.append) rv = eval_arith_msg(sh_, cur, "", &ok) + rv;
+          if (!ok) { sh_.arith_error = true; break; }
           v = std::to_string(rv);
         } else if (a.append) {
           v = cur + v;
