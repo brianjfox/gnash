@@ -556,9 +556,34 @@ std::string canonical_word(const std::string &w) {
 
 }  // namespace
 
-std::string named_function_string(const std::string &name, const Command *body) {
+// bash's assignment(): NAME[sub]=... where NAME is a valid identifier.
+static bool func_name_is_assignment(const std::string &s) {
+  size_t i = 0;
+  if (s.empty() || (!std::isalpha((unsigned char)s[0]) && s[0] != '_')) return false;
+  while (i < s.size() && (std::isalnum((unsigned char)s[i]) || s[i] == '_')) i++;
+  if (i < s.size() && s[i] == '[') {
+    size_t j = s.find(']', i);
+    if (j == std::string::npos) return false;
+    i = j + 1;
+  }
+  return i < s.size() && s[i] == '=';
+}
+
+std::string named_function_string(const std::string &name, const Command *body,
+                                  bool posix) {
   MPrinter p;
-  p.out = name + " () ";
+  // bash prefixes `function ' to a name that is not a valid function name: in
+  // the default mode that means an assignment-shaped name (`a=2'); under posix
+  // it also covers all-digit names and non-identifiers.
+  bool prefix = func_name_is_assignment(name);
+  if (posix && !prefix) {
+    bool all_digits = !name.empty();
+    for (char c : name) if (!std::isdigit((unsigned char)c)) { all_digits = false; break; }
+    bool ident = !name.empty() && (std::isalpha((unsigned char)name[0]) || name[0] == '_');
+    for (char c : name) if (!std::isalnum((unsigned char)c) && c != '_') { ident = false; break; }
+    if (all_digits || !ident) prefix = true;
+  }
+  p.out = (prefix ? "function " : "") + name + " () ";
   p.out += '\n';
   p.print_func_body(body, 0);
   return p.out;

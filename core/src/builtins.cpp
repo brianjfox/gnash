@@ -1575,7 +1575,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     if (i >= argv.size()) {  // all functions
       for (const auto &kv : sh.functions) {
         if (funcnames) std::printf("declare -f %s\n", kv.first.c_str());
-        else std::printf("%s\n", named_function_string(kv.first, kv.second).c_str());
+        else std::printf("%s\n", named_function_string(kv.first, kv.second, sh.opt_posix).c_str());
       }
       return 0;
     }
@@ -1583,7 +1583,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
       auto it = sh.functions.find(argv[i]);
       if (it == sh.functions.end()) { st = 1; continue; }
       if (funcnames) std::printf("%s\n", argv[i].c_str());
-      else std::printf("%s\n", named_function_string(argv[i], it->second).c_str());
+      else std::printf("%s\n", named_function_string(argv[i], it->second, sh.opt_posix).c_str());
     }
     return st;
   }

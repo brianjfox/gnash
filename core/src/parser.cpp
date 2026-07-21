@@ -953,6 +953,9 @@ struct Parser {
     expect(Tok::Rparen, ")");
     newline_list();
     n->body = parse_command({});
+    // bash validates the function name at the end of the definition, so an
+    // invalid-name error reports the line the definition closes on.
+    n->line = i > 0 ? toks[i - 1].line : cur().line;
     return n;
   }
 
@@ -971,6 +974,7 @@ struct Parser {
     }
     newline_list();
     n->body = parse_command({});
+    n->line = i > 0 ? toks[i - 1].line : cur().line;  // the definition's end line
     return n;
   }
 

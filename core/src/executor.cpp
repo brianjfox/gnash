@@ -836,9 +836,13 @@ int Executor::run_simple(const SimpleCommand *c) {
           else sh_.vars.erase(it->first);
         }
         if (integer) {
+          // An integer-attributed assignment evaluates the RHS as arithmetic;
+          // a malformed value (`i=0#4') prints bash's diagnostic and aborts the
+          // assignment with status 1 rather than silently storing 0.
           bool ok = true;
-          long long rv = eval_arith(sh_, v, &ok);
-          if (a.append) rv = eval_arith(sh_, cur, &ok) + rv;
+          long long rv = eval_arith_msg(sh_, v, "", &ok);
+          if (ok && a.append) rv = eval_arith_msg(sh_, cur, "", &ok) + rv;
+          if (!ok) { sh_.arith_error = true; break; }
           v = std::to_string(rv);
         } else if (a.append) {
           v = cur + v;
@@ -1011,6 +1015,17 @@ int Executor::run_simple(const SimpleCommand *c) {
 
   int status = 0;
   if (is_func) {
+    // FUNCNEST caps function-call nesting: bash aborts with an error once the
+    // depth would reach it (a value <= 0 or an unset/invalid FUNCNEST = no cap).
+    if (sh_.is_set("FUNCNEST")) {
+      long fn_max = std::strtol(sh_.get("FUNCNEST").c_str(), nullptr, 10);
+      if (fn_max > 0 && static_cast<long>(sh_.local_stack.size()) >= fn_max) {
+        std::fprintf(stderr, "%s%s: maximum function nesting level exceeded (%ld)\n",
+                     sh_.err_prefix().c_str(), argv[0].c_str(), fn_max);
+        sh_.last_status = 1;
+        return 1;
+      }
+    }
     apply_temp();
     std::vector<std::string> saved_pos = sh_.positional;
     sh_.positional.assign(argv.begin() + 1, argv.end());
@@ -1468,6 +1483,13 @@ static int first_body_line(const Command *c) {
 }
 
 int Executor::run_funcdef(const FunctionDef *c) {
+  // bash rejects a function name that contained an unquoted `$' expansion
+  // (W_HASDOLLAR) -- e.g. `function sys$read' -- as not a valid identifier.
+  if (c->name.find('$') != std::string::npos) {
+    std::fprintf(stderr, "%s`%s': not a valid identifier\n",
+                 sh_.err_prefix().c_str(), c->name.c_str());
+    return (sh_.last_status = 1);
+  }
   sh_.functions[c->name] = c->body.get();
   sh_.func_src[c->name] = sh_.current_source();  // file it was defined in, for BASH_SOURCE
   sh_.func_lineno_base[c->name] = sh_.lineno_base;  // for $LINENO inside the body
