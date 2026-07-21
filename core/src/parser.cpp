@@ -584,10 +584,12 @@ struct Parser {
 
   CommandPtr parse_for() {
     bool select = reserved("select");
+    int for_line = cur().line;  // $LINENO of the `for'/`select' keyword
     push_open(select ? "select" : "for");
     advance();  // for / select
     auto n = std::make_unique<ForCommand>();
     n->is_select = select;
+    n->line = for_line;
 
     if (!select && is(Tok::Lparen) && cur().glued && peek(1).type == Tok::Lparen) {
       parse_arith_for_header(*n);

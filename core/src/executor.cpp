@@ -1348,11 +1348,21 @@ int Executor::run_for(const ForCommand *c) {
   }
   if (c->is_arith) {
     bool ok = true;
+    int for_line = sh_.cur_lineno;  // the loop's own line (set by run() on entry)
     // The three arithmetic sections undergo parameter/command expansion before
     // evaluation (as bash does), so forms like ${#arr[@]} work inside them.
     Expander aex(sh_);
-    auto aeval = [&](const std::string &e) {
+    auto aeval = [&](const std::string &e) -> long long {
       if (e.empty()) return 0LL;
+      // bash fires the DEBUG trap for each arith-for expression (init, and the
+      // test/step on every iteration), reporting the loop's own line, before
+      // evaluating it; extdebug lets a non-zero trap skip that evaluation.
+      if (sh_.traps.count("DEBUG") && !sh_.in_debug_trap) {
+        sh_.cur_lineno = for_line;
+        int tst = sh_.run_debug_trap("(( " + e + " ))");
+        auto ed = sh_.shopt_opts.find("extdebug");
+        if (tst != 0 && ed != sh_.shopt_opts.end() && ed->second) return 0LL;
+      }
       if (sh_.opt_xtrace) std::fprintf(stderr, "+ (( %s ))\n", e.c_str());
       return static_cast<long long>(eval_arith(sh_, aex.expand_no_split(e), &ok));
     };
