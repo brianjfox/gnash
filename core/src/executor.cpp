@@ -1483,6 +1483,13 @@ static int first_body_line(const Command *c) {
 }
 
 int Executor::run_funcdef(const FunctionDef *c) {
+  // bash rejects a function name that contained an unquoted `$' expansion
+  // (W_HASDOLLAR) -- e.g. `function sys$read' -- as not a valid identifier.
+  if (c->name.find('$') != std::string::npos) {
+    std::fprintf(stderr, "%s`%s': not a valid identifier\n",
+                 sh_.err_prefix().c_str(), c->name.c_str());
+    return (sh_.last_status = 1);
+  }
   sh_.functions[c->name] = c->body.get();
   sh_.func_src[c->name] = sh_.current_source();  // file it was defined in, for BASH_SOURCE
   sh_.func_lineno_base[c->name] = sh_.lineno_base;  // for $LINENO inside the body
