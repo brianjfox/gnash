@@ -1040,8 +1040,13 @@ int Executor::run_simple(const SimpleCommand *c) {
     if (lbit != sh_.func_lineno_base.end()) sh_.lineno_base = lbit->second;
     // Under functrace, bash fires the DEBUG trap once for the function body as a
     // whole on entry, before the per-command traps inside it.
-    if (sh_.opt_functrace && sh_.traps.count("DEBUG") && !sh_.in_debug_trap)
+    if (sh_.opt_functrace && sh_.traps.count("DEBUG") && !sh_.in_debug_trap) {
+      // The whole-body DEBUG trap reports the function's definition line.
+      auto dlit = sh_.func_def_line.find(argv[0]);
+      sh_.cur_lineno = dlit != sh_.func_def_line.end() ? dlit->second
+                                                       : sh_.lineno_base + 1;
       sh_.run_debug_trap(to_string(fit->second));
+    }
     // Snapshot the RETURN trap so we can tell one the function installs for
     // itself from an inherited one (only inherited under functrace).
     auto rtit = sh_.traps.find("RETURN");
@@ -1439,10 +1444,27 @@ int Executor::run_case(const CaseCommand *c) {
   return st;
 }
 
+// The relative source line of the first executable command in a body, found by
+// descending through wrapping groups/connections; 0 if none carries a line.
+static int first_body_line(const Command *c) {
+  if (!c) return 0;
+  if (auto *g = dynamic_cast<const Group *>(c)) return first_body_line(g->body.get());
+  if (auto *s = dynamic_cast<const Subshell *>(c)) return first_body_line(s->body.get());
+  if (auto *cn = dynamic_cast<const Connection *>(c)) {
+    int f = first_body_line(cn->first.get());
+    return f > 0 ? f : first_body_line(cn->second.get());
+  }
+  return c->line;
+}
+
 int Executor::run_funcdef(const FunctionDef *c) {
   sh_.functions[c->name] = c->body.get();
   sh_.func_src[c->name] = sh_.current_source();  // file it was defined in, for BASH_SOURCE
   sh_.func_lineno_base[c->name] = sh_.lineno_base;  // for $LINENO inside the body
+  // The `name ()' line = one above the body's first command (both the entry
+  // DEBUG trap and `caller' report it); computed absolutely under the body base.
+  int fbl = first_body_line(c->body.get());
+  sh_.func_def_line[c->name] = fbl > 0 ? sh_.lineno_base + fbl - 1 : sh_.cur_lineno;
   return 0;
 }
 

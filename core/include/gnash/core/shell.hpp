@@ -165,6 +165,9 @@ class Shell {
   // inside the body reports absolute source lines even when the function is
   // called from a different input block (which has its own lineno_base).
   std::map<std::string, int> func_lineno_base;
+  // Function name -> the absolute source line of its definition (the `name ()'
+  // line), reported by the whole-body DEBUG trap fired on entry under functrace.
+  std::map<std::string, int> func_def_line;
   std::string current_source() const {          // file of the innermost frame
     return src_frames.empty() ? std::string() : src_frames.back().source;
   }
