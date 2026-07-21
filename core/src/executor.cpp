@@ -1011,6 +1011,17 @@ int Executor::run_simple(const SimpleCommand *c) {
 
   int status = 0;
   if (is_func) {
+    // FUNCNEST caps function-call nesting: bash aborts with an error once the
+    // depth would reach it (a value <= 0 or an unset/invalid FUNCNEST = no cap).
+    if (sh_.is_set("FUNCNEST")) {
+      long fn_max = std::strtol(sh_.get("FUNCNEST").c_str(), nullptr, 10);
+      if (fn_max > 0 && static_cast<long>(sh_.local_stack.size()) >= fn_max) {
+        std::fprintf(stderr, "%s%s: maximum function nesting level exceeded (%ld)\n",
+                     sh_.err_prefix().c_str(), argv[0].c_str(), fn_max);
+        sh_.last_status = 1;
+        return 1;
+      }
+    }
     apply_temp();
     std::vector<std::string> saved_pos = sh_.positional;
     sh_.positional.assign(argv.begin() + 1, argv.end());
