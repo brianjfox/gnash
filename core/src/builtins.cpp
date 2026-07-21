@@ -3941,7 +3941,12 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
         // so ${BASH_SOURCE[0]} lets a script locate itself.  The call line is
         // where `source' appears in the current file.
         sh.push_src_frame("source", path, sh.cur_lineno, false);
+        // A sourced file has its own line numbering starting at 1 ($LINENO, the
+        // DEBUG trap, and functions it defines all use the file's own lines).
+        int saved_src_base = sh.lineno_base;
+        sh.lineno_base = 0;
         st = sh.run_string(ss.str());
+        sh.lineno_base = saved_src_base;
         // `return' inside a sourced file ends the file (and sets its status),
         // like reaching EOF -- it must not unwind past `source' or exit the
         // shell (bash semantics; e.g. /etc/bashrc does `[ -z "$PS1" ] && return').
