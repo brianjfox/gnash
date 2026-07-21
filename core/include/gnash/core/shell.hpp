@@ -256,6 +256,9 @@ class Shell {
 
   // --- diagnostics -------------------------------------------------------
   std::string shell_name = "gnash";  // program name shown in error messages
+  // Absolute path to this shell's own executable, captured at startup.  Used
+  // to re-exec a script that has no #! line (see the ENOEXEC path in exec).
+  std::string self_exe;
   // Extra context component for parse errors ("eval", "command substitution"),
   // as bash prints `NAME: eval: line N: ...'.
   std::string error_context;
