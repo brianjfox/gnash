@@ -1651,7 +1651,10 @@ std::string Shell::run_and_capture_inproc(const std::string &script, int *status
   if (!tf) { if (status) *status = 1; return std::string(); }
   int tfd = fileno(tf);
   dup2(tfd, STDOUT_FILENO);
+  int saved_base = lineno_base;  // run at the enclosing command's line
+  lineno_base = cur_lineno - 1;
   int st = run_string(script);
+  lineno_base = saved_base;
   std::fflush(stdout);
   dup2(saved, STDOUT_FILENO);
   close(saved);
@@ -1688,6 +1691,10 @@ std::string Shell::run_and_capture(const std::string &script, int *status) {
     // `echo' under `set -e'.  POSIX mode inherits errexit into the subshell, so
     // there `z=$(false; echo foo)' exits silently before the `echo'.
     if (opt_errexit && !opt_posix && !shopt_opts["inherit_errexit"]) opt_errexit = false;
+    // The substitution's commands run at the enclosing command's line: bash does
+    // not reset the line counter for a command substitution, so $LINENO (and a
+    // DEBUG trap firing inside it) reports the line where the `$(...)' appears.
+    lineno_base = cur_lineno - 1;
     int st = run_string(script);
     std::fflush(stdout);
     _exit(st & 0xff);
