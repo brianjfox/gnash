@@ -17,3 +17,6 @@ tests/bash-tests/
 # Claude Code local settings (machine-specific, not shared)
 .claude/settings.local.json
 .claude/settings.local.json.*
+
+# Agent tooling run state (machine-specific, not part of the sources)
+.agent-state/
