@@ -8,6 +8,7 @@
 // are follow-ons.
 
 #include "gnash/core/expand.hpp"
+#include "gnash/core/subscript.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -1202,17 +1203,15 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
   bool have_sub = false;
   std::string sub;
   if (p < b.size() && b[p] == '[') {
-    size_t s = p + 1;
-    int d = 1;
-    p++;
-    while (p < b.size() && d) {
-      if (b[p] == '[') d++;
-      else if (b[p] == ']') d--;
-      if (d) p++;
+    size_t close = skip_subscript(b, p);
+    if (close != std::string::npos) {
+      sub = b.substr(p + 1, close - p - 1);
+      p = close + 1;
+    } else {  // unterminated: treat the rest as the subscript
+      sub = b.substr(p + 1);
+      p = b.size();
     }
-    sub = b.substr(s, p - s);
     have_sub = true;
-    if (p < b.size() && b[p] == ']') p++;
   }
 
   // zsh: `${#a}' on an array is the element count (bash gives the length of

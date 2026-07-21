@@ -4,6 +4,7 @@
 // executor.cpp -- execute the command AST.
 
 #include "gnash/core/executor.hpp"
+#include "gnash/core/subscript.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -202,21 +203,11 @@ struct Assign {
 };
 
 bool parse_assign(const std::string &w, Assign &a) {
-  size_t i = 0;
-  while (i < w.size() && (std::isalnum(static_cast<unsigned char>(w[i])) || w[i] == '_')) i++;
-  a.name = w.substr(0, i);
-  if (a.name.empty()) return false;
-  if (i < w.size() && w[i] == '[') {
-    size_t s = ++i;
-    int d = 1;
-    while (i < w.size() && d) {
-      if (w[i] == '[') d++;
-      else if (w[i] == ']') d--;
-      if (d) i++;
-    }
-    a.sub = w.substr(s, i - s);
-    if (i < w.size() && w[i] == ']') i++;
-  }
+  std::string sub;
+  bool has_sub = false;
+  size_t i = split_subscript(w, a.name, sub, has_sub);
+  if (i == std::string::npos) return false;  // not a name-headed word
+  if (has_sub) a.sub = sub;
   if (i < w.size() && w[i] == '+') { a.append = true; i++; }
   if (i >= w.size() || w[i] != '=') return false;
   i++;
@@ -245,7 +236,7 @@ parse_array_elems(Shell &sh, Expander &ex, const std::string &name, bool integer
     if (t.type != Tok::Word) continue;
     const std::string &e = t.text;
     if (!e.empty() && e[0] == '[') {
-      size_t rb = e.find(']');
+      size_t rb = skip_subscript(e, 0);  // the ']' closing the [subscript]
       // [sub]=value or [sub]+=value (append to that element).
       bool app = rb != std::string::npos && rb + 2 < e.size() && e[rb + 1] == '+' &&
                  e[rb + 2] == '=';
@@ -391,9 +382,9 @@ bool is_assignment_word_text(const std::string &w) {
     return false;
   while (i < w.size() && (std::isalnum(static_cast<unsigned char>(w[i])) || w[i] == '_')) i++;
   if (i < w.size() && w[i] == '[') {
-    int d = 1;
-    i++;
-    while (i < w.size() && d) { if (w[i] == '[') d++; else if (w[i] == ']') d--; i++; }
+    size_t close = skip_subscript(w, i);
+    if (close == std::string::npos) return false;
+    i = close + 1;
   }
   if (i < w.size() && w[i] == '+') i++;
   return i < w.size() && w[i] == '=';

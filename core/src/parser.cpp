@@ -4,6 +4,7 @@
 // parser.cpp -- recursive-descent parser (see parser.hpp).
 
 #include "gnash/core/parser.hpp"
+#include "gnash/core/subscript.hpp"
 
 #include <cctype>
 #include <cstdlib>
@@ -484,13 +485,10 @@ struct Parser {
     if (i >= s.size() || !(std::isalpha(static_cast<unsigned char>(s[i])) || s[i] == '_'))
       return false;
     while (i < s.size() && (std::isalnum(static_cast<unsigned char>(s[i])) || s[i] == '_')) i++;
-    if (i < s.size() && s[i] == '[') {  // subscript
-      int depth = 0;
-      for (; i < s.size(); i++) {
-        if (s[i] == '[') depth++;
-        else if (s[i] == ']') { i++; break; }
-      }
-      (void)depth;
+    if (i < s.size() && s[i] == '[') {  // subscript (quote/escape aware)
+      std::size_t close = skip_subscript(s, i);
+      if (close == std::string::npos) return false;
+      i = close + 1;
     }
     if (i < s.size() && s[i] == '+') i++;
     return i < s.size() && s[i] == '=';
@@ -505,8 +503,11 @@ struct Parser {
     if (i >= w.size() || !(std::isalpha(static_cast<unsigned char>(w[i])) || w[i] == '_'))
       return "";
     while (i < w.size() && (std::isalnum(static_cast<unsigned char>(w[i])) || w[i] == '_')) i++;
-    if (i < w.size() && w[i] == '[')
-      for (; i < w.size(); i++) if (w[i] == ']') { i++; break; }
+    if (i < w.size() && w[i] == '[') {
+      std::size_t close = skip_subscript(w, i);
+      if (close == std::string::npos) return "";
+      i = close + 1;
+    }
     if (i < w.size() && w[i] == '+') i++;
     if (i >= w.size() || w[i] != '=') return "";
     i++;  // past `='
