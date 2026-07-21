@@ -3008,23 +3008,58 @@ int bi_enable(Shell &sh, const std::vector<std::string> &argv) {
 
 // ---- caller --------------------------------------------------------------
 int bi_caller(Shell &sh, const std::vector<std::string> &argv) {
-  if (sh.call_stack.empty()) return 1;
-  size_t top = sh.call_stack.size() - 1;
-  // call_stack[k].line is where call_stack[k].func was invoked.  For frame N,
-  // bash reports that call line, but the *calling* function's name/source (the
-  // frame just below), FUNCNAME[N+1]/BASH_SOURCE[N+1].
-  if (argv.size() > 1) {  // caller N: "line function source"
-    long n = std::atol(argv[1].c_str());
-    // Valid only while FUNCNAME[N+1] is a real function (not the main script).
-    if (n < 0 || static_cast<size_t>(n) + 1 >= sh.call_stack.size()) return 1;
-    const auto &fr = sh.call_stack[top - static_cast<size_t>(n)];
-    const auto &caller = sh.call_stack[top - static_cast<size_t>(n) - 1];
-    std::printf("%d %s %s\n", fr.line, caller.func.c_str(), caller.source.c_str());
+  // Mirror bash's caller.def: read the BASH_LINENO / BASH_SOURCE / FUNCNAME
+  // call-context arrays so top-level ("line source", with NULL for a missing
+  // frame) and the error diagnostics match byte-for-byte.
+  static const char *kUsage = "caller: usage: caller [expr]\n";
+  size_t ai = 1;
+  // no_options: a leading `-X' (anything but a bare `--') is an invalid option.
+  if (ai < argv.size() && argv[ai].size() >= 1 && argv[ai][0] == '-' &&
+      argv[ai] != "--") {
+    std::fprintf(stderr, "%scaller: %s: invalid option\n",
+                 sh.err_prefix().c_str(), argv[ai].c_str());
+    std::fprintf(stderr, "%s", kUsage);
+    return 2;
+  }
+  if (ai < argv.size() && argv[ai] == "--") ai++;
+
+  std::vector<std::string> lineno = sh.array_values("BASH_LINENO");
+  std::vector<std::string> source = sh.array_values("BASH_SOURCE");
+  std::vector<std::string> funcs = sh.array_values("FUNCNAME");
+  auto at = [](const std::vector<std::string> &v, size_t i) -> const char * {
+    return i < v.size() ? v[i].c_str() : "NULL";
+  };
+  if (lineno.empty() || source.empty()) return 1;
+
+  if (ai >= argv.size()) {  // caller (no arg): "line source"
+    std::printf("%s %s\n", at(lineno, 0), at(source, 1));
     return 0;
   }
-  const auto &fr = sh.call_stack[top];  // caller (no arg): "line source"
-  std::string source = (top >= 1) ? sh.call_stack[top - 1].source : fr.source;
-  std::printf("%d %s\n", fr.line, source.c_str());
+  // valid_number: optional surrounding blanks, an optional sign, then digits.
+  const std::string &w = argv[ai];
+  size_t p = 0, e = w.size();
+  while (p < e && std::isspace(static_cast<unsigned char>(w[p]))) p++;
+  while (e > p && std::isspace(static_cast<unsigned char>(w[e - 1]))) e--;
+  size_t d = p;
+  if (d < e && (w[d] == '+' || w[d] == '-')) d++;
+  bool valid = d < e;
+  for (size_t k = d; k < e; k++)
+    if (!std::isdigit(static_cast<unsigned char>(w[k]))) { valid = false; break; }
+  if (!valid) {
+    std::fprintf(stderr, "%scaller: %s: invalid number\n",
+                 sh.err_prefix().c_str(), w.c_str());
+    std::fprintf(stderr, "%s", kUsage);
+    return 2;
+  }
+  // A valid EXPR requires an active function frame and an in-range index.
+  if (funcs.empty()) return 1;
+  long num = std::atol(w.substr(p, e - p).c_str());
+  size_t un = static_cast<size_t>(num);
+  if (num < 0 || un >= lineno.size() || un + 1 >= source.size() ||
+      un + 1 >= funcs.size())
+    return 1;
+  std::printf("%s %s %s\n", lineno[un].c_str(), funcs[un + 1].c_str(),
+              source[un + 1].c_str());
   return 0;
 }
 
@@ -3941,7 +3976,12 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
         // so ${BASH_SOURCE[0]} lets a script locate itself.  The call line is
         // where `source' appears in the current file.
         sh.push_src_frame("source", path, sh.cur_lineno, false);
+        // A sourced file has its own line numbering starting at 1 ($LINENO, the
+        // DEBUG trap, and functions it defines all use the file's own lines).
+        int saved_src_base = sh.lineno_base;
+        sh.lineno_base = 0;
         st = sh.run_string(ss.str());
+        sh.lineno_base = saved_src_base;
         // `return' inside a sourced file ends the file (and sets its status),
         // like reaching EOF -- it must not unwind past `source' or exit the
         // shell (bash semantics; e.g. /etc/bashrc does `[ -z "$PS1" ] && return').

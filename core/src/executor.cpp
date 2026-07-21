@@ -1040,8 +1040,13 @@ int Executor::run_simple(const SimpleCommand *c) {
     if (lbit != sh_.func_lineno_base.end()) sh_.lineno_base = lbit->second;
     // Under functrace, bash fires the DEBUG trap once for the function body as a
     // whole on entry, before the per-command traps inside it.
-    if (sh_.opt_functrace && sh_.traps.count("DEBUG") && !sh_.in_debug_trap)
+    if (sh_.opt_functrace && sh_.traps.count("DEBUG") && !sh_.in_debug_trap) {
+      // The whole-body DEBUG trap reports the function's definition line.
+      auto dlit = sh_.func_def_line.find(argv[0]);
+      sh_.cur_lineno = dlit != sh_.func_def_line.end() ? dlit->second
+                                                       : sh_.lineno_base + 1;
       sh_.run_debug_trap(to_string(fit->second));
+    }
     // Snapshot the RETURN trap so we can tell one the function installs for
     // itself from an inherited one (only inherited under functrace).
     auto rtit = sh_.traps.find("RETURN");
@@ -1050,12 +1055,14 @@ int Executor::run_simple(const SimpleCommand *c) {
     status = unwinding() ? sh_.last_status : run(fit->second);
     // The RETURN trap fires when the function returns, in its own scope, with $?
     // set to the return status.  It runs when inherited (functrace) or installed
-    // inside the function.
+    // inside the function.  A function invoked while the DEBUG trap is running
+    // (e.g. the DEBUG-trap handler itself) does not inherit the RETURN trap --
+    // bash restores its default at entry when signal_in_progress(DEBUG_TRAP).
     {
       auto rt = sh_.traps.find("RETURN");
       bool set_now = rt != sh_.traps.end() && !rt->second.empty();
       bool set_inside = set_now && (!had_return || rt->second != return_before);
-      if (set_now && (sh_.opt_functrace || set_inside)) {
+      if (set_now && (sh_.opt_functrace || set_inside) && !sh_.in_debug_trap) {
         int ret_status = sh_.returning ? sh_.exit_status : status;
         bool save_ret = sh_.returning;
         int save_es = sh_.exit_status;
@@ -1341,11 +1348,21 @@ int Executor::run_for(const ForCommand *c) {
   }
   if (c->is_arith) {
     bool ok = true;
+    int for_line = sh_.cur_lineno;  // the loop's own line (set by run() on entry)
     // The three arithmetic sections undergo parameter/command expansion before
     // evaluation (as bash does), so forms like ${#arr[@]} work inside them.
     Expander aex(sh_);
-    auto aeval = [&](const std::string &e) {
+    auto aeval = [&](const std::string &e) -> long long {
       if (e.empty()) return 0LL;
+      // bash fires the DEBUG trap for each arith-for expression (init, and the
+      // test/step on every iteration), reporting the loop's own line, before
+      // evaluating it; extdebug lets a non-zero trap skip that evaluation.
+      if (sh_.traps.count("DEBUG") && !sh_.in_debug_trap) {
+        sh_.cur_lineno = for_line;
+        int tst = sh_.run_debug_trap("(( " + e + " ))");
+        auto ed = sh_.shopt_opts.find("extdebug");
+        if (tst != 0 && ed != sh_.shopt_opts.end() && ed->second) return 0LL;
+      }
       if (sh_.opt_xtrace) std::fprintf(stderr, "+ (( %s ))\n", e.c_str());
       return static_cast<long long>(eval_arith(sh_, aex.expand_no_split(e), &ok));
     };
@@ -1437,10 +1454,27 @@ int Executor::run_case(const CaseCommand *c) {
   return st;
 }
 
+// The relative source line of the first executable command in a body, found by
+// descending through wrapping groups/connections; 0 if none carries a line.
+static int first_body_line(const Command *c) {
+  if (!c) return 0;
+  if (auto *g = dynamic_cast<const Group *>(c)) return first_body_line(g->body.get());
+  if (auto *s = dynamic_cast<const Subshell *>(c)) return first_body_line(s->body.get());
+  if (auto *cn = dynamic_cast<const Connection *>(c)) {
+    int f = first_body_line(cn->first.get());
+    return f > 0 ? f : first_body_line(cn->second.get());
+  }
+  return c->line;
+}
+
 int Executor::run_funcdef(const FunctionDef *c) {
   sh_.functions[c->name] = c->body.get();
   sh_.func_src[c->name] = sh_.current_source();  // file it was defined in, for BASH_SOURCE
   sh_.func_lineno_base[c->name] = sh_.lineno_base;  // for $LINENO inside the body
+  // The `name ()' line = one above the body's first command (both the entry
+  // DEBUG trap and `caller' report it); computed absolutely under the body base.
+  int fbl = first_body_line(c->body.get());
+  sh_.func_def_line[c->name] = fbl > 0 ? sh_.lineno_base + fbl - 1 : sh_.cur_lineno;
   return 0;
 }
 

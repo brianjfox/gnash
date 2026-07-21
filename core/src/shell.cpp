@@ -261,10 +261,16 @@ int Shell::run_debug_trap(const std::string &cmd_text) {
   bash_command = cmd_text;
   int saved = last_status;  // $? inside the trap is the previous command's status
   int saved_line = cur_lineno;  // the trap must not leak its own line numbers
+  // bash runs a DEBUG/RETURN/ERR trap body without resetting the line counter
+  // (no SEVAL_RESETLINE), so $LINENO in the body's first line reports the
+  // command that triggered the trap; later body lines count up from there.
+  int saved_base = lineno_base;
+  lineno_base = cur_lineno - 1;
   std::string body = it->second;
   int st = run_string(body);
   last_status = saved;  // the trap does not alter $? for the upcoming command
   cur_lineno = saved_line;
+  lineno_base = saved_base;
   in_debug_trap = false;
   return st;
 }
@@ -854,13 +860,20 @@ void Shell::sync_source_arrays() {
     fn.invisible = true;
     return;
   }
+  // A script run from a file (or sourced) has a base "main" frame at index 0
+  // that FUNCNAME/BASH_LINENO trail with `main'/`0'; `sh -c' has no such frame,
+  // so its FUNCNAME/BASH_LINENO list only the active function frames.
+  bool has_base = !src_frames.front().is_func;
+  size_t stop = has_base ? 1 : 0;
   std::vector<std::string> names, lines;
-  for (size_t i = src_frames.size(); i-- > 1;) {  // top down to frame 1 (above base)
+  for (size_t i = src_frames.size(); i-- > stop;) {  // top down to the first frame
     names.push_back(src_frames[i].name);
     lines.push_back(std::to_string(src_frames[i].line));
   }
-  names.push_back("main");
-  lines.push_back("0");
+  if (has_base) {
+    names.push_back("main");
+    lines.push_back("0");
+  }
   set_indexed("FUNCNAME", names);
   set_indexed("BASH_LINENO", lines);
 }
@@ -1645,7 +1658,10 @@ std::string Shell::run_and_capture_inproc(const std::string &script, int *status
   if (!tf) { if (status) *status = 1; return std::string(); }
   int tfd = fileno(tf);
   dup2(tfd, STDOUT_FILENO);
+  int saved_base = lineno_base;  // run at the enclosing command's line
+  lineno_base = cur_lineno - 1;
   int st = run_string(script);
+  lineno_base = saved_base;
   std::fflush(stdout);
   dup2(saved, STDOUT_FILENO);
   close(saved);
@@ -1682,6 +1698,10 @@ std::string Shell::run_and_capture(const std::string &script, int *status) {
     // `echo' under `set -e'.  POSIX mode inherits errexit into the subshell, so
     // there `z=$(false; echo foo)' exits silently before the `echo'.
     if (opt_errexit && !opt_posix && !shopt_opts["inherit_errexit"]) opt_errexit = false;
+    // The substitution's commands run at the enclosing command's line: bash does
+    // not reset the line counter for a command substitution, so $LINENO (and a
+    // DEBUG trap firing inside it) reports the line where the `$(...)' appears.
+    lineno_base = cur_lineno - 1;
     int st = run_string(script);
     std::fflush(stdout);
     _exit(st & 0xff);
