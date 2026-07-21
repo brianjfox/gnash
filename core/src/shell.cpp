@@ -860,13 +860,20 @@ void Shell::sync_source_arrays() {
     fn.invisible = true;
     return;
   }
+  // A script run from a file (or sourced) has a base "main" frame at index 0
+  // that FUNCNAME/BASH_LINENO trail with `main'/`0'; `sh -c' has no such frame,
+  // so its FUNCNAME/BASH_LINENO list only the active function frames.
+  bool has_base = !src_frames.front().is_func;
+  size_t stop = has_base ? 1 : 0;
   std::vector<std::string> names, lines;
-  for (size_t i = src_frames.size(); i-- > 1;) {  // top down to frame 1 (above base)
+  for (size_t i = src_frames.size(); i-- > stop;) {  // top down to the first frame
     names.push_back(src_frames[i].name);
     lines.push_back(std::to_string(src_frames[i].line));
   }
-  names.push_back("main");
-  lines.push_back("0");
+  if (has_base) {
+    names.push_back("main");
+    lines.push_back("0");
+  }
   set_indexed("FUNCNAME", names);
   set_indexed("BASH_LINENO", lines);
 }
