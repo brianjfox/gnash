@@ -150,6 +150,7 @@ class Shell {
   std::map<std::string, std::string> global_aliases;  // zsh `alias -g': expand anywhere
   std::map<std::string, std::string> suffix_aliases;  // zsh `alias -s ext=cmd'
   std::map<std::string, std::string> completions;  // `complete': name -> spec string
+  std::vector<std::string> completion_order;  // insertion order, for bash hash-walk listing
   struct CallFrame { int line; std::string func; std::string source; };
   std::vector<CallFrame> call_stack;          // `caller': active function calls
 
