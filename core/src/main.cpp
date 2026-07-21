@@ -281,6 +281,7 @@ int main(int argc, char **argv) {
 
   // $SHELL is the execution path of the current shell (persona-independent).
   std::string exec_path = resolve_exec_path(prog);
+  sh.self_exe = exec_path;  // for re-execing #!-less scripts (ENOEXEC)
   sh.set_exported("SHELL", exec_path);
 
   std::vector<std::string> args(argv + 1, argv + argc);

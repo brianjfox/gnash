@@ -16,6 +16,7 @@
 #include <optional>
 #include <termios.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/times.h>
 #include <sys/wait.h>
@@ -1113,7 +1114,47 @@ int Executor::run_simple(const SimpleCommand *c) {
     // directly; a hashed name execs its remembered value, and reports that
     // value's name on failure (bash's behavior for `hash'/BASH_CMDS entries).
     auto do_exec = [&](std::vector<char *> &cargv) {
-      execvp(exec_file.c_str(), cargv.data());
+      // Resolve a bare name on $PATH ourselves and execve the full path, rather
+      // than execvp -- execvp silently re-runs a #!-less script through /bin/sh,
+      // whereas bash (and we) re-exec it with the current shell.
+      std::string full = exec_file;
+      if (!exec_file.empty() && exec_file.find('/') == std::string::npos) {
+        std::string p = sh_.get("PATH");
+        bool found = false;
+        std::string noexec_path;  // a regular-file match that is not executable
+        for (size_t i = 0; i <= p.size();) {
+          size_t j = p.find(':', i);
+          std::string dir = p.substr(i, j == std::string::npos ? std::string::npos : j - i);
+          if (dir.empty()) dir = ".";
+          std::string cand = dir + "/" + exec_file;
+          struct stat stbuf;
+          if (stat(cand.c_str(), &stbuf) == 0 && S_ISREG(stbuf.st_mode)) {
+            if (access(cand.c_str(), X_OK) == 0) { full = cand; found = true; break; }
+            if (noexec_path.empty()) noexec_path = cand;
+          }
+          if (j == std::string::npos) break;
+          i = j + 1;
+        }
+        if (!found) {
+          // A file that exists on $PATH but is not executable is reported by
+          // its full path as "Permission denied" (126); otherwise the bare
+          // name is "command not found" (127), as bash does.
+          if (!noexec_path.empty()) { exec_file = noexec_path; errno = EACCES; }
+          else errno = ENOENT;
+          return;
+        }
+      }
+      execve(full.c_str(), cargv.data(), environ);
+      // A file that is neither a binary nor has a #! line: run it as a shell
+      // script with this shell, as bash does (not the libc /bin/sh fallback).
+      if (errno == ENOEXEC && !sh_.self_exe.empty()) {
+        std::vector<char *> nargv;
+        nargv.push_back(const_cast<char *>(sh_.self_exe.c_str()));
+        nargv.push_back(const_cast<char *>(full.c_str()));
+        for (size_t k = 1; cargv[k] != nullptr; k++) nargv.push_back(cargv[k]);
+        nargv.push_back(nullptr);
+        execve(sh_.self_exe.c_str(), nargv.data(), environ);
+      }
     };
     // external command.  If we are a disposable subshell child whose sole
     // command this is, exec it in place -- become the command with no second
