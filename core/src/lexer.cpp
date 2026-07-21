@@ -172,29 +172,42 @@ struct Lexer {
   }
   void scan_brace(std::string &w) {  // pos at '{'
     int depth = 0;
+    // Inside ${...} only a nested `${` opens another level; a bare `{` is a
+    // literal character.  This mirrors bash's parse_matched_pair called with
+    // P_FIRSTCLOSE for ${...}: it counts `{` only when the previous char was
+    // an unquoted `$` (LEX_WASDOL).  `wasdol` tracks that.
+    bool wasdol = false;
     do {
       char c = in[pos];
       if (c == '{') {
-        depth++;
+        if (depth == 0 || wasdol) depth++;  // opening ${ or nested ${
         w += c;
         pos++;
+        wasdol = false;
       } else if (c == '}') {
         depth--;
         w += c;
         pos++;
+        wasdol = false;
       } else if (c == '$' && pos + 1 < n && in[pos + 1] == '\'') {
         scan_dollar_single(w);  // $'...' inside ${...}: backslash-aware
+        wasdol = false;
       } else if (c == '\'') {
         scan_single(w);
+        wasdol = false;
       } else if (c == '"') {
         scan_double(w);
+        wasdol = false;
       } else if (c == '`') {
         scan_backtick(w);
+        wasdol = false;
       } else if (c == '\\') {
         w += c;
         pos++;
         if (pos < n) w += in[pos++];
+        wasdol = false;
       } else {
+        wasdol = (c == '$');
         w += c;
         pos++;
       }

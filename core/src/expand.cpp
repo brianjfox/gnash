@@ -43,27 +43,36 @@ bool pat_match(const std::string &pattern, const std::string &text) {
 }
 
 // Scan a balanced span from `open`/`close` starting with text[i] at the opener;
-// returns the index of the matching closer (or npos).  Honors quotes.
-size_t scan_balanced(const std::string &t, size_t i, char open, char close) {
+// returns the index of the matching closer (or npos).  Honors quotes.  With
+// `firstclose` (used for ${param...}), a bare `{` does not open a nested level
+// -- only a `${` does -- matching bash's parse_matched_pair P_FIRSTCLOSE rule,
+// so `${IFS+a{b}` closes at the `}` after `b`.
+size_t scan_balanced(const std::string &t, size_t i, char open, char close,
+                     bool firstclose = false) {
   int depth = 0;
+  bool wasdol = false;  // previous char was an unquoted `$` (LEX_WASDOL)
   for (; i < t.size(); i++) {
     char c = t[i];
-    if (c == '\\') { i++; continue; }
+    if (c == '\\') { i++; wasdol = false; continue; }
     if (c == '$' && i + 1 < t.size() && t[i + 1] == '\'') {
       // $'...': ANSI-C quoting, where a backslash escapes the next character
       // (so \' is not a terminator).
       i += 2;
       while (i < t.size() && t[i] != '\'') { if (t[i] == '\\' && i + 1 < t.size()) i++; i++; }
+      wasdol = false;
       continue;
     }
-    if (c == '\'') { while (++i < t.size() && t[i] != '\'') {} continue; }
+    if (c == '\'') { while (++i < t.size() && t[i] != '\'') {} wasdol = false; continue; }
     if (c == '"') {
       while (++i < t.size() && t[i] != '"')
         if (t[i] == '\\') i++;
+      wasdol = false;
       continue;
     }
-    if (c == open) depth++;
-    else if (c == close) { if (--depth == 0) return i; }
+    if (c == open) {
+      if (!firstclose || open != '{' || depth == 0 || wasdol) depth++;
+    } else if (c == close) { if (--depth == 0) return i; }
+    wasdol = (c == '$');
   }
   return std::string::npos;
 }
@@ -661,7 +670,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
   }
   // ${...}
   if (n1 == '{') {
-    size_t end = scan_balanced(t, i + 1, '{', '}');
+    size_t end = scan_balanced(t, i + 1, '{', '}', /*firstclose=*/true);
     if (end != std::string::npos) {
       std::string body = t.substr(i + 2, end - (i + 2));
 
