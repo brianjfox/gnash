@@ -261,10 +261,16 @@ int Shell::run_debug_trap(const std::string &cmd_text) {
   bash_command = cmd_text;
   int saved = last_status;  // $? inside the trap is the previous command's status
   int saved_line = cur_lineno;  // the trap must not leak its own line numbers
+  // bash runs a DEBUG/RETURN/ERR trap body without resetting the line counter
+  // (no SEVAL_RESETLINE), so $LINENO in the body's first line reports the
+  // command that triggered the trap; later body lines count up from there.
+  int saved_base = lineno_base;
+  lineno_base = cur_lineno - 1;
   std::string body = it->second;
   int st = run_string(body);
   last_status = saved;  // the trap does not alter $? for the upcoming command
   cur_lineno = saved_line;
+  lineno_base = saved_base;
   in_debug_trap = false;
   return st;
 }
