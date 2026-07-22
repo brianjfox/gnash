@@ -195,6 +195,14 @@ struct Lexer {
       } else if (c == '$' && pos + 1 < n && in[pos + 1] == '\'') {
         scan_dollar_single(w);  // $'...' inside ${...}: backslash-aware
         wasdol = false;
+      } else if (c == '$' && pos + 1 < n && in[pos + 1] == '(') {
+        // A nested command/arith substitution `$( ... )' / `$(( ... ))' is
+        // scanned by paren balancing so any `{'/`}' inside it are consumed as
+        // its content rather than counted against this ${...}'s brace depth.
+        w += c;
+        pos++;  // the `$'
+        scan_paren(w);
+        wasdol = false;
       } else if (c == '\'') {
         scan_single(w);
         wasdol = false;
