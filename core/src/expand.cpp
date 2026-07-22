@@ -313,6 +313,8 @@ std::string Expander::param_value(const std::string &name, bool &set, bool defau
 static std::string expand_brace_body(Expander &, Shell &, const std::string &, bool dq);
 static std::string apply_param_op(Expander &, Shell &, const std::string &name,
                                   std::string val, bool set, const std::string &rest, bool dq);
+// Build the ${a[@]@K} "key value ..." string for array NAME (defined below).
+static std::string kv_build_K(Shell &sh, const std::string &name, bool assoc);
 
 // Detect NAME[@] / NAME[*] with an optional leading `#' (count) or `!' (keys).
 static bool array_ref(const std::string &body, char &lead, std::string &name, char &sel) {
@@ -902,8 +904,28 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
       std::string aoname, arest;
       char asel;
       if (array_op_ref(body, aoname, asel, arest)) {
-        std::vector<std::string> items = sh_.array_values(aoname);
-        for (std::string &it : items) it = apply_param_op(*this, sh_, aoname, it, true, arest, dq);
+        std::vector<std::string> items;
+        if (arest == "@k" || arest == "@K") {
+          // Key/value transforms.  @k emits the keys interleaved with values as
+          // raw words; @K collapses to one "key value ..." string (values, and
+          // assoc keys, quoted for re-input).
+          std::string dn = sh_.deref(aoname);
+          auto vit = sh_.vars.find(dn);
+          bool is_assoc = vit != sh_.vars.end() && vit->second.kind == VarKind::Assoc;
+          if (arest == "@K") {
+            items.push_back(kv_build_K(sh_, aoname, is_assoc));
+          } else {
+            auto keys = sh_.array_keys(aoname);
+            auto vals = sh_.array_values(aoname);
+            for (size_t k = 0; k < keys.size(); k++) {
+              items.push_back(keys[k]);
+              items.push_back(k < vals.size() ? vals[k] : std::string());
+            }
+          }
+        } else {
+          items = sh_.array_values(aoname);
+          for (std::string &it : items) it = apply_param_op(*this, sh_, aoname, it, true, arest, dq);
+        }
         if (asel == '*' && dq) {
           std::string is = sh_.ifs();
           std::string j = is.empty() ? std::string() : std::string(1, is[0]);
@@ -1131,6 +1153,97 @@ static std::string atq_quote(const std::string &s) {
     else r += c;
   }
   return r + "'";
+}
+
+// True if S contains any non-printable byte (bash's ansic_shouldquote).
+static bool kv_has_nonprint(const std::string &s) {
+  for (unsigned char c : s)
+    if (c < 32 || c == 127) return true;
+  return false;
+}
+
+// Produce a $'...' ANSI-C quotation of S (used when a kvpair key/value holds
+// non-printable bytes).
+static std::string kv_ansic_quote(const std::string &s) {
+  std::string r = "$'";
+  for (unsigned char c : s) {
+    switch (c) {
+      case '\n': r += "\\n"; break;
+      case '\t': r += "\\t"; break;
+      case '\r': r += "\\r"; break;
+      case '\\': r += "\\\\"; break;
+      case '\'': r += "\\'"; break;
+      default:
+        if (c < 32 || c == 127) { char b[8]; std::snprintf(b, sizeof b, "\\%03o", c); r += b; }
+        else r += static_cast<char>(c);
+    }
+  }
+  return r + "'";
+}
+
+// Double-quote S, backslash-escaping the characters special inside "..."
+// (bash's sh_double_quote).
+static std::string kv_double_quote(const std::string &s) {
+  std::string r = "\"";
+  for (char c : s) {
+    if (c == '"' || c == '\\' || c == '$' || c == '`') r += '\\';
+    r += c;
+  }
+  return r + "\"";
+}
+
+// True if KEY contains a shell metacharacter that forces quoting in an assoc
+// kvpair key (bash's sh_contains_shell_metas).
+static bool kv_contains_metas(const std::string &s) {
+  for (size_t i = 0; i < s.size(); i++) {
+    char c = s[i];
+    switch (c) {
+      case ' ': case '\t': case '\n': case '\'': case '"': case '\\':
+      case '|': case '&': case ';': case '(': case ')': case '<': case '>':
+      case '!': case '{': case '}': case '*': case '[': case '?': case ']':
+      case '^': case '$': case '`':
+        return true;
+      case '~':
+        if (i == 0 || s[i - 1] == '=' || s[i - 1] == ':') return true;
+        break;
+      case '#':
+        if (i == 0) return true;
+        break;
+    }
+  }
+  return false;
+}
+
+// Quote a kvpair value: $'...' if it holds non-printables, else "...".
+static std::string kv_value_quote(const std::string &v) {
+  if (v.empty()) return "\"\"";
+  return kv_has_nonprint(v) ? kv_ansic_quote(v) : kv_double_quote(v);
+}
+
+// Quote an assoc kvpair key: bare unless it needs $'...'/double-quoting.
+static std::string kv_key_quote(const std::string &k) {
+  if (kv_has_nonprint(k)) return kv_ansic_quote(k);
+  if (kv_contains_metas(k)) return kv_double_quote(k);
+  if (k.size() == 1 && (k[0] == '@' || k[0] == '*')) return kv_double_quote(k);
+  return k;
+}
+
+// Build the ${a[@]@K} single-word "key value" string for array NAME.  Indexed
+// keys are bare integers with pairs space-separated; assoc keys are quoted when
+// needed and each pair carries a trailing space (matching array/assoc.c).
+static std::string kv_build_K(Shell &sh, const std::string &name, bool assoc) {
+  auto keys = sh.array_keys(name);
+  auto vals = sh.array_values(name);
+  std::string r;
+  size_t n = std::min(keys.size(), vals.size());
+  for (size_t i = 0; i < n; i++) {
+    r += assoc ? kv_key_quote(keys[i]) : keys[i];
+    r += ' ';
+    r += kv_value_quote(vals[i]);
+    if (assoc) r += ' ';
+    else if (i + 1 < n) r += ' ';
+  }
+  return r;
 }
 
 // ${var@E}: interpret ANSI-C backslash escapes in the value.
@@ -1455,7 +1568,9 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
       return std::string();  // unset -> empty (even for @Q)
     if (!set && sh.vars.find(name) == sh.vars.end()) return std::string();
     char t = rest[1];
-    if (t == 'Q') return atq_quote(val);
+    // Scalar/bare-name @k/@K quote the (element-0) value like @Q; the array
+    // subscript forms ${a[@]@k}/${a[@]@K} are handled at the array dispatch.
+    if (t == 'Q' || t == 'k' || t == 'K') return atq_quote(val);
     if (t == 'E') return ansic_expand(val);
     if (t == 'P') return expand_prompt(sh, val);
     if (t == 'U' || t == 'L' || t == 'u') {
