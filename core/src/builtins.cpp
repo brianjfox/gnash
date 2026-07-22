@@ -2621,10 +2621,30 @@ static const BuiltinHelp kBuiltinHelp[] = {
     {"unalias", "unalias [-a] name [name ...]", "Remove each NAME from the list of defined aliases."},
     {"history", "history [-c] [-d offset] [n] or history -anrw [filename] or history -ps arg [arg...]", "Display or manipulate the history list."},
     {"fc", "fc [-e ename] [-lnr] [first] [last] or fc -s [pat=rep] [command]", "Display or execute commands from the history list."},
-    {"compgen", "compgen [-abcdefgjksuv] [-o option] [-A action] [-G globpat] [-W wordlist] [-F function] [-C command] [-X filterpat] [-P prefix] [-S suffix] [word]", "Display possible completions depending on the options."},
+    {"compgen", "compgen [-V varname] [-abcdefgjksuv] [-o option] [-A action] [-G globpat] [-W wordlist] [-F function] [-C command] [-X filterpat] [-P prefix] [-S suffix] [word]", "Display possible completions depending on the options."},
     {"complete", "complete [-abcdefgjksuv] [-pr] [-DEI] [-o option] [-A action] [-G globpat] [-W wordlist] [-F function] [-C command] [-X filterpat] [-P prefix] [-S suffix] [name ...]", "Specify how arguments are to be completed by Readline."},
     {"compopt", "compopt [-o|+o option] [-DEI] [name ...]", "Modify or display completion options."},
     {"bind", "bind [-lpsvPSVX] [-m keymap] [-f filename] [-q name] [-u name] [-r keyseq] [-x keyseq:shell-command] [keyseq:readline-function or readline-command]", "Set Readline key bindings and variables."},
+    // Compound-command and special-syntax pseudo-builtins, so `help' lists them
+    // like bash's shell_builtins[] (synopses verbatim from bash 5.3).
+    {"!", "! PIPELINE", "Execute PIPELINE and negate its exit status."},
+    {"%", "job_spec [&]", "Resume job in foreground."},
+    {"(( ... ))", "(( expression ))", "Evaluate arithmetic expression."},
+    {".", ". [-p path] filename [arguments]", "Execute commands from a file in the current shell."},
+    {"[", "[ arg... ]", "Evaluate conditional expression."},
+    {"[[ ... ]]", "[[ expression ]]", "Execute conditional command."},
+    {"{ ... }", "{ COMMANDS ; }", "Group commands as a unit."},
+    {"case", "case WORD in [PATTERN [| PATTERN]...) COMMANDS ;;]... esac", "Execute commands based on pattern matching."},
+    {"coproc", "coproc [NAME] command [redirections]", "Create a coprocess named NAME."},
+    {"for", "for NAME [in WORDS ... ] ; do COMMANDS; done", "Execute commands for each member in a list."},
+    {"for ((", "for (( exp1; exp2; exp3 )); do COMMANDS; done", "Arithmetic for loop."},
+    {"function", "function name { COMMANDS ; } or name () { COMMANDS ; }", "Define shell function."},
+    {"if", "if COMMANDS; then COMMANDS; [ elif COMMANDS; then COMMANDS; ]... [ else COMMANDS; ] fi", "Execute commands based on conditional."},
+    {"select", "select NAME [in WORDS ... ;] do COMMANDS; done", "Select words from a list and execute commands."},
+    {"time", "time [-p] pipeline", "Report time consumed by pipeline's execution."},
+    {"until", "until COMMANDS; do COMMANDS-2; done", "Execute commands as long as a test does not succeed."},
+    {"variables", "variables - Names and meanings of some shell variables", "Common shell variable names and usage."},
+    {"while", "while COMMANDS; do COMMANDS-2; done", "Execute commands as long as a test succeeds."},
 };
 
 int bi_help(Shell &sh, const std::vector<std::string> &argv) {
@@ -2644,16 +2664,39 @@ int bi_help(Shell &sh, const std::vector<std::string> &argv) {
     std::printf("gnash, version %s\n", sh.get("BASH_VERSION").c_str());
     std::printf("These shell commands are defined internally.  Type `help' to see this list.\n");
     std::printf("Type `help name' to find out more about the function `name'.\n");
+    std::printf("Use `info bash' to find out more about the shell in general.\n");
     std::printf("Use `man -k' or `info' to find out more about commands not in this list.\n\n");
+    std::printf("A star (*) next to a name means that the command is disabled.\n\n");
+    // The `personality' pseudo-builtin is gnash-specific; leave it out of the
+    // listing so the two-column pairing matches bash's shell_builtins[] exactly.
     std::vector<const BuiltinHelp *> items;
-    for (const auto &h : kBuiltinHelp) items.push_back(&h);
+    for (const auto &h : kBuiltinHelp)
+      if (std::strcmp(h.name, "personality") != 0) items.push_back(&h);
     std::sort(items.begin(), items.end(),
               [](const BuiltinHelp *a, const BuiltinHelp *b) { return std::strcmp(a->name, b->name) < 0; });
-    size_t half = (items.size() + 1) / 2;
-    for (size_t r = 0; r < half; r++) {
-      std::string left = items[r]->synopsis;
-      std::string right = (r + half < items.size()) ? items[r + half]->synopsis : "";
-      std::printf(" %-36.36s%s\n", left.c_str(), right.c_str());
+    // bash's dispcolumn(): a two-column layout of width 40.  Each cell is a
+    // leading space (`*' if disabled -- never here) then the synopsis; when it
+    // is too long it is truncated and a `>' marks the cut.  The first column is
+    // padded with spaces to the column width; the second is not.
+    // bash's dispcolumn(): two columns of field width 40.  A cell is a leading
+    // marker (space; `*' if disabled -- never here) then the synopsis, cut with
+    // a trailing `>' when too long.  Matching bash byte-for-byte, the first
+    // column shows up to 37 synopsis chars and is padded to 40; the second up
+    // to 35.
+    const size_t kWidth = 40, kCol1 = 37, kCol2 = 36;
+    size_t height = (items.size() + 1) / 2;
+    auto cell = [](const std::string &syn, size_t cap) {
+      std::string s = " ";
+      if (syn.size() > cap) s += syn.substr(0, cap) + ">";  // truncated
+      else s += syn;
+      return s;
+    };
+    for (size_t r = 0; r < height; r++) {
+      std::string left = cell(items[r]->synopsis, kCol1);
+      if (r + height >= items.size()) { std::printf("%s\n", left.c_str()); continue; }
+      std::printf("%s", left.c_str());
+      for (size_t j = left.size(); j < kWidth; j++) std::putchar(' ');
+      std::printf("%s\n", cell(items[r + height]->synopsis, kCol2).c_str());
     }
     return 0;
   }
