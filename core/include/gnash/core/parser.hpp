@@ -30,6 +30,7 @@ struct ParseResult {
   bool heredoc_eof = false;
   std::string heredoc_eof_delim;
   int heredoc_eof_line = 0;
+  bool heredoc_eof_quoted = false;
 };
 
 // Parse a complete program.

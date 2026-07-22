@@ -64,6 +64,7 @@ struct Lexer {
   bool heredoc_eof = false;        // here-doc body delimited by end of input
   std::string heredoc_eof_delim;
   int heredoc_eof_line = 0;
+  bool heredoc_eof_quoted = false;  // that here-doc's delimiter was quoted
   std::size_t line_scanned = 0;  // bytes already counted for line numbering
   int cur_line = 1;              // 1-based line at line_scanned
 
@@ -509,6 +510,7 @@ struct Lexer {
         heredoc_eof = true;
         heredoc_eof_delim = pd.delim;
         heredoc_eof_line = out[pd.index].line;
+        heredoc_eof_quoted = pd.quoted;
       }
       out[pd.index].heredoc_body = body;
       out[pd.index].has_heredoc = true;
@@ -581,6 +583,7 @@ struct Lexer {
     eof.heredoc_eof = heredoc_eof;
     eof.heredoc_eof_delim = heredoc_eof_delim;
     eof.heredoc_eof_line = heredoc_eof_line;
+    eof.heredoc_eof_quoted = heredoc_eof_quoted;
     out.push_back(eof);
   }
 };
