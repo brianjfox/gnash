@@ -257,6 +257,9 @@ parse_array_elems(Shell &sh, Expander &ex, const std::string &name, bool integer
                          sh.err_prefix().c_str(), e.c_str());
             break;
           }
+          // `shopt -s array_expand_once': a compound assignment must not perform
+          // a second expansion of the subscript (an injection attempt errors).
+          if (!sh.array_expand_once_ok(name, sub)) break;  // diagnostic printed
           bool ok = true;
           long long k = eval_arith(sh, sub, &ok);
           if (ok && k < 0) k += maxidx + 1;  // resolve negative against running max

@@ -692,6 +692,7 @@ struct Parser {
 
   CommandPtr parse_arith_command() {
     std::size_t save = i;
+    int arith_line = cur().line;  // $LINENO / error line of the `((' command
     advance();  // (
     advance();  // (
     int depth = 0;
@@ -743,6 +744,7 @@ struct Parser {
     }
     auto n = std::make_unique<ArithCommand>();
     n->expression = trim(expr);
+    n->line = arith_line;
     parse_redirect_list(n->redirects);
     return n;
   }
