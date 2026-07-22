@@ -2820,7 +2820,14 @@ int bi_hash(Shell &sh, const std::vector<std::string> &argv) {
   int st = 0;
   for (; i < argv.size(); i++) {
     const std::string &n = argv[i];
-    if (del_d) { sh.hashed.erase(n); continue; }
+    if (del_d) {  // `hash -d NAME': error if NAME is not hashed
+      if (sh.hashed.erase(n) == 0) {
+        std::fflush(stdout);
+        std::fprintf(stderr, "%shash: %s: not found\n", sh.err_prefix().c_str(), n.c_str());
+        st = 1;
+      }
+      continue;
+    }
     if (print_t) {
       auto it = sh.hashed.find(n);
       if (it != sh.hashed.end()) std::printf("%s\n", it->second.c_str());
