@@ -47,6 +47,13 @@ Shell::Shell() {
   set("OPTIND", "1");  // bash initializes getopts state at startup
   set("PPID", std::to_string(static_cast<long>(getppid())));
   set("$", std::to_string(static_cast<long>(getpid())));
+  // bash exposes the real/effective user id as readonly integer variables.
+  for (const auto &uv : {std::make_pair("UID", getuid()), std::make_pair("EUID", geteuid())}) {
+    set(uv.first, std::to_string(static_cast<long>(uv.second)));
+    Variable &v = vars[uv.first];
+    v.integer = true;
+    v.readonly = true;
+  }
   seconds_base = static_cast<long long>(std::time(nullptr));  // $SECONDS origin
 
   // Establish a valid logical $PWD.  Keep the inherited (possibly symlinked)
