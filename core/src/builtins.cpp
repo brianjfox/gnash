@@ -1627,7 +1627,15 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     }
     for (; i < argv.size(); i++) {
       auto it = sh.functions.find(argv[i]);
-      if (it == sh.functions.end()) { st = 1; continue; }
+      if (it == sh.functions.end()) {
+        // `declare -fp NAME' (the -p form) reports a missing function; the bare
+        // `declare -f NAME' form fails silently.
+        if (fp)
+          std::fprintf(stderr, "%s%s: %s: not found\n", sh.err_prefix().c_str(),
+                       argv[0].c_str(), argv[i].c_str());
+        st = 1;
+        continue;
+      }
       if (funcnames) std::printf("%s\n", argv[i].c_str());
       else std::printf("%s\n", named_function_string(argv[i], it->second, sh.opt_posix).c_str());
     }
