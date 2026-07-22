@@ -441,6 +441,7 @@ bool int_cmp(const std::string &op, long a, long b) {
 // Evaluate a `test' argument vector [a..b) (exclusive of trailing ] already
 // removed).  Handles !, -a/-o, unary, binary; a small recursive evaluator.
 struct TestEval {
+  Shell &sh;
   const std::vector<std::string> &a;
   size_t i;
   size_t end;
@@ -448,6 +449,21 @@ struct TestEval {
 
   bool at_end() { return i >= end; }
   const std::string &cur() { return a[i]; }
+
+  // `test -v NAME' / `-v NAME[sub]': true if the variable (or array element) is
+  // set.  Under `shopt -s array_expand_once' an un-evaluatable subscript errors.
+  bool var_is_set(const std::string &arg) {
+    size_t br = arg.find('[');
+    if (br != std::string::npos && !arg.empty() && arg.back() == ']') {
+      std::string nm = arg.substr(0, br);
+      std::string sub = arg.substr(br + 1, arg.size() - br - 2);
+      if (!sh.array_expand_once_ok(nm, sub)) { ok = false; return false; }
+      if (sub == "@" || sub == "*") return sh.array_count(nm) > 0;
+      for (const std::string &k : sh.array_keys(nm)) if (k == sub) return true;
+      return false;
+    }
+    return sh.is_set(arg);
+  }
 
   bool expr() { return or_expr(); }
   bool or_expr() {
@@ -476,6 +492,7 @@ struct TestEval {
       if (std::strchr("efdrwxsLhpbc", o)) { std::string p = a[i + 1]; i += 2; return file_test(o, p); }
       if (o == 'z') { std::string s = a[i + 1]; i += 2; return s.empty(); }
       if (o == 'n') { std::string s = a[i + 1]; i += 2; return !s.empty(); }
+      if (o == 'v') { std::string arg = a[i + 1]; i += 2; return var_is_set(arg); }
     }
     // binary: a OP b
     if (i + 2 < end + 1 && i + 2 <= end) {
@@ -499,14 +516,14 @@ struct TestEval {
   }
 };
 
-int bi_test(Shell &, const std::vector<std::string> &argv, bool bracket) {
+int bi_test(Shell &sh, const std::vector<std::string> &argv, bool bracket) {
   std::vector<std::string> a(argv.begin() + 1, argv.end());
   if (bracket) {
     if (a.empty() || a.back() != "]") return 2;  // missing ]
     a.pop_back();
   }
   if (a.empty()) return 1;
-  TestEval te{a, 0, a.size(), true};
+  TestEval te{sh, a, 0, a.size(), true};
   bool v = te.expr();
   return v ? 0 : 1;
 }
@@ -4566,6 +4583,7 @@ struct CondEval {
         if (br != std::string::npos && !arg.empty() && arg.back() == ']') {
           std::string nm = arg.substr(0, br);
           std::string sub = arg.substr(br + 1, arg.size() - br - 2);
+          if (!sh.array_expand_once_ok(nm, sub)) return false;  // diagnostic printed
           if (sub == "@" || sub == "*") return sh.array_count(nm) > 0;
           for (const std::string &k : sh.array_keys(nm)) if (k == sub) return true;
           return false;
