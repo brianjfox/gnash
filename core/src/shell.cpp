@@ -716,6 +716,19 @@ void Shell::array_unset(const std::string &n_in, const std::string &sub) {
   }
 }
 
+bool Shell::array_expand_once_ok(const std::string &base, std::string &sub) {
+  auto it = shopt_opts.find("array_expand_once");
+  if (it == shopt_opts.end() || !it->second) return true;
+  if (sub == "@" || sub == "*") return true;
+  auto vit = vars.find(deref(base));
+  if (vit != vars.end() && vit->second.kind == VarKind::Assoc) return true;
+  bool ok = true;
+  long long idx = eval_arith_msg(*this, sub, "", &ok);
+  if (!ok) return false;  // eval_arith_msg has already printed the diagnostic
+  sub = std::to_string(idx);
+  return true;
+}
+
 bool Shell::is_array(const std::string &n_in) const {
   std::string n = deref(n_in);
   auto it = vars.find(n);

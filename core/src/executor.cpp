@@ -339,7 +339,11 @@ void apply_array_assign(Shell &sh, Expander &ex, const Assign &a) {
     }
     // zsh array subscripts are 1-based; translate to the internal 0-based index
     // (a no-op under other personalities / for associative arrays).
-    std::string sub = sh.zsh_subscript(a.name, ex.expand_no_split(*a.sub));
+    std::string sub = ex.expand_no_split(*a.sub);
+    // `shopt -s array_expand_once': reject an un-evaluatable (e.g. injected)
+    // subscript rather than silently using index 0.
+    if (!sh.array_expand_once_ok(a.name, sub)) { sh.arith_error = true; return; }
+    sub = sh.zsh_subscript(a.name, sub);
     std::string val = ex.expand_assignment(a.value);
     if (integer) {
       bool ok = true;
