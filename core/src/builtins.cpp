@@ -934,11 +934,12 @@ int bi_export(Shell &sh, const std::vector<std::string> &argv) {
 
 int bi_unset(Shell &sh, const std::vector<std::string> &argv) {
   bool funcs = false;
+  bool vflag = false;  // `-v' given explicitly: variables only, no function fallback
   bool noref = false;  // `-n': remove the nameref itself, not its target
   int ret = 0;
   for (size_t i = 1; i < argv.size(); i++) {
     if (argv[i] == "-f") { funcs = true; continue; }
-    if (argv[i] == "-v") { funcs = false; continue; }
+    if (argv[i] == "-v") { funcs = false; vflag = true; continue; }
     if (argv[i] == "-n") { noref = true; continue; }
     if (funcs) { sh.functions.erase(argv[i]); continue; }
     // `unset name[sub]' removes a single array element (or the whole array for
@@ -975,7 +976,10 @@ int bi_unset(Shell &sh, const std::vector<std::string> &argv) {
       ret = 1;
       continue;
     }
-    sh.unset(argv[i], false, noref);
+    // With neither -v nor -f, `unset NAME' unsets a variable if one exists,
+    // otherwise a function of that name (bash); explicit `-v' skips the fallback.
+    if (!vflag && it == sh.vars.end() && sh.functions.count(tgt)) sh.functions.erase(tgt);
+    else sh.unset(argv[i], false, noref);
   }
   return ret;
 }
