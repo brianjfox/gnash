@@ -173,11 +173,17 @@ struct Lexer {
     // literal character.  This mirrors bash's parse_matched_pair called with
     // P_FIRSTCLOSE for ${...}: it counts `{` only when the previous char was
     // an unquoted `$` (LEX_WASDOL).  `wasdol` tracks that.
+    //
+    // Exception: a funsub `${ cmd; }' (whitespace or `|' right after the brace)
+    // holds a command list, so bare `{' (group commands, function bodies)
+    // balance normally -- otherwise a function body's `}' closes the scan early.
     bool wasdol = false;
+    bool funsub = pos + 1 < n &&
+                  (std::isspace(static_cast<unsigned char>(in[pos + 1])) || in[pos + 1] == '|');
     do {
       char c = in[pos];
       if (c == '{') {
-        if (depth == 0 || wasdol) depth++;  // opening ${ or nested ${
+        if (depth == 0 || wasdol || funsub) depth++;  // opening ${, nested ${, or funsub group
         w += c;
         pos++;
         wasdol = false;

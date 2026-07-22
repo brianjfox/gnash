@@ -408,7 +408,11 @@ class Shell {
   std::string run_and_capture(const std::string &script, int *status);
   // Function substitution ${ cmd; }: like run_and_capture but in the current
   // shell (no subshell), so side effects such as variable changes persist.
-  std::string run_and_capture_inproc(const std::string &script, int *status);
+  // The body runs in a fresh local scope (so `local' works) and is a return
+  // boundary.  With VALSUB (${| cmd; }) stdout is NOT captured -- it goes to
+  // the shell's real stdout -- and the result is the body's $REPLY.
+  std::string run_and_capture_inproc(const std::string &script, int *status,
+                                     bool valsub = false);
 };
 
 // Arithmetic evaluation (arith.cpp): evaluate EXPR in the context of SH.
