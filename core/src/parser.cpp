@@ -667,6 +667,15 @@ struct Parser {
         advance();
         continue;
       }
+      // `;;' lexes as a single token, but between the arith-for parentheses
+      // two adjacent semicolons just delimit an empty middle section
+      // (`for (( ;; ))', `for (( i=0;;i++ ))'), so split into two parts.
+      if (is(Tok::SemiSemi) && depth == 0) {
+        parts.emplace_back();
+        parts.emplace_back();
+        advance();
+        continue;
+      }
       if (!parts.back().empty() && cur().preceded_by_blank) parts.back() += ' ';
       parts.back() += tok_to_text(cur());
       advance();
