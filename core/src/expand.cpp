@@ -1334,18 +1334,37 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
     return val;
   }
 
-  // ${name/pat/rep} ${name//pat/rep}
+  // ${name/pat/rep} ${name//pat/rep} ${name/#pat/rep} ${name/%pat/rep}
   if (rest[0] == '/') {
     bool global = rest.size() > 1 && rest[1] == '/';
     std::string body2 = rest.substr(global ? 2 : 1);
+    // A leading `#'/`%' anchors the pattern to the start/end of the value.
+    char anchor = 0;
+    if (!body2.empty() && (body2[0] == '#' || body2[0] == '%')) {
+      anchor = body2[0];
+      body2 = body2.substr(1);
+    }
     size_t slash = std::string::npos;
     for (size_t k = 0; k < body2.size(); k++) {
       if (body2[k] == '\\') { k++; continue; }
       if (body2[k] == '/') { slash = k; break; }
     }
     std::string pat = ex.expand_pattern(slash == std::string::npos ? body2 : body2.substr(0, slash));
+    // The replacement is expanded in double-quote context when the whole
+    // expansion is quoted, so nested quotes (`${a/#/"-n '"}') behave like bash.
     std::string rep = slash == std::string::npos ? std::string()
-                                                 : ex.expand_no_split(body2.substr(slash + 1));
+                                                 : expand_word(body2.substr(slash + 1));
+    // `#' matches the longest prefix, `%' the longest suffix; one replacement.
+    if (anchor == '#') {
+      for (size_t j = val.size() + 1; j-- > 0;)
+        if (pat_match(pat, val.substr(0, j))) return rep + val.substr(j);
+      return val;
+    }
+    if (anchor == '%') {
+      for (size_t j = 0; j <= val.size(); j++)
+        if (pat_match(pat, val.substr(j))) return val.substr(0, j) + rep;
+      return val;
+    }
     if (pat.empty()) return val;
     std::string result;
     size_t k = 0;
@@ -1537,9 +1556,11 @@ std::string Expander::expand_dq_word(const std::string &w_in) {
     w += w_in[k];
   }
   // A synthetic leading quote starts the double-quote span; embedded quotes in
-  // W toggle context normally (an unterminated span at the end is fine).
+  // W toggle context normally (an unterminated span at the end is fine).  A
+  // single quote is literal throughout (bash's DOLBRACE_QUOTE state), even when
+  // the word's own double quotes toggle the context (sq_literal).
   std::string out, mask;
-  process('"' + w, out, mask, false);
+  process('"' + w, out, mask, false, false, /*sq_literal=*/true);
   std::string joined;
   for (size_t k = 0; k < out.size(); k++) {
     if (k < mask.size() && mask[k] == MMARK) {
@@ -1552,7 +1573,7 @@ std::string Expander::expand_dq_word(const std::string &w_in) {
 }
 
 void Expander::process(const std::string &text, std::string &out, std::string &mask,
-                       bool /*assignment_rhs*/, bool heredoc) {
+                       bool /*assignment_rhs*/, bool heredoc, bool sq_literal) {
   // Most output is about as long as the input; reserve to avoid reallocating
   // (and memmoving) the out/mask pair as they grow char by char.
   out.reserve(out.size() + text.size());
@@ -1563,6 +1584,9 @@ void Expander::process(const std::string &text, std::string &out, std::string &m
     if (heredoc && (c == '\'' || c == '"')) {
       // Inside a here-document, quote characters are ordinary text.
       out += c; mask += '2'; i++;
+    } else if (c == '\'' && sq_literal) {
+      // In a double-quoted ${...} operator word a single quote is literal.
+      out += c; mask += '1'; i++;
     } else if (c == '\'') {
       out += QNULL; mask += MMARK;  // a quote region yields a field even if empty
       i++;
