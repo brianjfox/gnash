@@ -643,6 +643,9 @@ struct Parser {
     while (!is(Tok::Eof) && !err) {
       if (is(Tok::Rparen) && depth == 0) {
         if (peek(1).type == Tok::Rparen) {
+          // Keep a blank before `))' so the reconstructed step and any error
+          // diagnostic match bash's raw text (`for ((...; i++ ))').
+          if (!parts.back().empty() && cur().preceded_by_blank) parts.back() += ' ';
           advance();
           advance();
           break;
@@ -694,9 +697,11 @@ struct Parser {
            "\n`" + raw + "'");
       return;
     }
-    n.a_init = trim(parts[0]);
-    n.a_cond = trim(parts[1]);
-    n.a_update = trim(parts[2]);
+    // Keep any trailing blank on the step (from the blank before `))') so its
+    // display and error text match bash; no section ever gets a leading blank.
+    n.a_init = parts[0];
+    n.a_cond = parts[1];
+    n.a_update = parts[2];
   }
 
   CommandPtr parse_arith_command() {
@@ -719,6 +724,10 @@ struct Parser {
       }
       if (is(Tok::Rparen) && depth == 0) {
         if (peek(1).type == Tok::Rparen) {
+          // Keep a blank before `))' so an arithmetic error diagnostic
+          // reproduces bash's raw expression (`((: 7++ : ...', token `"+ "');
+          // the single-line printer trims it back off for display.
+          if (!expr.empty() && cur().preceded_by_blank) expr += ' ';
           advance();
           advance();
           break;
@@ -752,7 +761,9 @@ struct Parser {
       return parse_subshell();
     }
     auto n = std::make_unique<ArithCommand>();
-    n->expression = trim(expr);
+    // Keep the trailing blank (the reconstruction never yields a leading one)
+    // so an error diagnostic matches bash's raw expression text.
+    n->expression = expr;
     n->line = arith_line;
     parse_redirect_list(n->redirects);
     return n;
