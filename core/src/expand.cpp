@@ -844,9 +844,19 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
               if (k) for (char c : j) { out += c; mask += '1'; }
               for (char c : items[k]) { out += c; mask += '1'; }
             }
+          } else if (sel == '*') {
+            // Unquoted/assignment ${a[*]}: join with the first IFS char, left
+            // splittable (mask 0) so an unquoted use still word-splits on it and
+            // an assignment RHS keeps it as the join character.
+            std::string is = sh_.ifs();
+            std::string j = is.empty() ? std::string() : std::string(1, is[0]);
+            for (size_t k = 0; k < items.size(); k++) {
+              if (k) for (char c : j) { out += c; mask += '0'; }
+              for (char c : items[k]) { out += c; mask += '0'; }
+            }
           } else {
-            // Unquoted ${a[@]} / ${a[*]}: an empty element produces no word (it
-            // splits away), so skip it rather than emitting an empty field.
+            // Unquoted ${a[@]}: an empty element produces no word (it splits
+            // away), so skip it rather than emitting an empty field.
             bool first = true;
             for (size_t k = 0; k < items.size(); k++) {
               if (items[k].empty()) continue;
@@ -1015,7 +1025,14 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
         if (k) for (char c : joiner) { out += c; mask += '1'; }
         for (char c : pos[k]) { out += c; mask += '1'; }
       }
-    } else {  // unquoted $@ or $*
+    } else if (n1 == '*') {  // unquoted/assignment $*: join with IFS[0] (splittable)
+      std::string sep = sh_.ifs();
+      std::string joiner = sep.empty() ? std::string() : std::string(1, sep[0]);
+      for (size_t k = 0; k < pos.size(); k++) {
+        if (k) for (char c : joiner) { out += c; mask += '0'; }
+        for (char c : pos[k]) { out += c; mask += '0'; }
+      }
+    } else {  // unquoted $@
       for (size_t k = 0; k < pos.size(); k++) {
         if (k) { out += FIELD_SEP; mask += MMARK; }
         for (char c : pos[k]) { out += c; mask += '0'; }
