@@ -4712,8 +4712,12 @@ struct CondEval {
         }
         if (op == "<") return lhs < expand(rhs_raw);
         if (op == ">") return lhs > expand(rhs_raw);
-        long l = std::strtol(lhs.c_str(), nullptr, 10);
-        long r = std::strtol(expand(rhs_raw).c_str(), nullptr, 10);
+        // The [[ ]] arithmetic comparators evaluate each side as an arithmetic
+        // expression (so `-eq 4+3' means 7), reporting a malformed one with
+        // bash's `[[: EXPR: ...' diagnostic rather than silently reading 0.
+        bool aok = true;
+        long l = static_cast<long>(eval_arith_msg(sh, lhs, "[[", &aok));
+        long r = static_cast<long>(eval_arith_msg(sh, expand(rhs_raw), "[[", &aok));
         return int_cmp(op, l, r);
       }
     }
