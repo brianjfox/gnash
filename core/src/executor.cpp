@@ -1379,9 +1379,17 @@ int Executor::run_for(const ForCommand *c) {
       if (sh_.opt_xtrace) std::fprintf(stderr, "+ (( %s ))\n", e.c_str());
       return static_cast<long long>(eval_arith(sh_, aex.expand_no_split(e), &ok));
     };
+    // An arithmetic error (bad lvalue, division by zero, ...) in any of the
+    // three sections aborts the loop with failure status, as bash does; without
+    // this a broken step expression like `7++' would spin forever.
     aeval(c->a_init);
+    if (!ok) return 1;
     for (;;) {
-      if (!c->a_cond.empty() && aeval(c->a_cond) == 0) break;
+      if (!c->a_cond.empty()) {
+        long long cv = aeval(c->a_cond);
+        if (!ok) { st = 1; break; }
+        if (cv == 0) break;
+      }
       st = run(c->body.get());
       if (sh_.break_count) { sh_.break_count--; break; }
       // `continue N' with N>1 propagates to the enclosing loop; N==1 runs the
@@ -1389,6 +1397,7 @@ int Executor::run_for(const ForCommand *c) {
       if (sh_.continue_count) { if (--sh_.continue_count) break; }
       if (unwinding()) break;
       aeval(c->a_update);
+      if (!ok) { st = 1; break; }
     }
     return st;
   }
