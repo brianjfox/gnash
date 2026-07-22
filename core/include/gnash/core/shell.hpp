@@ -111,6 +111,13 @@ class Shell {
   // the whole array.  A negative index on an indexed array counts from the end.
   void array_unset(const std::string &n, const std::string &sub);
   int array_count(const std::string &n) const;
+  // Under `shopt -s array_expand_once', an already-expanded array subscript is
+  // not re-expanded: for an indexed array it is evaluated strictly here, so a
+  // command substitution left in it (an injection attempt) hits the arithmetic
+  // evaluator and errors.  Returns false (bash's `operand expected' diagnostic
+  // printed) when rejected, else rewrites SUB to the resolved numeric index.  A
+  // `@'/`*' selector and an associative key are left untouched.
+  bool array_expand_once_ok(const std::string &base, std::string &sub);
   // True when NAME holds an indexed or associative array (not a scalar); used
   // by the zsh personality, where a bare `$array' expands to all its elements.
   bool is_array(const std::string &n) const;

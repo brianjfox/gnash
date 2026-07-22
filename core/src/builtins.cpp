@@ -293,6 +293,19 @@ bool append_formatted(std::string &out, const std::string &spec, T value) {
   return true;
 }
 
+// Apply Shell::array_expand_once_ok to a full `name[sub]' target (e.g. a `read'
+// variable), rewriting the subscript to its resolved index; false (diagnostic
+// printed) on rejection.
+bool array_expand_once_name(Shell &sh, std::string &name) {
+  size_t lb = name.find('[');
+  if (lb == std::string::npos || name.empty() || name.back() != ']') return true;
+  std::string base = name.substr(0, lb);
+  std::string sub = name.substr(lb + 1, name.size() - lb - 2);
+  if (!sh.array_expand_once_ok(base, sub)) return false;
+  name = base + "[" + sub + "]";
+  return true;
+}
+
 int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
   // Options: -v NAME (assign to a variable), -- (end of options).
   size_t ai = 1;
@@ -382,7 +395,10 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
   if (to_var) {
     auto lb = vname.find('[');
     if (lb != std::string::npos && !vname.empty() && vname.back() == ']') {
-      sh.array_set(vname.substr(0, lb), vname.substr(lb + 1, vname.size() - lb - 2), out);
+      std::string base = vname.substr(0, lb);
+      std::string sub = vname.substr(lb + 1, vname.size() - lb - 2);
+      if (!sh.array_expand_once_ok(base, sub)) return 1;
+      sh.array_set(base, sub, out);
     } else {
       sh.set(vname, out);
     }
@@ -917,6 +933,12 @@ int bi_unset(Shell &sh, const std::vector<std::string> &argv) {
       std::string sub = argv[i].substr(lb + 1, argv[i].size() - lb - 2);
       std::string bd = sh.deref(base);
       auto bit = sh.vars.find(bd);
+      // Unset of an element only evaluates the subscript when the array exists;
+      // `unset a[SUB]' on a missing `a' is a silent no-op (no injection check).
+      if (bit != sh.vars.end() && !sh.array_expand_once_ok(base, sub)) {
+        ret = 1;
+        continue;
+      }
       if (bit != sh.vars.end() && bit->second.readonly) {
         std::fprintf(stderr, "%sunset: %s: cannot unset: readonly variable\n",
                      sh.err_prefix().c_str(), bd.c_str());
@@ -1436,8 +1458,11 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
     }
   }
   fields.push_back(rest);
-  for (size_t k = 0; k < names.size(); k++)
-    if (!sh.set(names[k], k < fields.size() ? fields[k] : std::string())) return 2;
+  for (size_t k = 0; k < names.size(); k++) {
+    std::string nm = names[k];
+    if (!array_expand_once_name(sh, nm)) return 1;
+    if (!sh.set(nm, k < fields.size() ? fields[k] : std::string())) return 2;
+  }
   return retval;
 }
 

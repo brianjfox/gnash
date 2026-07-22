@@ -1236,7 +1236,9 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
   std::string val;
   if (have_sub) {
     // zsh subscripts are 1-based; translate before the (0-based) array read.
-    val = sh.array_get(name, sh.zsh_subscript(name, ex.expand_no_split(sub)));
+    std::string esub = ex.expand_no_split(sub);
+    if (!sh.array_expand_once_ok(name, esub)) { sh.arith_error = true; return std::string(); }
+    val = sh.array_get(name, sh.zsh_subscript(name, esub));
     set = sh.is_set(name);
   } else {
     val = ex.param_value(name, set, defaulting_op);
