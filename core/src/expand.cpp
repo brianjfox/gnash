@@ -70,6 +70,16 @@ size_t scan_balanced(const std::string &t, size_t i, char open, char close,
       wasdol = false;
       continue;
     }
+    // A nested `$( ... )' / `$(( ... ))' is skipped by paren balancing so its
+    // inner `{'/`}' (e.g. brace expansion `$(echo a{b,c})') do not disturb this
+    // scan's `{' depth -- unless we are ourselves scanning a `(...)' group.
+    if (c == '$' && open != '(' && i + 1 < t.size() && t[i + 1] == '(') {
+      size_t inner = scan_balanced(t, i + 1, '(', ')');
+      if (inner == std::string::npos) return std::string::npos;
+      i = inner;  // now at the matching `)'
+      wasdol = false;
+      continue;
+    }
     if (c == open) {
       if (!firstclose || open != '{' || depth == 0 || wasdol) depth++;
     } else if (c == close) { if (--depth == 0) return i; }

@@ -1035,6 +1035,7 @@ struct Parser {
       res.heredoc_eof = true;
       res.heredoc_eof_delim = toks.back().heredoc_eof_delim;
       res.heredoc_eof_line = toks.back().heredoc_eof_line;
+      res.heredoc_eof_quoted = toks.back().heredoc_eof_quoted;
     }
     return res;
   }

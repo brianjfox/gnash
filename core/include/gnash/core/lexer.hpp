@@ -61,6 +61,7 @@ struct Token {
   bool heredoc_eof = false;
   std::string heredoc_eof_delim;
   int heredoc_eof_line = 0;
+  bool heredoc_eof_quoted = false;  // the open here-doc's delimiter was quoted
   // For a here-document delimiter word, the collected body and whether the
   // delimiter was quoted (which disables expansion of the body).
   std::string heredoc_body;

@@ -1503,6 +1503,7 @@ int Shell::run_script_lines(const std::string &text) {
   bool cont_bslash = false;  // previous line ended in a line continuation
   bool first_line_saved = false;  // this command's first line is in the history
   bool in_heredoc = false;   // the pending command has an open here-document
+  bool in_heredoc_quoted = false;  // ...and its delimiter was quoted
   int st = last_status;
 
   auto flush = [&]() {
@@ -1591,7 +1592,12 @@ int Shell::run_script_lines(const std::string &text) {
     // line (handled below by the incomplete-parse path).
     size_t nbs = 0;
     while (nbs < pending.size() && pending[pending.size() - 1 - nbs] == '\\') nbs++;
-    if (nbs % 2 == 1 && !squote_backslash_literal(pending)) {
+    // A trailing backslash inside a QUOTED here-document is a literal body
+    // character, not a line continuation.  In an unquoted here-document bash
+    // still splices `\<newline>' (before even checking for the delimiter), so
+    // only suppress the continuation for a quoted delimiter.
+    if (nbs % 2 == 1 && !squote_backslash_literal(pending) &&
+        !(in_heredoc && in_heredoc_quoted)) {
       pending.pop_back();
       cont_bslash = true;
       continue;
@@ -1602,6 +1608,7 @@ int Shell::run_script_lines(const std::string &text) {
       ParseResult chk = parse(pending);
       bool was_heredoc = in_heredoc;
       in_heredoc = chk.heredoc_eof;
+      in_heredoc_quoted = chk.heredoc_eof_quoted;
       if (was_heredoc && !in_heredoc && first_line_saved)
         append_history_line("", true);  // the closing delimiter's newline
       if (chk.incomplete) continue;
