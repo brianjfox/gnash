@@ -1377,7 +1377,9 @@ int Executor::run_for(const ForCommand *c) {
         if (tst != 0 && ed != sh_.shopt_opts.end() && ed->second) return 0LL;
       }
       if (sh_.opt_xtrace) std::fprintf(stderr, "+ (( %s ))\n", e.c_str());
-      return static_cast<long long>(eval_arith(sh_, aex.expand_no_split(e), &ok));
+      // Report an arithmetic error with bash's `((: EXPR: ...' diagnostic (the
+      // loop-abort above then stops the loop), rather than failing silently.
+      return static_cast<long long>(eval_arith_msg(sh_, aex.expand_no_split(e), "((", &ok));
     };
     // An arithmetic error (bad lvalue, division by zero, ...) in any of the
     // three sections aborts the loop with failure status, as bash does; without
@@ -1522,7 +1524,9 @@ int Executor::run_arith(const ArithCommand *c) {
   if (sh_.opt_xtrace) std::fprintf(stderr, "+ (( %s ))\n", c->expression.c_str());
   bool ok = true;
   Expander ex(sh_);  // expand ${#arr[@]} etc. before arithmetic evaluation
-  long long v = eval_arith(sh_, ex.expand_no_split(c->expression), &ok);
+  // The `(( ))' command reports an arithmetic error (bad token, division by
+  // zero) with bash's `((: EXPR: ...' diagnostic, unlike bare $(( )).
+  long long v = eval_arith_msg(sh_, ex.expand_no_split(c->expression), "((", &ok);
   if (!ok) return 1;
   return v != 0 ? 0 : 1;
 }

@@ -171,8 +171,12 @@ void CondCommand::print(std::string &out) const {
 
 void ArithCommand::print(std::string &out) const {
   invert_prefix(this, out);
+  // `expression' keeps a trailing blank (so an arithmetic error reproduces
+  // bash's raw text); the reconstructed single-line form trims it back off.
+  std::string e = expression;
+  while (!e.empty() && std::isspace(static_cast<unsigned char>(e.back()))) e.pop_back();
   out += "(( ";
-  out += expression;
+  out += e;
   out += " ))";
   print_redirects(redirects, out);
 }
