@@ -621,7 +621,12 @@ std::string Shell::array_get(const std::string &n_in, const std::string &sub) co
   bool ok = true;
   long long k = eval_arith(const_cast<Shell &>(*this), sub, &ok);
   if (!ok) k = 0;
-  if (v.kind == VarKind::Indexed) return v.idx.count(k) ? v.idx.at(k) : std::string();
+  if (v.kind == VarKind::Indexed) {
+    // A negative index counts back from the highest set index (bash); under zsh
+    // the subscript was already translated (and -1 means "no such element").
+    if (k < 0 && !is_zsh() && !v.idx.empty()) k += v.idx.rbegin()->first + 1;
+    return v.idx.count(k) ? v.idx.at(k) : std::string();
+  }
   return (k == 0) ? v.value : std::string();
 }
 
@@ -676,6 +681,17 @@ void Shell::array_set(const std::string &n_in, const std::string &sub, const std
   bool ok = true;
   long long k = eval_arith(*this, sub, &ok);
   if (!ok) k = 0;
+  // A negative index counts back from the highest set index; one that resolves
+  // below zero is a bad subscript (bash errors and leaves the array unchanged).
+  // Under zsh the subscript was already translated by zsh_subscript.
+  if (k < 0 && !is_zsh()) {
+    if (!v.idx.empty()) k += v.idx.rbegin()->first + 1;
+    if (k < 0) {
+      std::fprintf(stderr, "%s%s[%s]: bad array subscript\n", err_prefix().c_str(),
+                   n.c_str(), sub.c_str());
+      return;
+    }
+  }
   v.idx[k] = val;
   if (k == 0) v.value = val;
 }
