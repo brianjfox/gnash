@@ -135,12 +135,14 @@ void LoopCommand::print(std::string &out) const {
 void ForCommand::print(std::string &out) const {
   invert_prefix(this, out);
   if (is_arith) {
+    // bash stores an empty arith-for section as the constant `1', so its
+    // reconstructed form (declare -f, xtrace) shows `for ((1; 1; 1))'.
     out += "for ((";
-    out += a_init;
+    out += a_init.empty() ? "1" : a_init;
     out += "; ";
-    out += a_cond;
+    out += a_cond.empty() ? "1" : a_cond;
     out += "; ";
-    out += a_update;
+    out += a_update.empty() ? "1" : a_update;
     out += "))";
   } else {
     out += is_select ? "select " : "for ";
@@ -408,12 +410,13 @@ struct MPrinter {
     }
     if (const auto *fc = dynamic_cast<const ForCommand *>(c)) {
       if (fc->is_arith) {
+        // An empty section is stored/printed as `1' (bash make_arith_for_expr).
         out += "for ((";
-        out += fc->a_init;
+        out += fc->a_init.empty() ? "1" : fc->a_init;
         out += "; ";
-        out += fc->a_cond;
+        out += fc->a_cond.empty() ? "1" : fc->a_cond;
         out += "; ";
-        out += fc->a_update;
+        out += fc->a_update.empty() ? "1" : fc->a_update;
         out += "))";
       } else {
         out += fc->is_select ? "select " : "for ";
