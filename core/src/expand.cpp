@@ -660,9 +660,10 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
     size_t end = scan_balanced(t, i + 1, '{', '}');
     if (end != std::string::npos) {
       std::string inner = t.substr(i + 2, end - (i + 2));
-      if (!inner.empty() && inner[0] == '|') inner[0] = ' ';  // ${| cmd; } valsub
+      bool valsub = !inner.empty() && inner[0] == '|';  // ${| cmd; } -> $REPLY
+      if (valsub) inner[0] = ' ';
       int st = 0;
-      std::string res = sh_.run_and_capture_inproc(inner, &st);
+      std::string res = sh_.run_and_capture_inproc(inner, &st, valsub);
       sh_.last_status = st;
       sh_.note_cmdsub(st);
       char cm = dq ? '1' : '4';  // command output: zsh-splittable (see $(...) above)

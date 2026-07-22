@@ -1687,17 +1687,36 @@ int Shell::run_string(const std::string &script) {
   return st;
 }
 
-std::string Shell::run_and_capture_inproc(const std::string &script, int *status) {
+std::string Shell::run_and_capture_inproc(const std::string &script, int *status,
+                                          bool valsub) {
+  // ${| cmd; } valsub captures the body's $REPLY rather than its stdout, which
+  // is left connected to the shell's real stdout.
   std::fflush(stdout);
-  int saved = dup(STDOUT_FILENO);
-  FILE *tf = std::tmpfile();
-  if (!tf) { if (status) *status = 1; return std::string(); }
-  int tfd = fileno(tf);
-  dup2(tfd, STDOUT_FILENO);
+  int saved = -1;
+  FILE *tf = nullptr;
+  if (!valsub) {
+    saved = dup(STDOUT_FILENO);
+    tf = std::tmpfile();
+    if (!tf) { if (status) *status = 1; return std::string(); }
+    dup2(fileno(tf), STDOUT_FILENO);
+  }
   int saved_base = lineno_base;  // run at the enclosing command's line
   lineno_base = cur_lineno - 1;
+  // A funsub runs in a fresh local scope (so a `local' inside it does not leak)
+  // and is a return boundary like a function body: `return' ends the funsub
+  // (its status becomes the funsub's) rather than unwinding the caller.
+  bool saved_returning = returning;
+  returning = false;
+  push_scope();
   int st = run_string(script);
+  pop_scope();
+  if (returning) { st = exit_status; returning = false; }
+  returning = saved_returning;
   lineno_base = saved_base;
+  if (valsub) {
+    if (status) *status = st;
+    return get("REPLY");
+  }
   std::fflush(stdout);
   dup2(saved, STDOUT_FILENO);
   close(saved);
