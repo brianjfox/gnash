@@ -66,7 +66,7 @@ class Expander {
   // Core: turn one raw word into (result string, per-char quoted mask), with
   // `\x01' field-separator markers inserted for "$@" splitting.
   void process(const std::string &text, std::string &out, std::string &mask,
-               bool assignment_rhs, bool heredoc = false);
+               bool assignment_rhs, bool heredoc = false, bool sq_literal = false);
   // Process double-quoted content (no surrounding quotes) from text[i] into
   // out/mask, stopping at an unescaped closing quote or end of string.
   void process_dq(const std::string &text, size_t &i, std::string &out, std::string &mask);

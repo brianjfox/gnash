@@ -1537,9 +1537,11 @@ std::string Expander::expand_dq_word(const std::string &w_in) {
     w += w_in[k];
   }
   // A synthetic leading quote starts the double-quote span; embedded quotes in
-  // W toggle context normally (an unterminated span at the end is fine).
+  // W toggle context normally (an unterminated span at the end is fine).  A
+  // single quote is literal throughout (bash's DOLBRACE_QUOTE state), even when
+  // the word's own double quotes toggle the context (sq_literal).
   std::string out, mask;
-  process('"' + w, out, mask, false);
+  process('"' + w, out, mask, false, false, /*sq_literal=*/true);
   std::string joined;
   for (size_t k = 0; k < out.size(); k++) {
     if (k < mask.size() && mask[k] == MMARK) {
@@ -1552,7 +1554,7 @@ std::string Expander::expand_dq_word(const std::string &w_in) {
 }
 
 void Expander::process(const std::string &text, std::string &out, std::string &mask,
-                       bool /*assignment_rhs*/, bool heredoc) {
+                       bool /*assignment_rhs*/, bool heredoc, bool sq_literal) {
   // Most output is about as long as the input; reserve to avoid reallocating
   // (and memmoving) the out/mask pair as they grow char by char.
   out.reserve(out.size() + text.size());
@@ -1563,6 +1565,9 @@ void Expander::process(const std::string &text, std::string &out, std::string &m
     if (heredoc && (c == '\'' || c == '"')) {
       // Inside a here-document, quote characters are ordinary text.
       out += c; mask += '2'; i++;
+    } else if (c == '\'' && sq_literal) {
+      // In a double-quoted ${...} operator word a single quote is literal.
+      out += c; mask += '1'; i++;
     } else if (c == '\'') {
       out += QNULL; mask += MMARK;  // a quote region yields a field even if empty
       i++;
