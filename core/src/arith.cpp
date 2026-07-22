@@ -327,7 +327,10 @@ struct Parser {
     auto n = mk(k);
     if (read_ref(*n)) return n;
     // `++'/`--' before a non-lvalue (e.g. ++7): bash evaluates the operand and
-    // applies no increment, without error.
+    // applies no increment, without error.  A wholly dangling `++'/`--' (no
+    // operand at all) is an "operand expected" error whose token bash reports
+    // as the second sign, since it rereads the pair as two unary operators.
+    last_tok = save - 1;
     pos = save;
     return unary();
   }
