@@ -4609,6 +4609,7 @@ struct CondEval {
   Shell &sh;
   std::vector<Token> t;
   size_t i = 0;
+  int synerr = 0;  // forced exit status (2) after a `[[' syntax error, else 0
 
   bool is_word(const char *w) { return t[i].type == Tok::Word && t[i].text == w; }
   bool at_end() { return t[i].type == Tok::Eof; }
@@ -4663,6 +4664,17 @@ struct CondEval {
         auto it = sh.vars.find(arg);
         return it != sh.vars.end() && it->second.nameref;
       }
+      if (o == 't') {  // -t FD: FD must be an integer, else `integer expected'
+        char *endp = nullptr;
+        long fd = std::strtol(arg.c_str(), &endp, 10);
+        if (arg.empty() || *endp != '\0') {
+          std::fprintf(stderr, "%s[[: %s: integer expected\n", sh.err_prefix().c_str(),
+                       arg.c_str());
+          synerr = 2;
+          return false;
+        }
+        return isatty(static_cast<int>(fd)) != 0;
+      }
       return file_test(o, arg);
     }
     // word [ binop word ]
@@ -4712,8 +4724,12 @@ struct CondEval {
         }
         if (op == "<") return lhs < expand(rhs_raw);
         if (op == ">") return lhs > expand(rhs_raw);
-        long l = std::strtol(lhs.c_str(), nullptr, 10);
-        long r = std::strtol(expand(rhs_raw).c_str(), nullptr, 10);
+        // The [[ ]] arithmetic comparators evaluate each side as an arithmetic
+        // expression (so `-eq 4+3' means 7), reporting a malformed one with
+        // bash's `[[: EXPR: ...' diagnostic rather than silently reading 0.
+        bool aok = true;
+        long l = static_cast<long>(eval_arith_msg(sh, lhs, "[[", &aok));
+        long r = static_cast<long>(eval_arith_msg(sh, expand(rhs_raw), "[[", &aok));
         return int_cmp(op, l, r);
       }
     }
@@ -4727,7 +4743,7 @@ struct CondEval {
 bool eval_cond_expression(Shell &sh, const std::string &expr, int *status) {
   CondEval ce{sh, tokenize(expr), 0};
   bool v = ce.or_expr();
-  if (status) *status = v ? 0 : 1;
+  if (status) *status = ce.synerr ? ce.synerr : (v ? 0 : 1);
   return v;
 }
 

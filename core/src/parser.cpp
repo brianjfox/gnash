@@ -874,12 +874,14 @@ struct Parser {
   }
 
   CommandPtr parse_cond() {
+    int cond_line = cur().line;  // $LINENO / error line of the `[[' command
     advance();  // [[
     auto n = std::make_unique<CondCommand>();
     std::string expr;
     cond_or(expr);
     expect_reserved("]]");
     n->expression = trim(expr);
+    n->line = cond_line;
     parse_redirect_list(n->redirects);
     return n;
   }
