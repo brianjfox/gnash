@@ -253,6 +253,12 @@ source /tmp/gnrx3.$$; rm -f /tmp/gnrx3.$$'
   # quoted "$@" / "${a[@]}" keep empty elements
   'set -- "" x ""; printf "<%s>" "$@"; echo'
   'a=(p "" q); for e in "${a[@]}"; do echo "[$e]"; done'
+  # defaulting/alternative operators on a whole array (not a slice)
+  'a=(); echo "${a[@]:-DEF}"; echo "${a[@]-DEF}"'
+  'a=(""); echo "[${a[@]:-DEF}]"; echo "[${a[@]-DEF}]"'
+  'a=(x y); echo "${a[@]:-DEF}" "${a[@]:+ALT}"'
+  'a=(); echo "${a[@]:+ALT}"; echo "${a[*]:-D E F}"'
+  'a=(); printf "<%s>" ${a[@]:-x y}; echo; a=(p q); printf "<%s>" "${a[@]:-z}"; echo'
   # ulimit reports a single resource as a bare value
   'ulimit -n; ulimit -c'
   # set -u: defaulting operators handle an unset variable (no nounset error)
