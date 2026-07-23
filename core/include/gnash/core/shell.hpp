@@ -390,6 +390,14 @@ class Shell {
   // --- control-flow signals (set by builtins, honored by the executor) ---
   int break_count = 0;
   int continue_count = 0;
+  // Current loop nesting depth (bash's loop_level).  The executor bumps this
+  // around each for/while/until body; `break'/`continue' consult it to reject a
+  // use outside any loop.  Reset to 0 across function-call and subshell
+  // boundaries so a `break' in a function doesn't break the caller's loop.
+  int loop_depth = 0;
+  // Depth of active `source'/`.' invocations.  `return' is legal in a function
+  // OR a sourced script; outside both it is an error (bash).
+  int source_depth = 0;
   bool returning = false;
   bool exiting = false;
   int exit_status = 0;
