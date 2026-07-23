@@ -1155,6 +1155,12 @@ bool set_o_option(Shell &sh, const std::string &o, bool on) {
   }
   else if (o == "monitor") sh.opt_monitor = on;
   else if (o == "privileged") sh.opt_privileged = on;
+  // Valid bash `set -o' names whose behavior is unimplemented: accept as no-ops
+  // (a script may set them; erroring would diverge from bash, which knows them).
+  else if (o == "allexport" || o == "braceexpand" || o == "hashall" ||
+           o == "ignoreeof" || o == "interactive-comments" || o == "nolog" ||
+           o == "notify" || o == "noclobber" || o == "onecmd")
+    ;  // no-op
   else return false;
   return true;
 }
@@ -1240,16 +1246,24 @@ int bi_set(Shell &sh, const std::vector<std::string> &argv) {
               }
             } else {
               std::string oname = argv[++i];
-              if (!set_o_option(sh, oname, on) && oname == "restricted" && !on) {
-                std::fprintf(stderr, "%sset: restricted: invalid option name\n",
-                             sh.err_prefix().c_str());
+              if (!set_o_option(sh, oname, on)) {
+                std::fprintf(stderr, "%sset: %s: invalid option name\n",
+                             sh.err_prefix().c_str(), oname.c_str());
                 return 2;
               }
             }
             k = a.size();  // -o consumes the rest of the word
             break;
           }
-          default: break;  // other flags accepted as no-ops
+          // Flags accepted as no-ops where the behavior is unimplemented:
+          // allexport/notify/hashall/onecmd/braceexpand/noclobber.
+          case 'a': case 'b': case 'h': case 't': case 'B': case 'C': break;
+          default:
+            std::fprintf(stderr, "%sset: %c%c: invalid option\n", sh.err_prefix().c_str(),
+                         a[0], a[k]);
+            std::fprintf(stderr, "set: usage: set [-abefhkmnptuvxBCEHPT] [-o option-name] "
+                                 "[--] [-] [arg ...]\n");
+            return 2;
         }
       }
     } else {
