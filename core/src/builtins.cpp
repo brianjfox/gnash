@@ -3268,6 +3268,11 @@ int bi_shopt(Shell &sh, const std::vector<std::string> &argv) {
       }
     }
   }
+  if (set_s && unset_u) {
+    std::fprintf(stderr, "%sshopt: cannot set and unset shell options simultaneously\n",
+                 sh.err_prefix().c_str());
+    return 1;
+  }
 
   if (o_names) {
     // `-p' reproduces as `set -o'/`set +o' commands; otherwise a NAME<TAB>state
