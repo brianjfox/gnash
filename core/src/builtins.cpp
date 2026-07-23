@@ -4709,6 +4709,13 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
     for (; ai < argv.size(); ai++) {
       if (argv[ai] == "--") { ai++; break; }
       if (argv[ai] == "-p") { pflag = true; if (ai + 1 < argv.size()) ppath = argv[++ai]; continue; }
+      if (argv[ai].size() >= 2 && argv[ai][0] == '-') {  // `. -i': unknown option
+        std::fprintf(stderr, "%s%s: %s: invalid option\n", sh.err_prefix().c_str(),
+                     cmd.c_str(), argv[ai].c_str());
+        std::fprintf(stderr, "%s: usage: %s [-p path] filename [arguments]\n",
+                     cmd.c_str(), cmd.c_str());
+        return 2;
+      }
       break;
     }
     if (ai >= argv.size()) {
