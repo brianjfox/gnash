@@ -2196,6 +2196,23 @@ static std::string trap_key_for_spec(const std::string &spec) {
   return u;
 }
 
+// True if SPEC names a real signal: a number with a known name, or a signal
+// name (with or without the `SIG' prefix).  signame_to_num() falls back to
+// SIGTERM for garbage, so a name is confirmed by round-tripping to canonical.
+static bool valid_signal_spec(const std::string &spec) {
+  if (spec.empty()) return false;
+  if (std::isdigit(static_cast<unsigned char>(spec[0]))) {
+    char *end = nullptr;
+    long n = std::strtol(spec.c_str(), &end, 10);
+    return *end == '\0' && trapname_from_num(static_cast<int>(n)) != nullptr;
+  }
+  std::string n = spec;
+  if (n.rfind("SIG", 0) == 0) n = n.substr(3);
+  for (char &c : n) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+  const char *canon = trapname_from_num(signame_to_num(spec));
+  return canon && n == canon;
+}
+
 int bi_trap(Shell &sh, const std::vector<std::string> &argv) {
   static const char *kUsage = "trap: usage: trap [-Plp] [[action] signal_spec ...]";
   bool opt_p = false, opt_P = false, opt_l = false;
@@ -2234,20 +2251,34 @@ int bi_trap(Shell &sh, const std::vector<std::string> &argv) {
                    sh.err_prefix().c_str());
       return 1;
     }
+    int st = 0;
     for (; i < argv.size(); i++) {
+      if (trap_pseudo(argv[i]).empty() && !valid_signal_spec(argv[i])) {
+        std::fprintf(stderr, "%strap: %s: invalid signal specification\n",
+                     sh.err_prefix().c_str(), argv[i].c_str());
+        st = 1;
+        continue;
+      }
       auto it = sh.traps.find(trap_key_for_spec(argv[i]));
       if (it != sh.traps.end()) std::printf("%s\n", it->second.c_str());
     }
-    return 0;
+    return st;
   }
 
   // Listing: a bare `trap', or `trap -p' with an optional signal filter.
   if (opt_p || i >= argv.size()) {
     std::vector<const std::pair<const std::string, std::string> *> items;
+    int st = 0;
     if (i >= argv.size()) {
       for (const auto &kv : sh.traps) items.push_back(&kv);
     } else {
       for (; i < argv.size(); i++) {
+        if (trap_pseudo(argv[i]).empty() && !valid_signal_spec(argv[i])) {
+          std::fprintf(stderr, "%strap: %s: invalid signal specification\n",
+                       sh.err_prefix().c_str(), argv[i].c_str());
+          st = 1;
+          continue;
+        }
         auto it = sh.traps.find(trap_key_for_spec(argv[i]));
         if (it != sh.traps.end()) items.push_back(&*it);
       }
@@ -2259,7 +2290,7 @@ int bi_trap(Shell &sh, const std::vector<std::string> &argv) {
     for (const auto *kv : items)
       std::printf("trap -- '%s' %s\n", kv->second.c_str(),
                   trap_display_name(kv->first).c_str());
-    return 0;
+    return st;
   }
 
   // Otherwise set/reset/ignore: the first operand is the action, the rest are
@@ -2267,12 +2298,20 @@ int bi_trap(Shell &sh, const std::vector<std::string> &argv) {
   std::string cmd = argv[i];
   bool reset = (cmd == "-");
   bool ignore = cmd.empty();
+  int st = 0;
   for (size_t j = i + 1; j < argv.size(); j++) {
     const std::string &spec = argv[j];
     std::string pseudo = trap_pseudo(spec);
     if (!pseudo.empty()) {  // EXIT/DEBUG/ERR/RETURN run at points, not on delivery
       if (reset) sh.traps.erase(pseudo);
       else sh.traps[pseudo] = cmd;
+      continue;
+    }
+    // A spec that names no real signal is an error, and that signal is skipped.
+    if (!valid_signal_spec(spec)) {
+      std::fprintf(stderr, "%strap: %s: invalid signal specification\n",
+                   sh.err_prefix().c_str(), spec.c_str());
+      st = 1;
       continue;
     }
     int signo = signame_to_num(spec);
@@ -2288,7 +2327,7 @@ int bi_trap(Shell &sh, const std::vector<std::string> &argv) {
       sh.set_signal_trap(signo, true);
     }
   }
-  return 0;
+  return st;
 }
 
 // Apply a chmod-style symbolic mode (`u=rwx,g-w,a+x') to ALLOWED (the file
