@@ -599,11 +599,23 @@ int bi_cd(Shell &sh, const std::vector<std::string> &argv) {
     else if (argv[i] == "--") { i++; break; }
     else break;
   }
+  if (argv.size() - i > 1) {
+    std::fprintf(stderr, "%scd: too many arguments\n", sh.err_prefix().c_str());
+    return 1;
+  }
   std::string dir;
-  if (i >= argv.size()) dir = sh.get("HOME");
-  else if (argv[i] == "-") {
+  if (i >= argv.size()) {
+    if (!sh.is_set("HOME")) {
+      std::fprintf(stderr, "%scd: HOME not set\n", sh.err_prefix().c_str());
+      return 1;
+    }
+    dir = sh.get("HOME");
+  } else if (argv[i] == "-") {
+    if (!sh.is_set("OLDPWD")) {
+      std::fprintf(stderr, "%scd: OLDPWD not set\n", sh.err_prefix().c_str());
+      return 1;
+    }
     dir = sh.get("OLDPWD");
-    if (dir.empty()) { std::fprintf(stderr, "gnash: cd: OLDPWD not set\n"); return 1; }
     std::printf("%s\n", dir.c_str());
   } else {
     dir = argv[i];
@@ -3256,6 +3268,11 @@ int bi_shopt(Shell &sh, const std::vector<std::string> &argv) {
       }
     }
   }
+  if (set_s && unset_u) {
+    std::fprintf(stderr, "%sshopt: cannot set and unset shell options simultaneously\n",
+                 sh.err_prefix().c_str());
+    return 1;
+  }
 
   if (o_names) {
     // `-p' reproduces as `set -o'/`set +o' commands; otherwise a NAME<TAB>state
@@ -4692,6 +4709,13 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
     for (; ai < argv.size(); ai++) {
       if (argv[ai] == "--") { ai++; break; }
       if (argv[ai] == "-p") { pflag = true; if (ai + 1 < argv.size()) ppath = argv[++ai]; continue; }
+      if (argv[ai].size() >= 2 && argv[ai][0] == '-') {  // `. -i': unknown option
+        std::fprintf(stderr, "%s%s: %s: invalid option\n", sh.err_prefix().c_str(),
+                     cmd.c_str(), argv[ai].c_str());
+        std::fprintf(stderr, "%s: usage: %s [-p path] filename [arguments]\n",
+                     cmd.c_str(), cmd.c_str());
+        return 2;
+      }
       break;
     }
     if (ai >= argv.size()) {
