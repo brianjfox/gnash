@@ -599,11 +599,23 @@ int bi_cd(Shell &sh, const std::vector<std::string> &argv) {
     else if (argv[i] == "--") { i++; break; }
     else break;
   }
+  if (argv.size() - i > 1) {
+    std::fprintf(stderr, "%scd: too many arguments\n", sh.err_prefix().c_str());
+    return 1;
+  }
   std::string dir;
-  if (i >= argv.size()) dir = sh.get("HOME");
-  else if (argv[i] == "-") {
+  if (i >= argv.size()) {
+    if (!sh.is_set("HOME")) {
+      std::fprintf(stderr, "%scd: HOME not set\n", sh.err_prefix().c_str());
+      return 1;
+    }
+    dir = sh.get("HOME");
+  } else if (argv[i] == "-") {
+    if (!sh.is_set("OLDPWD")) {
+      std::fprintf(stderr, "%scd: OLDPWD not set\n", sh.err_prefix().c_str());
+      return 1;
+    }
     dir = sh.get("OLDPWD");
-    if (dir.empty()) { std::fprintf(stderr, "gnash: cd: OLDPWD not set\n"); return 1; }
     std::printf("%s\n", dir.c_str());
   } else {
     dir = argv[i];
