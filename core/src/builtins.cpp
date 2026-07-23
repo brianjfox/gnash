@@ -845,12 +845,44 @@ int bi_mapfile(Shell &sh, const std::vector<std::string> &argv) {
       case 'n': count = std::atol(val.c_str()); break;
       case 'O': origin = std::atol(val.c_str()); haveO = true; break;
       case 's': skip = std::atol(val.c_str()); break;
-      case 'u': fd = std::atoi(val.c_str()); break;
+      case 'u': {
+        char *end = nullptr;
+        long f = std::strtol(val.c_str(), &end, 10);
+        if (val.empty() || *end != '\0') {
+          std::fprintf(stderr, "%smapfile: %s: invalid file descriptor specification\n",
+                       sh.err_prefix().c_str(), val.c_str());
+          return 1;
+        }
+        fd = static_cast<int>(f);
+        have_u = true;
+        break;
+      }
       case 'c': case 'C': break;  // callback quantum -- accepted, not invoked
       default: break;
     }
   }
   if (i < argv.size()) name = argv[i];
+
+  // Validate the descriptor and the target array name before reading.
+  if (have_u && fcntl(fd, F_GETFD) == -1) {
+    std::fprintf(stderr, "%smapfile: %d: invalid file descriptor: %s\n", sh.err_prefix().c_str(),
+                 fd, std::strerror(errno));
+    return 1;
+  }
+  if (name.empty()) {
+    std::fprintf(stderr, "%smapfile: empty array variable name\n", sh.err_prefix().c_str());
+    return 1;
+  }
+  {
+    bool ok = std::isalpha(static_cast<unsigned char>(name[0])) || name[0] == '_';
+    for (char c : name)
+      if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '_')) ok = false;
+    if (!ok) {
+      std::fprintf(stderr, "%smapfile: `%s': not a valid identifier\n", sh.err_prefix().c_str(),
+                   name.c_str());
+      return 1;
+    }
+  }
 
   std::string data;
   char buf[4096];
