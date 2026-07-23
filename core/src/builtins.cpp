@@ -581,7 +581,23 @@ int change_dir(Shell &sh, const std::string &dir, bool physical, const char *cal
                  std::strerror(errno));
     return 1;
   }
-  if (!oldpwd.empty()) sh.set_exported("OLDPWD", oldpwd);
+  // Updating a readonly PWD/OLDPWD fails (bash reports it and cd returns 1),
+  // even though the chdir itself already succeeded.
+  auto is_ro = [&](const char *nm) {
+    auto it = sh.vars.find(nm);
+    return it != sh.vars.end() && it->second.readonly;
+  };
+  if (!oldpwd.empty()) {
+    if (is_ro("OLDPWD")) {
+      std::fprintf(stderr, "%sOLDPWD: readonly variable\n", sh.err_prefix().c_str());
+      return 1;
+    }
+    sh.set_exported("OLDPWD", oldpwd);
+  }
+  if (is_ro("PWD")) {
+    std::fprintf(stderr, "%sPWD: readonly variable\n", sh.err_prefix().c_str());
+    return 1;
+  }
   sh.set_exported("PWD", physical ? phys_cwd() : logical);
   return 0;
 }
@@ -1735,7 +1751,9 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
           case 'r': (add ? readonly : rm_readonly) = true; break;
           case 'x': (add ? exported : rm_exported) = true; break;
           case 'g': global = true; break;
-          case 'n': (add ? nameref : rm_nameref) = true; break;
+          // `readonly -n' is accepted but does not make a nameref (it must not
+          // turn off readonly status either); only declare/typeset/local use -n.
+          case 'n': if (!force_ro) (add ? nameref : rm_nameref) = true; break;
           case 'l': (add ? lcase : rm_lcase) = true; break;
           case 'u': (add ? ucase : rm_ucase) = true; break;
           case 'c': (add ? capcase : rm_capcase) = true; break;
