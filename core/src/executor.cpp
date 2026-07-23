@@ -1070,6 +1070,10 @@ int Executor::run_simple(const SimpleCommand *c) {
     bool had_return = rtit != sh_.traps.end();
     std::string return_before = had_return ? rtit->second : std::string();
     status = unwinding() ? sh_.last_status : run(fit->second);
+    // Deliver a signal caught during the body while the function scope is still
+    // active, so its trap runs in-context (bash): a `return' in the trap then
+    // returns from THIS function rather than erroring at the outer level.
+    if (!unwinding()) sh_.run_pending_traps();
     // The RETURN trap fires when the function returns, in its own scope, with $?
     // set to the return status.  It runs when inherited (functrace) or installed
     // inside the function.  A function invoked while the DEBUG trap is running
