@@ -1519,6 +1519,12 @@ int Executor::run_funcdef(const FunctionDef *c) {
                  sh_.err_prefix().c_str(), c->name.c_str());
     return (sh_.last_status = 1);
   }
+  // A readonly function cannot be redefined.
+  if (sh_.readonly_functions.count(c->name)) {
+    std::fprintf(stderr, "%s%s: readonly function\n", sh_.err_prefix().c_str(),
+                 c->name.c_str());
+    return (sh_.last_status = 1);
+  }
   sh_.functions[c->name] = c->body.get();
   sh_.func_src[c->name] = sh_.current_source();  // file it was defined in, for BASH_SOURCE
   sh_.func_lineno_base[c->name] = sh_.lineno_base;  // for $LINENO inside the body

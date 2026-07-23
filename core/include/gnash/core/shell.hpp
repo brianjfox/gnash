@@ -383,6 +383,7 @@ class Shell {
   std::map<std::string, const Command *> functions;
   std::vector<CommandPtr> retained;  // keeps eval/source/def trees alive
   std::set<std::string> exported_functions;  // `export -f': passed to children
+  std::set<std::string> readonly_functions;  // `readonly -f'/`declare -fr': cannot rebind/unset
   // Import `BASH_FUNC_name%%=() {...}' definitions from the environment (called
   // once at startup); parses each safely, ignoring any trailing commands.
   void import_env_functions();

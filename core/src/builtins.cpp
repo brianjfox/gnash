@@ -1016,7 +1016,16 @@ int bi_unset(Shell &sh, const std::vector<std::string> &argv) {
   static const std::set<std::string> kNoUnset = {"BASH_LINENO", "BASH_SOURCE",
                                                  "BASH_ARGV", "BASH_ARGC"};
   for (; i < argv.size(); i++) {
-    if (funcs) { sh.functions.erase(argv[i]); continue; }
+    if (funcs) {
+      if (sh.readonly_functions.count(argv[i])) {
+        std::fprintf(stderr, "%sunset: %s: cannot unset: readonly function\n",
+                     sh.err_prefix().c_str(), argv[i].c_str());
+        ret = 1;
+      } else {
+        sh.functions.erase(argv[i]);
+      }
+      continue;
+    }
     if (kNoUnset.count(argv[i])) {
       std::fprintf(stderr, "%sunset: %s: cannot unset\n", sh.err_prefix().c_str(),
                    argv[i].c_str());
@@ -1785,6 +1794,29 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     }
     return st;
   }
+  // Set or remove the readonly attribute on named functions: `readonly -f f',
+  // `declare -fr f' mark; `declare -f +r f' tries to remove it (an error on a
+  // readonly function).  A name that is not a function is reported.
+  if (funcs && (readonly || rm_readonly) && i < argv.size()) {
+    int st = 0;
+    for (; i < argv.size(); i++) {
+      const std::string &fn = argv[i];
+      if (!sh.functions.count(fn)) {
+        std::fprintf(stderr, "%s%s: %s: not a function\n", sh.err_prefix().c_str(),
+                     argv[0].c_str(), fn.c_str());
+        st = 1;
+      } else if (rm_readonly) {
+        if (sh.readonly_functions.count(fn)) {
+          std::fprintf(stderr, "%s%s: %s: readonly function\n", sh.err_prefix().c_str(),
+                       argv[0].c_str(), fn.c_str());
+          st = 1;
+        }
+      } else {
+        sh.readonly_functions.insert(fn);
+      }
+    }
+    return st;
+  }
   // -f / -F: display function definitions or names.  With -x, restrict to
   // exported functions (gnash doesn't export functions, so none qualify).
   if (funcs || funcnames) {
@@ -1792,7 +1824,9 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     if (exported) return i >= argv.size() ? 0 : 1;
     if (i >= argv.size()) {  // all functions
       for (const auto &kv : sh.functions) {
-        if (funcnames) std::printf("declare -f %s\n", kv.first.c_str());
+        bool ro = sh.readonly_functions.count(kv.first) > 0;
+        if (readonly && !ro) continue;  // `-r' lists only readonly functions
+        if (funcnames) std::printf("declare -f%s %s\n", ro ? "r" : "", kv.first.c_str());
         else std::printf("%s\n", named_function_string(kv.first, kv.second, sh.opt_posix).c_str());
       }
       return 0;
