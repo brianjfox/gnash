@@ -393,6 +393,29 @@ static bool slice_ref(const std::string &body, std::string &name, char &sel,
   return true;
 }
 
+// Detect NAME[@]OP / NAME[*]OP where OP is a defaulting/alternative/error
+// operator (`-` `:-` `=` `:=` `+` `:+` `?` `:?`) applied to the array as a
+// whole.  Must be tried before slice_ref, which would otherwise misread
+// `:-word' as a slice with a bogus `-word' offset.
+static bool array_default_ref(const std::string &body, std::string &name, char &sel,
+                              std::string &rest) {
+  if (body.empty() || !(std::isalpha(static_cast<unsigned char>(body[0])) || body[0] == '_'))
+    return false;
+  size_t p = 0;
+  while (p < body.size() && (std::isalnum(static_cast<unsigned char>(body[p])) || body[p] == '_')) p++;
+  if (p + 3 > body.size() || body[p] != '[' ||
+      (body[p + 1] != '@' && body[p + 1] != '*') || body[p + 2] != ']')
+    return false;
+  name = body.substr(0, p);
+  sel = body[p + 1];
+  rest = body.substr(p + 3);
+  if (rest.empty()) return false;
+  char c = rest[0];
+  if (c == '-' || c == '=' || c == '+' || c == '?') return true;
+  return c == ':' && rest.size() > 1 &&
+         (rest[1] == '-' || rest[1] == '=' || rest[1] == '+' || rest[1] == '?');
+}
+
 bool Expander::emit_zsh_flags(const std::string &body, bool dq, std::string &out,
                               std::string &mask) {
   if (body.empty() || body[0] != '(') return false;
@@ -951,6 +974,90 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
             if (k) { out += FIELD_SEP; mask += MMARK; }
             if (asel == '@' && dq) { out += QNULL; mask += MMARK; }  // keep empty element
             for (char c : items[k]) { out += c; mask += m; }
+          }
+        }
+        i = end + 1;
+        return;
+      }
+      // ${a[@]:-word} / ${a[*]:+word} etc: a defaulting/alternative/error
+      // operator on the whole array.  Handled before slice_ref (which would
+      // otherwise read `:-word' as a slice offset).
+      std::string dfname, dfrest; char dfsel;
+      if (array_default_ref(body, dfname, dfsel, dfrest)) {
+        std::vector<std::string> vals = sh_.array_values(dfname);
+        bool unset = vals.empty();
+        bool allempty = true;  // null: no set elements, or all elements empty
+        for (const std::string &v : vals) if (!v.empty()) { allempty = false; break; }
+        char op = dfrest[0];
+        bool colon = false;
+        size_t opos = 1;
+        if (op == ':') { colon = true; op = dfrest[1]; opos = 2; }
+        std::string word = dfrest.substr(opos);
+        bool empty_test = colon ? allempty : unset;
+
+        // Emit the array values exactly as the bare ${a[@]}/${a[*]} path does.
+        auto emit_values = [&]() {
+          if (dfsel == '@' && dq) {
+            absorb_qnull();
+            for (size_t k = 0; k < vals.size(); k++) {
+              if (k) { out += FIELD_SEP; mask += MMARK; }
+              out += QNULL; mask += MMARK;
+              for (char c : vals[k]) { out += c; mask += '1'; }
+            }
+          } else if (dfsel == '*' && dq) {
+            std::string is = sh_.ifs();
+            std::string j = is.empty() ? std::string() : std::string(1, is[0]);
+            for (size_t k = 0; k < vals.size(); k++) {
+              if (k) for (char c : j) { out += c; mask += '1'; }
+              for (char c : vals[k]) { out += c; mask += '1'; }
+            }
+          } else if (dfsel == '*') {
+            std::string is = sh_.ifs();
+            std::string j = is.empty() ? std::string() : std::string(1, is[0]);
+            for (size_t k = 0; k < vals.size(); k++) {
+              if (k) for (char c : j) { out += c; mask += '0'; }
+              for (char c : vals[k]) { out += c; mask += '0'; }
+            }
+          } else {
+            bool first = true;
+            for (size_t k = 0; k < vals.size(); k++) {
+              if (vals[k].empty()) continue;
+              if (!first) { out += FIELD_SEP; mask += MMARK; }
+              first = false;
+              for (char c : vals[k]) { out += c; mask += '0'; }
+            }
+          }
+        };
+        // Emit the substituted word (subject to the enclosing quoting).
+        auto emit_word = [&]() {
+          bool has_at = word.find("$@") != std::string::npos || word.find("$*") != std::string::npos;
+          std::string w = (dq && !sh_.is_zsh() && !has_at) ? expand_dq_word(word)
+                                                           : expand_no_split(word);
+          char m = dq ? '1' : '0';
+          for (char c : w) { out += c; mask += m; }
+        };
+
+        std::string dispname = dfname + "[" + std::string(1, dfsel) + "]";
+        if (op == '=') {
+          // bash rejects assignment to a whole array via [@]/[*].
+          std::fprintf(stderr, "%s%s: bad array subscript\n", sh_.err_prefix().c_str(),
+                       dispname.c_str());
+          sh_.exiting = true;
+          sh_.exit_status = 1;
+        } else if (op == '-') {
+          if (empty_test) emit_word(); else emit_values();
+        } else if (op == '+') {
+          if (!empty_test) emit_word();  // otherwise substitute nothing
+        } else {  // '?': error when the array is unset/null
+          if (empty_test) {
+            std::string msg = expand_no_split(word);
+            if (msg.empty()) msg = colon ? "parameter null or not set" : "parameter not set";
+            std::fprintf(stderr, "%s%s: %s\n", sh_.err_prefix().c_str(), dispname.c_str(),
+                         msg.c_str());
+            sh_.exiting = true;
+            sh_.exit_status = 127;
+          } else {
+            emit_values();
           }
         }
         i = end + 1;
