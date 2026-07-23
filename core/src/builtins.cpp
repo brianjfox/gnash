@@ -12,6 +12,7 @@
 #include <optional>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <fstream>
 #include <regex.h>
 #include <set>
@@ -344,6 +345,31 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
         while (j < fmt.size() && std::strchr("-+ #0123456789.", fmt[j])) j++;
         if (j >= fmt.size()) { out += '%'; break; }
         char conv = fmt[j];
+        // %(DATEFMT)T: format an epoch-seconds argument through strftime.  The
+        // conversion char sits after the parenthesized format, so it is scanned
+        // separately from the ordinary single-letter conversions below.
+        if (conv == '(') {
+          size_t close = fmt.find(")T", j);
+          if (close != std::string::npos) {
+            std::string datefmt = fmt.substr(j + 1, close - (j + 1));
+            std::string a = next();
+            time_t when;
+            if (a.empty()) when = std::time(nullptr);
+            else {
+              long v = std::strtol(a.c_str(), nullptr, 10);
+              when = (v < 0) ? std::time(nullptr) : static_cast<time_t>(v);
+            }
+            struct tm tmv;
+            localtime_r(&when, &tmv);
+            char tbuf[256];
+            tbuf[0] = '\0';
+            std::strftime(tbuf, sizeof tbuf, datefmt.c_str(), &tmv);
+            out += tbuf;
+            consumed_any = true;
+            i = close + 1;  // land on the 'T'; the loop ++ steps past it
+            continue;
+          }
+        }
         std::string spec = fmt.substr(i, j - i + 1);
         if (conv == '%') {
           out += '%';

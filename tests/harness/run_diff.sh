@@ -113,6 +113,10 @@ scripts=(
   'printf "%b|" "\101" "\0101" "\x41" "a\tb"; echo'
   'printf -v out "%s=%05d" foo 7; echo "[$out]"'
   'printf "%-8s|%5.2f|%3d\n" hi 3.14159 42'
+  # printf %(FMT)T time conversion (epoch arg; both shells share the ambient TZ)
+  'printf "%(%Y-%m-%d)T\n" 0'
+  'printf "[%(%H:%M:%S)T]\n" 0'
+  'printf "pre-%d-%(%Y)T-post\n" 5 0'
   'echo "*.md"; echo '\''*.md'\''; x="*"; echo "$x"'
   'printf "<%s>" "" a ""; echo'
   'set -- "" x ""; echo $#; for a in "$@"; do echo "[$a]"; done'
