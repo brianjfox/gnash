@@ -1961,6 +1961,10 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
 }
 
 int bi_let(Shell &sh, const std::vector<std::string> &argv) {
+  if (argv.size() < 2) {  // `let' with no expression
+    std::fprintf(stderr, "%slet: expression expected\n", sh.err_prefix().c_str());
+    return 1;
+  }
   long long last = 0;
   bool ok = true;
   for (size_t i = 1; i < argv.size(); i++) last = eval_arith_msg(sh, argv[i], "let", &ok);
