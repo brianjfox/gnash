@@ -2823,7 +2823,16 @@ int bi_help(Shell &sh, const std::vector<std::string> &argv) {
 
 int bi_builtin(Shell &sh, const std::vector<std::string> &argv) {
   if (argv.size() < 2) return 0;
-  std::vector<std::string> sub(argv.begin() + 1, argv.end());
+  size_t i = 1;
+  if (argv[i] == "--") i++;  // `builtin' takes no options besides `--'
+  else if (argv[i].size() >= 2 && argv[i][0] == '-') {
+    std::fprintf(stderr, "%sbuiltin: %s: invalid option\n", sh.err_prefix().c_str(),
+                 argv[i].c_str());
+    std::fprintf(stderr, "builtin: usage: builtin [shell-builtin [arg ...]]\n");
+    return 2;
+  }
+  if (i >= argv.size()) return 0;
+  std::vector<std::string> sub(argv.begin() + i, argv.end());
   if (!is_builtin_name(sub[0])) {
     std::fflush(stdout);
     std::fprintf(stderr, "%sbuiltin: %s: not a shell builtin\n", sh.err_prefix().c_str(),
@@ -4384,15 +4393,25 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
       }
     }
   } else if (cmd == "eval") {
-    std::string saved_ctx = sh.error_context;
-    sh.error_context = "eval";  // parse errors report `NAME: eval: line N: ...'
-    // $LINENO inside eval continues from the eval command's line (bash), so an
-    // eval on line 42 whose body is `echo $LINENO' prints 42.
-    int saved_base = sh.lineno_base;
-    if (sh.cur_lineno > 0) sh.lineno_base = sh.cur_lineno - 1;
-    st = sh.run_string(join(argv, 1));
-    sh.lineno_base = saved_base;
-    sh.error_context = saved_ctx;
+    // `eval' takes no options besides `--'; a leading `-X' is an error.
+    size_t ai = 1;
+    if (ai < argv.size() && argv[ai] != "--" && argv[ai].size() >= 2 && argv[ai][0] == '-') {
+      std::fprintf(stderr, "%seval: %s: invalid option\n", sh.err_prefix().c_str(),
+                   argv[ai].c_str());
+      std::fprintf(stderr, "eval: usage: eval [arg ...]\n");
+      st = 2;
+    } else {
+      if (ai < argv.size() && argv[ai] == "--") ai++;
+      std::string saved_ctx = sh.error_context;
+      sh.error_context = "eval";  // parse errors report `NAME: eval: line N: ...'
+      // $LINENO inside eval continues from the eval command's line (bash), so an
+      // eval on line 42 whose body is `echo $LINENO' prints 42.
+      int saved_base = sh.lineno_base;
+      if (sh.cur_lineno > 0) sh.lineno_base = sh.cur_lineno - 1;
+      st = sh.run_string(join(argv, ai));
+      sh.lineno_base = saved_base;
+      sh.error_context = saved_ctx;
+    }
   } else if (cmd == "source" || cmd == ".") {
     // `-p PATH' gives an explicit colon-separated search path (bash 5.2+).
     size_t ai = 1;
@@ -4622,6 +4641,7 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
     if (bad) {
       std::fprintf(stderr, "%scommand: %s: invalid option\n", sh.err_prefix().c_str(),
                    badopt.c_str());
+      std::fprintf(stderr, "command: usage: command [-pVv] command [arg ...]\n");
       st = 2;
     } else if (desc_V) {
       // `command -V NAME...' == `type NAME...'.
