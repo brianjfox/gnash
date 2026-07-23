@@ -3082,7 +3082,7 @@ int bi_logout(Shell &sh, const std::vector<std::string> &argv) {
 }
 
 int bi_hash(Shell &sh, const std::vector<std::string> &argv) {
-  bool list_l = false, del_d = false, print_t = false;
+  bool list_l = false, del_d = false, print_t = false, expunge = false;
   std::string ppath;
   size_t i = 1;
   for (; i < argv.size(); i++) {
@@ -3092,7 +3092,7 @@ int bi_hash(Shell &sh, const std::vector<std::string> &argv) {
     bool consumed = false;
     for (size_t k = 1; k < a.size(); k++) {
       char o = a[k];
-      if (o == 'r') { sh.hashed.clear(); }
+      if (o == 'r') { sh.hashed.clear(); expunge = true; }
       else if (o == 'l') list_l = true;
       else if (o == 'd') del_d = true;
       else if (o == 't') print_t = true;
@@ -3101,8 +3101,19 @@ int bi_hash(Shell &sh, const std::vector<std::string> &argv) {
         consumed = true;
         break;
       }
+      else {
+        std::fprintf(stderr, "%shash: -%c: invalid option\n", sh.err_prefix().c_str(), o);
+        std::fprintf(stderr, "hash: usage: hash [-lr] [-p pathname] [-dt] [name ...]\n");
+        return 2;
+      }
     }
     if (consumed) continue;
+  }
+  // `-d'/`-t' each require at least one name operand (bash sh_needarg).
+  if (i >= argv.size() && (del_d || print_t)) {
+    std::fprintf(stderr, "%shash: %s: option requires an argument\n", sh.err_prefix().c_str(),
+                 del_d ? "-d" : "-t");
+    return 1;
   }
   if (!ppath.empty() && i < argv.size()) {
     // Under a restricted shell, a hashed pathname may not contain `/', and a
@@ -3120,6 +3131,7 @@ int bi_hash(Shell &sh, const std::vector<std::string> &argv) {
     return 0;
   }
   if (i >= argv.size()) {
+    if (expunge) return 0;  // `hash -r' clears the table silently
     if (sh.hashed.empty()) {
       if (!list_l) std::printf("hash: hash table empty\n");
       return 0;
