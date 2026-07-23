@@ -1627,6 +1627,15 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
       break;
     }
   }
+  // `-f'/`-F' cannot combine with the array/assoc/integer/nameref attributes;
+  // bash names the offending option and fails (no usage line), preferring
+  // -n over -i over -A over -a.
+  if ((funcs || funcnames) && (mk_array || mk_assoc || integer || nameref)) {
+    const char *opt = nameref ? "-n" : integer ? "-i" : mk_assoc ? "-A" : "-a";
+    std::fprintf(stderr, "%s%s: %s: invalid option\n", sh.err_prefix().c_str(),
+                 argv[0].c_str(), opt);
+    return 1;
+  }
   // -p: display variables (named ones, or all) in reproducible form.
   if (fp && !funcs && !funcnames) {
     int st = 0;
