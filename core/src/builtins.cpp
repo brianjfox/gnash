@@ -1735,7 +1735,9 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
           case 'r': (add ? readonly : rm_readonly) = true; break;
           case 'x': (add ? exported : rm_exported) = true; break;
           case 'g': global = true; break;
-          case 'n': (add ? nameref : rm_nameref) = true; break;
+          // `readonly -n' is accepted but does not make a nameref (it must not
+          // turn off readonly status either); only declare/typeset/local use -n.
+          case 'n': if (!force_ro) (add ? nameref : rm_nameref) = true; break;
           case 'l': (add ? lcase : rm_lcase) = true; break;
           case 'u': (add ? ucase : rm_ucase) = true; break;
           case 'c': (add ? capcase : rm_capcase) = true; break;
