@@ -4480,7 +4480,12 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
       }
     }
   } else if (cmd == "local") {
-    st = bi_declare(sh, argv, true, false);
+    if (!sh.in_function()) {
+      std::fprintf(stderr, "%slocal: can only be used in a function\n", sh.err_prefix().c_str());
+      st = 1;
+    } else {
+      st = bi_declare(sh, argv, true, false);
+    }
   } else if (cmd == "declare" || cmd == "typeset") {
     // Inside a function, declare/typeset without -g makes the variable local.
     st = bi_declare(sh, argv, sh.in_function(), false);
