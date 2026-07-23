@@ -4273,9 +4273,48 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
   else if (cmd == "test") st = bi_test(sh, argv, false);
   else if (cmd == "[") st = bi_test(sh, argv, true);
   else if (cmd == "shift") {
-    int n = argv.size() > 1 ? std::atoi(argv[1].c_str()) : 1;
-    for (int k = 0; k < n && !sh.positional.empty(); k++) sh.positional.erase(sh.positional.begin());
-    st = 0;
+    size_t ai = 1;
+    if (ai < argv.size() && argv[ai] == "--") ai++;  // end-of-options marker
+    if (ai < argv.size() && argv[ai] == "--help") {
+      // Help form: the full per-builtin help text is not yet implemented, so
+      // treat it as a no-op success rather than a numeric-argument error.
+      st = 0;
+    } else if (argv.size() - ai > 1) {
+      std::fprintf(stderr, "%sshift: too many arguments\n", sh.err_prefix().c_str());
+      st = 1;
+    } else {
+      long n = 1;
+      std::string a;
+      bool numeric = true;
+      if (ai < argv.size()) {
+        a = argv[ai];
+        char *end = nullptr;
+        n = std::strtol(a.c_str(), &end, 10);
+        numeric = !a.empty() && end != a.c_str() && *end == '\0';
+      }
+      if (!numeric) {
+        std::fprintf(stderr, "%sshift: %s: numeric argument required\n",
+                     sh.err_prefix().c_str(), a.c_str());
+        st = 2;
+      } else if (n == 0) {
+        st = 0;
+      } else if (n < 0) {
+        // A negative count is always out of range (reported regardless of the
+        // shift_verbose option), status 1.
+        std::fprintf(stderr, "%sshift: %s: shift count out of range\n",
+                     sh.err_prefix().c_str(), a.c_str());
+        st = 1;
+      } else if (n > static_cast<long>(sh.positional.size())) {
+        // Too large: silent failure unless `shopt -s shift_verbose'.
+        if (sh.shopt_opts["shift_verbose"])
+          std::fprintf(stderr, "%sshift: %s: shift count out of range\n",
+                       sh.err_prefix().c_str(), a.c_str());
+        st = 1;
+      } else {
+        for (long k = 0; k < n; k++) sh.positional.erase(sh.positional.begin());
+        st = 0;
+      }
+    }
   } else if (cmd == "exit") {
     sh.exiting = true;
     sh.exit_status = argv.size() > 1 ? (std::atoi(argv[1].c_str()) & 0xff) : sh.last_status;
