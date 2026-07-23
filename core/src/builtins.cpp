@@ -883,10 +883,24 @@ int bi_mapfile(Shell &sh, const std::vector<std::string> &argv) {
 int bi_export(Shell &sh, const std::vector<std::string> &argv) {
   bool funcs = false;
   int st = 0;
-  for (size_t i = 1; i < argv.size(); i++) {
+  size_t i = 1;
+  // Parse leading options: `export' takes only -f/-n/-p (and `--').
+  for (; i < argv.size(); i++) {
     const std::string &a = argv[i];
-    if (a == "-f") { funcs = true; continue; }
-    if (a == "-n" || a == "-p" || a == "--") continue;  // (unmodeled here / no-op)
+    if (a == "--") { i++; break; }
+    if (a.size() < 2 || a[0] != '-') break;
+    for (size_t k = 1; k < a.size(); k++) {
+      if (a[k] == 'f') funcs = true;
+      else if (a[k] == 'n' || a[k] == 'p') { /* unmodeled here / no-op */ }
+      else {
+        std::fprintf(stderr, "%sexport: -%c: invalid option\n", sh.err_prefix().c_str(), a[k]);
+        std::fprintf(stderr, "export: usage: export [-fn] [name[=value] ...] or export -p [-f]\n");
+        return 2;
+      }
+    }
+  }
+  for (; i < argv.size(); i++) {
+    const std::string &a = argv[i];
     if (funcs) {
       // `export -f name': mark a function for the environment of children.  A
       // name that cannot encode as BASH_FUNC_<name>%% (it contains `=' or `/')
@@ -897,6 +911,11 @@ int bi_export(Shell &sh, const std::vector<std::string> &argv) {
         st = 1;
       } else if (sh.functions.count(a)) {
         sh.exported_functions.insert(a);
+      } else {
+        // Not a function: bash refuses to create an `invisible function'.
+        std::fprintf(stderr, "%sexport: %s: not a function\n", sh.err_prefix().c_str(),
+                     a.c_str());
+        st = 1;
       }
       continue;
     }
