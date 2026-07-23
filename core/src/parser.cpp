@@ -322,6 +322,18 @@ struct Parser {
     return left;
   }
 
+  // Like parse_list, but bash requires at least one command here (an if/while/
+  // until/for condition or body): an empty list is the syntax error `near
+  // unexpected token <stop>', naming the reserved word that appears where a
+  // command was expected (then/do/done/fi/...).
+  CommandPtr parse_required_list(std::initializer_list<const char *> stops) {
+    CommandPtr c = parse_list(stops);
+    if (!c && !err)
+      fail(is(Tok::Eof) ? std::string("unexpected end of file")
+                        : std::string("near unexpected token `") + tok_to_text(cur()) + "'");
+    return c;
+  }
+
   CommandPtr parse_and_or(std::initializer_list<const char *> stops) {
     CommandPtr left = parse_pipeline(stops);
     while (!err && (is(Tok::AndAnd) || is(Tok::OrOr))) {
@@ -555,15 +567,15 @@ struct Parser {
 
   CommandPtr parse_if_arm() {
     auto n = std::make_unique<IfCommand>();
-    n->cond = parse_list({"then"});
+    n->cond = parse_required_list({"then"});
     expect_reserved("then");
-    n->then_part = parse_list({"elif", "else", "fi"});
+    n->then_part = parse_required_list({"elif", "else", "fi"});
     if (reserved("elif")) {
       advance();
       n->else_part = parse_if_arm();
     } else if (reserved("else")) {
       advance();
-      n->else_part = parse_list({"fi"});
+      n->else_part = parse_required_list({"fi"});
     }
     return n;
   }
@@ -574,9 +586,9 @@ struct Parser {
     advance();  // while/until
     auto n = std::make_unique<LoopCommand>();
     n->until = until;
-    n->cond = parse_list({"do"});
+    n->cond = parse_required_list({"do"});
     expect_reserved("do");
-    n->body = parse_list({"done"});
+    n->body = parse_required_list({"done"});
     expect_reserved("done");
     pop_open();
     parse_redirect_list(n->redirects);
@@ -627,7 +639,7 @@ struct Parser {
       return n;
     }
     expect_reserved("do");
-    n->body = parse_list({"done"});
+    n->body = parse_required_list({"done"});
     expect_reserved("done");
     pop_open();
     parse_redirect_list(n->redirects);
