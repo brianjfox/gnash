@@ -3262,7 +3262,10 @@ int bi_alias(Shell &sh, const std::vector<std::string> &argv) {
     if (argv[i] == "-p") { i++; continue; }
     if (sh.is_zsh() && argv[i] == "-g") { kind = 'g'; i++; continue; }
     if (sh.is_zsh() && argv[i] == "-s") { kind = 's'; i++; continue; }
-    break;
+    std::fprintf(stderr, "%salias: %s: invalid option\n", sh.err_prefix().c_str(),
+                 argv[i].c_str());
+    std::fprintf(stderr, "alias: usage: alias [-p] [name[=value] ... ]\n");
+    return 2;
   }
   if (i < argv.size() && argv[i] == "--") i++;
   auto &table = (kind == 'g') ? sh.global_aliases : (kind == 's') ? sh.suffix_aliases : sh.aliases;
@@ -3307,7 +3310,10 @@ int bi_unalias(Shell &sh, const std::vector<std::string> &argv) {
   while (i < argv.size() && argv[i].size() >= 2 && argv[i][0] == '-' && argv[i] != "--") {
     if (argv[i] == "-a") { all = true; i++; continue; }
     if (sh.is_zsh() && argv[i] == "-s") { suffix = true; i++; continue; }
-    break;
+    std::fprintf(stderr, "%sunalias: %s: invalid option\n", sh.err_prefix().c_str(),
+                 argv[i].c_str());
+    std::fprintf(stderr, "unalias: usage: unalias [-a] name [name ...]\n");
+    return 2;
   }
   if (all) {
     sh.aliases.clear();
