@@ -933,15 +933,43 @@ int bi_export(Shell &sh, const std::vector<std::string> &argv) {
 }
 
 int bi_unset(Shell &sh, const std::vector<std::string> &argv) {
-  bool funcs = false;
+  bool fflag = false;  // `-f': functions
   bool vflag = false;  // `-v' given explicitly: variables only, no function fallback
   bool noref = false;  // `-n': remove the nameref itself, not its target
   int ret = 0;
-  for (size_t i = 1; i < argv.size(); i++) {
-    if (argv[i] == "-f") { funcs = true; continue; }
-    if (argv[i] == "-v") { funcs = false; vflag = true; continue; }
-    if (argv[i] == "-n") { noref = true; continue; }
+  size_t i = 1;
+  for (; i < argv.size(); i++) {
+    const std::string &a = argv[i];
+    if (a == "--") { i++; break; }
+    if (a.size() < 2 || a[0] != '-') break;
+    for (size_t k = 1; k < a.size(); k++) {
+      if (a[k] == 'f') fflag = true;
+      else if (a[k] == 'v') vflag = true;
+      else if (a[k] == 'n') noref = true;
+      else {
+        std::fprintf(stderr, "%sunset: -%c: invalid option\n", sh.err_prefix().c_str(), a[k]);
+        std::fprintf(stderr, "unset: usage: unset [-f] [-v] [-n] [name ...]\n");
+        return 2;
+      }
+    }
+  }
+  if (fflag && vflag) {
+    std::fprintf(stderr, "%sunset: cannot simultaneously unset a function and a variable\n",
+                 sh.err_prefix().c_str());
+    return 2;
+  }
+  bool funcs = fflag;
+  // A handful of shell-maintained arrays cannot be unset.
+  static const std::set<std::string> kNoUnset = {"BASH_LINENO", "BASH_SOURCE",
+                                                 "BASH_ARGV", "BASH_ARGC"};
+  for (; i < argv.size(); i++) {
     if (funcs) { sh.functions.erase(argv[i]); continue; }
+    if (kNoUnset.count(argv[i])) {
+      std::fprintf(stderr, "%sunset: %s: cannot unset\n", sh.err_prefix().c_str(),
+                   argv[i].c_str());
+      ret = 1;
+      continue;
+    }
     // `unset name[sub]' removes a single array element (or the whole array for
     // a `@'/`*' subscript), not a variable literally named "name[sub]".
     size_t lb = argv[i].find('[');
@@ -1155,6 +1183,12 @@ bool set_o_option(Shell &sh, const std::string &o, bool on) {
   }
   else if (o == "monitor") sh.opt_monitor = on;
   else if (o == "privileged") sh.opt_privileged = on;
+  // Valid bash `set -o' names whose behavior is unimplemented: accept as no-ops
+  // (a script may set them; erroring would diverge from bash, which knows them).
+  else if (o == "allexport" || o == "braceexpand" || o == "hashall" ||
+           o == "ignoreeof" || o == "interactive-comments" || o == "nolog" ||
+           o == "notify" || o == "noclobber" || o == "onecmd")
+    ;  // no-op
   else return false;
   return true;
 }
@@ -1240,16 +1274,24 @@ int bi_set(Shell &sh, const std::vector<std::string> &argv) {
               }
             } else {
               std::string oname = argv[++i];
-              if (!set_o_option(sh, oname, on) && oname == "restricted" && !on) {
-                std::fprintf(stderr, "%sset: restricted: invalid option name\n",
-                             sh.err_prefix().c_str());
+              if (!set_o_option(sh, oname, on)) {
+                std::fprintf(stderr, "%sset: %s: invalid option name\n",
+                             sh.err_prefix().c_str(), oname.c_str());
                 return 2;
               }
             }
             k = a.size();  // -o consumes the rest of the word
             break;
           }
-          default: break;  // other flags accepted as no-ops
+          // Flags accepted as no-ops where the behavior is unimplemented:
+          // allexport/notify/hashall/onecmd/braceexpand/noclobber.
+          case 'a': case 'b': case 'h': case 't': case 'B': case 'C': break;
+          default:
+            std::fprintf(stderr, "%sset: %c%c: invalid option\n", sh.err_prefix().c_str(),
+                         a[0], a[k]);
+            std::fprintf(stderr, "set: usage: set [-abefhkmnptuvxBCEHPT] [-o option-name] "
+                                 "[--] [-] [arg ...]\n");
+            return 2;
         }
       }
     } else {
@@ -1961,6 +2003,10 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
 }
 
 int bi_let(Shell &sh, const std::vector<std::string> &argv) {
+  if (argv.size() < 2) {  // `let' with no expression
+    std::fprintf(stderr, "%slet: expression expected\n", sh.err_prefix().c_str());
+    return 1;
+  }
   long long last = 0;
   bool ok = true;
   for (size_t i = 1; i < argv.size(); i++) last = eval_arith_msg(sh, argv[i], "let", &ok);
@@ -2178,6 +2224,23 @@ static std::string trap_key_for_spec(const std::string &spec) {
   return u;
 }
 
+// True if SPEC names a real signal: a number with a known name, or a signal
+// name (with or without the `SIG' prefix).  signame_to_num() falls back to
+// SIGTERM for garbage, so a name is confirmed by round-tripping to canonical.
+static bool valid_signal_spec(const std::string &spec) {
+  if (spec.empty()) return false;
+  if (std::isdigit(static_cast<unsigned char>(spec[0]))) {
+    char *end = nullptr;
+    long n = std::strtol(spec.c_str(), &end, 10);
+    return *end == '\0' && trapname_from_num(static_cast<int>(n)) != nullptr;
+  }
+  std::string n = spec;
+  if (n.rfind("SIG", 0) == 0) n = n.substr(3);
+  for (char &c : n) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+  const char *canon = trapname_from_num(signame_to_num(spec));
+  return canon && n == canon;
+}
+
 int bi_trap(Shell &sh, const std::vector<std::string> &argv) {
   static const char *kUsage = "trap: usage: trap [-Plp] [[action] signal_spec ...]";
   bool opt_p = false, opt_P = false, opt_l = false;
@@ -2216,20 +2279,34 @@ int bi_trap(Shell &sh, const std::vector<std::string> &argv) {
                    sh.err_prefix().c_str());
       return 1;
     }
+    int st = 0;
     for (; i < argv.size(); i++) {
+      if (trap_pseudo(argv[i]).empty() && !valid_signal_spec(argv[i])) {
+        std::fprintf(stderr, "%strap: %s: invalid signal specification\n",
+                     sh.err_prefix().c_str(), argv[i].c_str());
+        st = 1;
+        continue;
+      }
       auto it = sh.traps.find(trap_key_for_spec(argv[i]));
       if (it != sh.traps.end()) std::printf("%s\n", it->second.c_str());
     }
-    return 0;
+    return st;
   }
 
   // Listing: a bare `trap', or `trap -p' with an optional signal filter.
   if (opt_p || i >= argv.size()) {
     std::vector<const std::pair<const std::string, std::string> *> items;
+    int st = 0;
     if (i >= argv.size()) {
       for (const auto &kv : sh.traps) items.push_back(&kv);
     } else {
       for (; i < argv.size(); i++) {
+        if (trap_pseudo(argv[i]).empty() && !valid_signal_spec(argv[i])) {
+          std::fprintf(stderr, "%strap: %s: invalid signal specification\n",
+                       sh.err_prefix().c_str(), argv[i].c_str());
+          st = 1;
+          continue;
+        }
         auto it = sh.traps.find(trap_key_for_spec(argv[i]));
         if (it != sh.traps.end()) items.push_back(&*it);
       }
@@ -2241,7 +2318,7 @@ int bi_trap(Shell &sh, const std::vector<std::string> &argv) {
     for (const auto *kv : items)
       std::printf("trap -- '%s' %s\n", kv->second.c_str(),
                   trap_display_name(kv->first).c_str());
-    return 0;
+    return st;
   }
 
   // Otherwise set/reset/ignore: the first operand is the action, the rest are
@@ -2249,12 +2326,20 @@ int bi_trap(Shell &sh, const std::vector<std::string> &argv) {
   std::string cmd = argv[i];
   bool reset = (cmd == "-");
   bool ignore = cmd.empty();
+  int st = 0;
   for (size_t j = i + 1; j < argv.size(); j++) {
     const std::string &spec = argv[j];
     std::string pseudo = trap_pseudo(spec);
     if (!pseudo.empty()) {  // EXIT/DEBUG/ERR/RETURN run at points, not on delivery
       if (reset) sh.traps.erase(pseudo);
       else sh.traps[pseudo] = cmd;
+      continue;
+    }
+    // A spec that names no real signal is an error, and that signal is skipped.
+    if (!valid_signal_spec(spec)) {
+      std::fprintf(stderr, "%strap: %s: invalid signal specification\n",
+                   sh.err_prefix().c_str(), spec.c_str());
+      st = 1;
       continue;
     }
     int signo = signame_to_num(spec);
@@ -2270,7 +2355,7 @@ int bi_trap(Shell &sh, const std::vector<std::string> &argv) {
       sh.set_signal_trap(signo, true);
     }
   }
-  return 0;
+  return st;
 }
 
 // Apply a chmod-style symbolic mode (`u=rwx,g-w,a+x') to ALLOWED (the file
@@ -2819,7 +2904,16 @@ int bi_help(Shell &sh, const std::vector<std::string> &argv) {
 
 int bi_builtin(Shell &sh, const std::vector<std::string> &argv) {
   if (argv.size() < 2) return 0;
-  std::vector<std::string> sub(argv.begin() + 1, argv.end());
+  size_t i = 1;
+  if (argv[i] == "--") i++;  // `builtin' takes no options besides `--'
+  else if (argv[i].size() >= 2 && argv[i][0] == '-') {
+    std::fprintf(stderr, "%sbuiltin: %s: invalid option\n", sh.err_prefix().c_str(),
+                 argv[i].c_str());
+    std::fprintf(stderr, "builtin: usage: builtin [shell-builtin [arg ...]]\n");
+    return 2;
+  }
+  if (i >= argv.size()) return 0;
+  std::vector<std::string> sub(argv.begin() + i, argv.end());
   if (!is_builtin_name(sub[0])) {
     std::fflush(stdout);
     std::fprintf(stderr, "%sbuiltin: %s: not a shell builtin\n", sh.err_prefix().c_str(),
@@ -3258,7 +3352,10 @@ int bi_alias(Shell &sh, const std::vector<std::string> &argv) {
     if (argv[i] == "-p") { i++; continue; }
     if (sh.is_zsh() && argv[i] == "-g") { kind = 'g'; i++; continue; }
     if (sh.is_zsh() && argv[i] == "-s") { kind = 's'; i++; continue; }
-    break;
+    std::fprintf(stderr, "%salias: %s: invalid option\n", sh.err_prefix().c_str(),
+                 argv[i].c_str());
+    std::fprintf(stderr, "alias: usage: alias [-p] [name[=value] ... ]\n");
+    return 2;
   }
   if (i < argv.size() && argv[i] == "--") i++;
   auto &table = (kind == 'g') ? sh.global_aliases : (kind == 's') ? sh.suffix_aliases : sh.aliases;
@@ -3303,7 +3400,10 @@ int bi_unalias(Shell &sh, const std::vector<std::string> &argv) {
   while (i < argv.size() && argv[i].size() >= 2 && argv[i][0] == '-' && argv[i] != "--") {
     if (argv[i] == "-a") { all = true; i++; continue; }
     if (sh.is_zsh() && argv[i] == "-s") { suffix = true; i++; continue; }
-    break;
+    std::fprintf(stderr, "%sunalias: %s: invalid option\n", sh.err_prefix().c_str(),
+                 argv[i].c_str());
+    std::fprintf(stderr, "unalias: usage: unalias [-a] name [name ...]\n");
+    return 2;
   }
   if (all) {
     sh.aliases.clear();
@@ -4273,9 +4373,48 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
   else if (cmd == "test") st = bi_test(sh, argv, false);
   else if (cmd == "[") st = bi_test(sh, argv, true);
   else if (cmd == "shift") {
-    int n = argv.size() > 1 ? std::atoi(argv[1].c_str()) : 1;
-    for (int k = 0; k < n && !sh.positional.empty(); k++) sh.positional.erase(sh.positional.begin());
-    st = 0;
+    size_t ai = 1;
+    if (ai < argv.size() && argv[ai] == "--") ai++;  // end-of-options marker
+    if (ai < argv.size() && argv[ai] == "--help") {
+      // Help form: the full per-builtin help text is not yet implemented, so
+      // treat it as a no-op success rather than a numeric-argument error.
+      st = 0;
+    } else if (argv.size() - ai > 1) {
+      std::fprintf(stderr, "%sshift: too many arguments\n", sh.err_prefix().c_str());
+      st = 1;
+    } else {
+      long n = 1;
+      std::string a;
+      bool numeric = true;
+      if (ai < argv.size()) {
+        a = argv[ai];
+        char *end = nullptr;
+        n = std::strtol(a.c_str(), &end, 10);
+        numeric = !a.empty() && end != a.c_str() && *end == '\0';
+      }
+      if (!numeric) {
+        std::fprintf(stderr, "%sshift: %s: numeric argument required\n",
+                     sh.err_prefix().c_str(), a.c_str());
+        st = 2;
+      } else if (n == 0) {
+        st = 0;
+      } else if (n < 0) {
+        // A negative count is always out of range (reported regardless of the
+        // shift_verbose option), status 1.
+        std::fprintf(stderr, "%sshift: %s: shift count out of range\n",
+                     sh.err_prefix().c_str(), a.c_str());
+        st = 1;
+      } else if (n > static_cast<long>(sh.positional.size())) {
+        // Too large: silent failure unless `shopt -s shift_verbose'.
+        if (sh.shopt_opts["shift_verbose"])
+          std::fprintf(stderr, "%sshift: %s: shift count out of range\n",
+                       sh.err_prefix().c_str(), a.c_str());
+        st = 1;
+      } else {
+        for (long k = 0; k < n; k++) sh.positional.erase(sh.positional.begin());
+        st = 0;
+      }
+    }
   } else if (cmd == "exit") {
     sh.exiting = true;
     sh.exit_status = argv.size() > 1 ? (std::atoi(argv[1].c_str()) & 0xff) : sh.last_status;
@@ -4335,15 +4474,25 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
       }
     }
   } else if (cmd == "eval") {
-    std::string saved_ctx = sh.error_context;
-    sh.error_context = "eval";  // parse errors report `NAME: eval: line N: ...'
-    // $LINENO inside eval continues from the eval command's line (bash), so an
-    // eval on line 42 whose body is `echo $LINENO' prints 42.
-    int saved_base = sh.lineno_base;
-    if (sh.cur_lineno > 0) sh.lineno_base = sh.cur_lineno - 1;
-    st = sh.run_string(join(argv, 1));
-    sh.lineno_base = saved_base;
-    sh.error_context = saved_ctx;
+    // `eval' takes no options besides `--'; a leading `-X' is an error.
+    size_t ai = 1;
+    if (ai < argv.size() && argv[ai] != "--" && argv[ai].size() >= 2 && argv[ai][0] == '-') {
+      std::fprintf(stderr, "%seval: %s: invalid option\n", sh.err_prefix().c_str(),
+                   argv[ai].c_str());
+      std::fprintf(stderr, "eval: usage: eval [arg ...]\n");
+      st = 2;
+    } else {
+      if (ai < argv.size() && argv[ai] == "--") ai++;
+      std::string saved_ctx = sh.error_context;
+      sh.error_context = "eval";  // parse errors report `NAME: eval: line N: ...'
+      // $LINENO inside eval continues from the eval command's line (bash), so an
+      // eval on line 42 whose body is `echo $LINENO' prints 42.
+      int saved_base = sh.lineno_base;
+      if (sh.cur_lineno > 0) sh.lineno_base = sh.cur_lineno - 1;
+      st = sh.run_string(join(argv, ai));
+      sh.lineno_base = saved_base;
+      sh.error_context = saved_ctx;
+    }
   } else if (cmd == "source" || cmd == ".") {
     // `-p PATH' gives an explicit colon-separated search path (bash 5.2+).
     size_t ai = 1;
@@ -4437,7 +4586,12 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
       }
     }
   } else if (cmd == "local") {
-    st = bi_declare(sh, argv, true, false);
+    if (!sh.in_function()) {
+      std::fprintf(stderr, "%slocal: can only be used in a function\n", sh.err_prefix().c_str());
+      st = 1;
+    } else {
+      st = bi_declare(sh, argv, true, false);
+    }
   } else if (cmd == "declare" || cmd == "typeset") {
     // Inside a function, declare/typeset without -g makes the variable local.
     st = bi_declare(sh, argv, sh.in_function(), false);
@@ -4568,6 +4722,7 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
     if (bad) {
       std::fprintf(stderr, "%scommand: %s: invalid option\n", sh.err_prefix().c_str(),
                    badopt.c_str());
+      std::fprintf(stderr, "command: usage: command [-pVv] command [arg ...]\n");
       st = 2;
     } else if (desc_V) {
       // `command -V NAME...' == `type NAME...'.
