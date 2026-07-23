@@ -2531,6 +2531,28 @@ int signame_to_num(const std::string &s) {
 }
 
 int bi_kill(Shell &sh, const std::vector<std::string> &argv) {
+  static const char *kUsage =
+      "kill: usage: kill [-s sigspec | -n signum | -sigspec] pid | jobspec ... "
+      "or kill -l [sigspec]\n";
+  // Resolve a signal spec (a name like INT/SIGINT, or a number) to its number,
+  // or -1 if it names no known signal.  signame_to_num() falls back to SIGTERM
+  // for garbage, so a name is confirmed by round-tripping it back to canonical.
+  auto resolve_sig = [](const std::string &spec) -> int {
+    if (spec.empty()) return -1;
+    if (std::isdigit(static_cast<unsigned char>(spec[0]))) {
+      char *end = nullptr;
+      long n = std::strtol(spec.c_str(), &end, 10);
+      if (*end != '\0') return -1;
+      return trapname_from_num(static_cast<int>(n)) ? static_cast<int>(n) : -1;
+    }
+    std::string n = spec;
+    if (n.rfind("SIG", 0) == 0) n = n.substr(3);
+    for (char &c : n) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    int num = signame_to_num(spec);
+    const char *canon = trapname_from_num(num);
+    return (canon && n == canon) ? num : -1;  // reject the SIGTERM fallback
+  };
+
   // `kill -l [sigspec ...]' / `kill -L ...': list signal names and numbers.
   if (argv.size() > 1 && (argv[1] == "-l" || argv[1] == "-L")) {
     if (argv.size() == 2) { print_signal_list(); return 0; }  // list them all
@@ -2546,30 +2568,85 @@ int bi_kill(Shell &sh, const std::vector<std::string> &argv) {
                        sh.err_prefix().c_str(), a.c_str());
           st = 1;
         }
+      } else if (int n = resolve_sig(a); n > 0) {
+        std::printf("%d\n", n);  // name -> number
       } else {
-        std::printf("%d\n", signame_to_num(a));  // name -> number
+        std::fprintf(stderr, "%skill: %s: invalid signal specification\n",
+                     sh.err_prefix().c_str(), a.c_str());
+        st = 1;
       }
     }
     return st;
   }
+
+  // Determine the signal from the options, and where the pid/jobspec list starts.
   int sig = SIGTERM;
   size_t i = 1;
-  if (argv.size() > 1 && argv[1].size() > 1 && argv[1][0] == '-') {
-    sig = signame_to_num(argv[1].substr(1));
+  if (argv.size() > 1 && argv[1].size() > 1 && argv[1][0] == '-' && argv[1] != "--") {
+    std::string opt = argv[1];
+    if (opt == "-s" || opt == "-n") {
+      // The signal is the next word: `-s TERM' / `-n 15'.
+      if (argv.size() < 3) {
+        std::fprintf(stderr, "%skill: %s: option requires an argument\n",
+                     sh.err_prefix().c_str(), opt.c_str());
+        return 1;
+      }
+      sig = resolve_sig(argv[2]);
+      if (sig < 0) {
+        std::fprintf(stderr, "%skill: %s: invalid signal specification\n",
+                     sh.err_prefix().c_str(), argv[2].c_str());
+        return 1;
+      }
+      i = 3;
+    } else {
+      // `-INT' / `-9' / `-SIGHUP': the spec is the option itself.
+      sig = resolve_sig(opt.substr(1));
+      if (sig < 0) {
+        std::fprintf(stderr, "%skill: %s: invalid signal specification\n",
+                     sh.err_prefix().c_str(), opt.substr(1).c_str());
+        return 1;
+      }
+      i = 2;
+    }
+  } else if (argv.size() > 1 && argv[1] == "--") {
     i = 2;
   }
+  // With no pid/jobspec operand, bash prints usage and fails with status 2.
+  if (i >= argv.size()) { std::fputs(kUsage, stderr); return 2; }
+
   int st = 0;
   for (; i < argv.size(); i++) {
     const std::string &t = argv[i];
     pid_t target;
     if (!t.empty() && t[0] == '%') {
       Shell::Job *j = sh.job_by_spec(t);
-      if (!j) { std::fprintf(stderr, "gnash: kill: %s: no such job\n", t.c_str()); st = 1; continue; }
+      if (!j) {
+        std::fprintf(stderr, "%skill: %s: no such job\n", sh.err_prefix().c_str(), t.c_str());
+        st = 1;
+        continue;
+      }
       target = static_cast<pid_t>(-j->pgid);
     } else {
+      // A pid must be a (possibly signed) decimal integer; anything else (an
+      // empty word, `@12', `abc') is rejected WITHOUT signaling -- crucially,
+      // atol("") is 0, and kill(0, sig) would signal the whole process group.
+      size_t p = (t[0] == '+' || t[0] == '-') ? 1 : 0;
+      bool numeric = p < t.size();
+      for (; p < t.size(); p++)
+        if (!std::isdigit(static_cast<unsigned char>(t[p]))) numeric = false;
+      if (!numeric) {
+        std::fprintf(stderr, "%skill: `%s': not a pid or valid job spec\n",
+                     sh.err_prefix().c_str(), t.c_str());
+        st = 1;
+        continue;
+      }
       target = static_cast<pid_t>(std::atol(t.c_str()));
     }
-    if (kill(target, sig) != 0) { std::fprintf(stderr, "gnash: kill: %s\n", std::strerror(errno)); st = 1; }
+    if (kill(target, sig) != 0) {
+      std::fprintf(stderr, "%skill: (%ld) - %s\n", sh.err_prefix().c_str(),
+                   static_cast<long>(target), std::strerror(errno));
+      st = 1;
+    }
   }
   return st;
 }
