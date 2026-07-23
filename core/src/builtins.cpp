@@ -1581,9 +1581,31 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
   bool rm_nameref = false, rm_lcase = false, rm_ucase = false, rm_capcase = false;
   for (; i < argv.size(); i++) {
     const std::string &a = argv[i];
+    if (a == "--") { i++; break; }  // end-of-options marker
     if (a.size() >= 2 && (a[0] == '-' || a[0] == '+')) {
       bool add = a[0] == '-';
+      // Valid option letters differ by command; `readonly' takes a far smaller
+      // set than `declare'.  An unrecognized letter is an error with usage.
+      static const char *kRoOpts = "aAfnp";
+      static const char *kDeclOpts = "aAcfFgiIlnprtux";
+      const char *allowed = force_ro ? kRoOpts : kDeclOpts;
       for (size_t k = 1; k < a.size(); k++) {
+        if (!std::strchr(allowed, a[k])) {
+          std::fprintf(stderr, "%s%s: %c%c: invalid option\n", sh.err_prefix().c_str(),
+                       argv[0].c_str(), a[0], a[k]);
+          if (force_ro)
+            std::fprintf(stderr, "readonly: usage: readonly [-aAf] [name[=value] ...] "
+                                 "or readonly -p\n");
+          else if (argv[0] == "typeset")
+            std::fprintf(stderr, "typeset: usage: typeset [-aAfFgiIlnrtux] name[=value] ... "
+                                 "or typeset -p [-aAfFilnrtux] [name ...]\n");
+          else if (argv[0] == "local")
+            std::fprintf(stderr, "local: usage: local [option] name[=value] ...\n");
+          else
+            std::fprintf(stderr, "declare: usage: declare [-aAfFgiIlnrtux] [name[=value] ...] "
+                                 "or declare -p [-aAfFilnrtux] [name ...]\n");
+          return 2;
+        }
         switch (a[k]) {
           case 'f': funcs = true; break;
           case 'F': funcnames = true; break;
