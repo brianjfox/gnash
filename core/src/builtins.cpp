@@ -4204,15 +4204,59 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
     sh.exit_status = argv.size() > 1 ? (std::atoi(argv[1].c_str()) & 0xff) : sh.last_status;
     st = sh.exit_status;
   } else if (cmd == "return") {
-    sh.returning = true;
-    sh.exit_status = argv.size() > 1 ? (std::atoi(argv[1].c_str()) & 0xff) : sh.last_status;
-    st = sh.exit_status;
-  } else if (cmd == "break") {
-    sh.break_count = argv.size() > 1 ? std::atoi(argv[1].c_str()) : 1;
-    st = 0;
-  } else if (cmd == "continue") {
-    sh.continue_count = argv.size() > 1 ? std::atoi(argv[1].c_str()) : 1;
-    st = 0;
+    // `return' is only meaningful in a function or a sourced script; elsewhere
+    // it is an error and must not unwind the current input (bash).
+    if (!sh.in_function() && sh.source_depth == 0) {
+      std::fprintf(stderr, "%sreturn: can only `return' from a function or sourced script\n",
+                   sh.err_prefix().c_str());
+      st = 1;
+    } else {
+      sh.returning = true;
+      sh.exit_status = argv.size() > 1 ? (std::atoi(argv[1].c_str()) & 0xff) : sh.last_status;
+      st = sh.exit_status;
+    }
+  } else if (cmd == "break" || cmd == "continue") {
+    // Outside any loop bash prints a diagnostic (suppressed under `set -o
+    // posix') and succeeds without unwinding, rather than silently swallowing
+    // the rest of the input.  Mirrors builtins/break.def check_loop_level().
+    if (sh.loop_depth == 0) {
+      if (!sh.opt_posix)
+        std::fprintf(stderr, "%s%s: only meaningful in a `for', `while', or `until' loop\n",
+                     sh.err_prefix().c_str(), cmd.c_str());
+      st = 0;
+    } else {
+      int n = 1;
+      // Skip a leading `--' end-of-options marker (`break -- 5').
+      size_t ci = 1;
+      if (ci < argv.size() && argv[ci] == "--") ci++;
+      const std::string a = ci < argv.size() ? argv[ci] : std::string();
+      char *end = nullptr;
+      long v = a.empty() ? 1 : std::strtol(a.c_str(), &end, 10);
+      if (!a.empty() && (end == a.c_str() || *end != '\0')) {
+        // A non-numeric count: bash aborts the command (get_numeric_arg); we
+        // report and terminate every enclosing loop, the closest observable
+        // approximation without the top-level throw.
+        std::fprintf(stderr, "%s%s: %s: numeric argument required\n",
+                     sh.err_prefix().c_str(), cmd.c_str(), a.c_str());
+        sh.break_count = sh.loop_depth;
+        st = 1;
+      } else if (v <= 0) {
+        // A non-positive count breaks out of every enclosing loop (bash sets
+        // `breaking = loop_level' for both break and continue), status 1.
+        std::fprintf(stderr, "%s%s: %s: loop count out of range\n",
+                     sh.err_prefix().c_str(), cmd.c_str(), a.c_str());
+        sh.break_count = sh.loop_depth;
+        st = 1;
+      } else {
+        // Requesting more levels than are active caps at the outermost loop, so
+        // the remaining count never unwinds past the loop nest.
+        n = static_cast<int>(v);
+        if (n > sh.loop_depth) n = sh.loop_depth;
+        if (cmd == "break") sh.break_count = n;
+        else sh.continue_count = n;
+        st = 0;
+      }
+    }
   } else if (cmd == "eval") {
     std::string saved_ctx = sh.error_context;
     sh.error_context = "eval";  // parse errors report `NAME: eval: line N: ...'
@@ -4299,7 +4343,9 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
         // DEBUG trap, and functions it defines all use the file's own lines).
         int saved_src_base = sh.lineno_base;
         sh.lineno_base = 0;
+        sh.source_depth++;  // `return' is legal while sourcing
         st = sh.run_string(ss.str());
+        sh.source_depth--;
         sh.lineno_base = saved_src_base;
         // `return' inside a sourced file ends the file (and sets its status),
         // like reaching EOF -- it must not unwind past `source' or exit the

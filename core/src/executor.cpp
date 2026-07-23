@@ -1051,6 +1051,10 @@ int Executor::run_simple(const SimpleCommand *c) {
     int saved_lineno_base = sh_.lineno_base;
     auto lbit = sh_.func_lineno_base.find(argv[0]);
     if (lbit != sh_.func_lineno_base.end()) sh_.lineno_base = lbit->second;
+    // A `break'/`continue' in the function body refers to a loop in that body,
+    // not the caller's -- bash saves and zeroes loop_level across the call.
+    int saved_loop_depth = sh_.loop_depth;
+    sh_.loop_depth = 0;
     // Under functrace, bash fires the DEBUG trap once for the function body as a
     // whole on entry, before the per-command traps inside it.
     if (sh_.opt_functrace && sh_.traps.count("DEBUG") && !sh_.in_debug_trap) {
@@ -1086,6 +1090,7 @@ int Executor::run_simple(const SimpleCommand *c) {
       }
     }
     sh_.lineno_base = saved_lineno_base;
+    sh_.loop_depth = saved_loop_depth;
     if (!sh_.persona_restore.empty()) {
       if (sh_.persona_restore.back()) sh_.set_personality(*sh_.persona_restore.back());
       sh_.persona_restore.pop_back();
@@ -1286,6 +1291,7 @@ int Executor::run_subshell(const Subshell *c) {
   if (pid == 0) {
     sh_.job_control = false;  // the subshell runs as one unit; no nested tty control
     sh_.subshell_level++;
+    sh_.loop_depth = 0;  // a `break' in a subshell doesn't break the outer loop
     // A subshell does not inherit the parent's EXIT trap; only one it sets for
     // itself runs when it exits.
     sh_.traps.erase("EXIT");
@@ -1330,6 +1336,7 @@ int Executor::run_if(const IfCommand *c) {
 
 int Executor::run_loop(const LoopCommand *c) {
   int st = 0;
+  sh_.loop_depth++;
   while (!unwinding()) {
     sh_.errexit_suppress++;
     int cond = run(c->cond.get());
@@ -1342,6 +1349,7 @@ int Executor::run_loop(const LoopCommand *c) {
     // to the enclosing loop; N==1 continues this loop.
     if (sh_.continue_count) { if (--sh_.continue_count) break; else continue; }
   }
+  sh_.loop_depth--;
   return st;
 }
 
@@ -1386,6 +1394,7 @@ int Executor::run_for(const ForCommand *c) {
     // this a broken step expression like `7++' would spin forever.
     aeval(c->a_init);
     if (!ok) return 1;
+    sh_.loop_depth++;
     for (;;) {
       if (!c->a_cond.empty()) {
         long long cv = aeval(c->a_cond);
@@ -1401,6 +1410,7 @@ int Executor::run_for(const ForCommand *c) {
       aeval(c->a_update);
       if (!ok) { st = 1; break; }
     }
+    sh_.loop_depth--;
     return st;
   }
 
@@ -1415,6 +1425,7 @@ int Executor::run_for(const ForCommand *c) {
     for (const std::string &it : items) line += " " + it;
     std::fprintf(stderr, "%s\n", line.c_str());
   }
+  sh_.loop_depth++;
   for (const std::string &item : items) {
     // A nameref loop variable is special: each iteration *retargets* the
     // reference to name ITEM rather than writing ITEM through to its current
@@ -1435,6 +1446,7 @@ int Executor::run_for(const ForCommand *c) {
     if (sh_.continue_count) { if (--sh_.continue_count) break; else continue; }
     if (unwinding()) break;
   }
+  sh_.loop_depth--;
   return st;
 }
 
