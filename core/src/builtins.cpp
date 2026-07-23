@@ -933,15 +933,43 @@ int bi_export(Shell &sh, const std::vector<std::string> &argv) {
 }
 
 int bi_unset(Shell &sh, const std::vector<std::string> &argv) {
-  bool funcs = false;
+  bool fflag = false;  // `-f': functions
   bool vflag = false;  // `-v' given explicitly: variables only, no function fallback
   bool noref = false;  // `-n': remove the nameref itself, not its target
   int ret = 0;
-  for (size_t i = 1; i < argv.size(); i++) {
-    if (argv[i] == "-f") { funcs = true; continue; }
-    if (argv[i] == "-v") { funcs = false; vflag = true; continue; }
-    if (argv[i] == "-n") { noref = true; continue; }
+  size_t i = 1;
+  for (; i < argv.size(); i++) {
+    const std::string &a = argv[i];
+    if (a == "--") { i++; break; }
+    if (a.size() < 2 || a[0] != '-') break;
+    for (size_t k = 1; k < a.size(); k++) {
+      if (a[k] == 'f') fflag = true;
+      else if (a[k] == 'v') vflag = true;
+      else if (a[k] == 'n') noref = true;
+      else {
+        std::fprintf(stderr, "%sunset: -%c: invalid option\n", sh.err_prefix().c_str(), a[k]);
+        std::fprintf(stderr, "unset: usage: unset [-f] [-v] [-n] [name ...]\n");
+        return 2;
+      }
+    }
+  }
+  if (fflag && vflag) {
+    std::fprintf(stderr, "%sunset: cannot simultaneously unset a function and a variable\n",
+                 sh.err_prefix().c_str());
+    return 2;
+  }
+  bool funcs = fflag;
+  // A handful of shell-maintained arrays cannot be unset.
+  static const std::set<std::string> kNoUnset = {"BASH_LINENO", "BASH_SOURCE",
+                                                 "BASH_ARGV", "BASH_ARGC"};
+  for (; i < argv.size(); i++) {
     if (funcs) { sh.functions.erase(argv[i]); continue; }
+    if (kNoUnset.count(argv[i])) {
+      std::fprintf(stderr, "%sunset: %s: cannot unset\n", sh.err_prefix().c_str(),
+                   argv[i].c_str());
+      ret = 1;
+      continue;
+    }
     // `unset name[sub]' removes a single array element (or the whole array for
     // a `@'/`*' subscript), not a variable literally named "name[sub]".
     size_t lb = argv[i].find('[');
