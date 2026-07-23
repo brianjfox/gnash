@@ -1368,6 +1368,10 @@ int Executor::run_for(const ForCommand *c) {
     if (!okname) {
       std::fprintf(stderr, "%s`%s': not a valid identifier\n", sh_.err_prefix().c_str(),
                    c->var.c_str());
+      // In posix mode a bad iteration-variable name is a fatal error in a
+      // non-interactive shell: the shell (or subshell) exits rather than
+      // continuing past the loop.
+      if (sh_.opt_posix && !sh_.interactive) { sh_.exiting = true; sh_.exit_status = 1; }
       return (sh_.last_status = 1);
     }
   }
