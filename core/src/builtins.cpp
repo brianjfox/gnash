@@ -883,10 +883,24 @@ int bi_mapfile(Shell &sh, const std::vector<std::string> &argv) {
 int bi_export(Shell &sh, const std::vector<std::string> &argv) {
   bool funcs = false;
   int st = 0;
-  for (size_t i = 1; i < argv.size(); i++) {
+  size_t i = 1;
+  // Parse leading options: `export' takes only -f/-n/-p (and `--').
+  for (; i < argv.size(); i++) {
     const std::string &a = argv[i];
-    if (a == "-f") { funcs = true; continue; }
-    if (a == "-n" || a == "-p" || a == "--") continue;  // (unmodeled here / no-op)
+    if (a == "--") { i++; break; }
+    if (a.size() < 2 || a[0] != '-') break;
+    for (size_t k = 1; k < a.size(); k++) {
+      if (a[k] == 'f') funcs = true;
+      else if (a[k] == 'n' || a[k] == 'p') { /* unmodeled here / no-op */ }
+      else {
+        std::fprintf(stderr, "%sexport: -%c: invalid option\n", sh.err_prefix().c_str(), a[k]);
+        std::fprintf(stderr, "export: usage: export [-fn] [name[=value] ...] or export -p [-f]\n");
+        return 2;
+      }
+    }
+  }
+  for (; i < argv.size(); i++) {
+    const std::string &a = argv[i];
     if (funcs) {
       // `export -f name': mark a function for the environment of children.  A
       // name that cannot encode as BASH_FUNC_<name>%% (it contains `=' or `/')
@@ -897,6 +911,11 @@ int bi_export(Shell &sh, const std::vector<std::string> &argv) {
         st = 1;
       } else if (sh.functions.count(a)) {
         sh.exported_functions.insert(a);
+      } else {
+        // Not a function: bash refuses to create an `invisible function'.
+        std::fprintf(stderr, "%sexport: %s: not a function\n", sh.err_prefix().c_str(),
+                     a.c_str());
+        st = 1;
       }
       continue;
     }
@@ -1581,9 +1600,31 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
   bool rm_nameref = false, rm_lcase = false, rm_ucase = false, rm_capcase = false;
   for (; i < argv.size(); i++) {
     const std::string &a = argv[i];
+    if (a == "--") { i++; break; }  // end-of-options marker
     if (a.size() >= 2 && (a[0] == '-' || a[0] == '+')) {
       bool add = a[0] == '-';
+      // Valid option letters differ by command; `readonly' takes a far smaller
+      // set than `declare'.  An unrecognized letter is an error with usage.
+      static const char *kRoOpts = "aAfnp";
+      static const char *kDeclOpts = "aAcfFgiIlnprtux";
+      const char *allowed = force_ro ? kRoOpts : kDeclOpts;
       for (size_t k = 1; k < a.size(); k++) {
+        if (!std::strchr(allowed, a[k])) {
+          std::fprintf(stderr, "%s%s: %c%c: invalid option\n", sh.err_prefix().c_str(),
+                       argv[0].c_str(), a[0], a[k]);
+          if (force_ro)
+            std::fprintf(stderr, "readonly: usage: readonly [-aAf] [name[=value] ...] "
+                                 "or readonly -p\n");
+          else if (argv[0] == "typeset")
+            std::fprintf(stderr, "typeset: usage: typeset [-aAfFgiIlnrtux] name[=value] ... "
+                                 "or typeset -p [-aAfFilnrtux] [name ...]\n");
+          else if (argv[0] == "local")
+            std::fprintf(stderr, "local: usage: local [option] name[=value] ...\n");
+          else
+            std::fprintf(stderr, "declare: usage: declare [-aAfFgiIlnrtux] [name[=value] ...] "
+                                 "or declare -p [-aAfFilnrtux] [name ...]\n");
+          return 2;
+        }
         switch (a[k]) {
           case 'f': funcs = true; break;
           case 'F': funcnames = true; break;
@@ -1604,6 +1645,15 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     } else {
       break;
     }
+  }
+  // `-f'/`-F' cannot combine with the array/assoc/integer/nameref attributes;
+  // bash names the offending option and fails (no usage line), preferring
+  // -n over -i over -A over -a.
+  if ((funcs || funcnames) && (mk_array || mk_assoc || integer || nameref)) {
+    const char *opt = nameref ? "-n" : integer ? "-i" : mk_assoc ? "-A" : "-a";
+    std::fprintf(stderr, "%s%s: %s: invalid option\n", sh.err_prefix().c_str(),
+                 argv[0].c_str(), opt);
+    return 1;
   }
   // -p: display variables (named ones, or all) in reproducible form.
   if (fp && !funcs && !funcnames) {
