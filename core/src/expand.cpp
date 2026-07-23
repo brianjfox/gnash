@@ -1293,10 +1293,22 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
   // ${!name} indirection and ${!prefix*}/${!prefix@} name listing.  A `['
   // after the name is the ${!arr[@]} keys form, handled by the array path.
   if (b.size() > 1 && b[0] == '!' &&
-      (std::isalpha(static_cast<unsigned char>(b[1])) || b[1] == '_')) {
+      (std::isalpha(static_cast<unsigned char>(b[1])) || b[1] == '_' ||
+       b[1] == '#' || std::isdigit(static_cast<unsigned char>(b[1])))) {
+    // The indirected parameter name is an identifier, the count `#', or a
+    // positional digit run (`${!#}' / `${!2}' indirect through $# / $2).
     size_t q = 1;
-    while (q < b.size() && (std::isalnum(static_cast<unsigned char>(b[q])) || b[q] == '_')) q++;
-    std::string iname = b.substr(1, q - 1);
+    std::string iname;
+    if (b[1] == '#') {
+      q = 2;
+      iname = "#";
+    } else if (std::isdigit(static_cast<unsigned char>(b[1]))) {
+      while (q < b.size() && std::isdigit(static_cast<unsigned char>(b[q]))) q++;
+      iname = b.substr(1, q - 1);
+    } else {
+      while (q < b.size() && (std::isalnum(static_cast<unsigned char>(b[q])) || b[q] == '_')) q++;
+      iname = b.substr(1, q - 1);
+    }
     if (q == b.size() || b[q] != '[') {
       if (q + 1 == b.size() && (b[q] == '*' || b[q] == '@')) {
         std::string names;
@@ -1316,8 +1328,16 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
         return length ? std::to_string(tname.size()) : tname;
       }
       // The value of INAME is the parameter to expand; any operator that
-      // follows applies to the indirected parameter.
-      std::string target = sh.get(iname);
+      // follows applies to the indirected parameter.  A `#'/digit name is a
+      // special/positional parameter that sh.get does not resolve, so it goes
+      // through the parameter machinery instead of the plain variable lookup.
+      std::string target;
+      if (iname == "#" || (!iname.empty() && std::isdigit(static_cast<unsigned char>(iname[0])))) {
+        bool tset = false;
+        target = ex.param_value(iname, tset, false);
+      } else {
+        target = sh.get(iname);
+      }
       if (length) return std::to_string(expand_brace_body(ex, sh, target + b.substr(q), dq).size());
       return expand_brace_body(ex, sh, target + b.substr(q), dq);
     }

@@ -298,6 +298,9 @@ source /tmp/gnrx3.$$; rm -f /tmp/gnrx3.$$'
   'x=unset_zz; echo "${!x:-fallback}"'
   'ab1=v1; ab2=v2; echo ${!ab*}'
   'set -- one two; n=2; echo "${!n}"'
+  # indirection through the count $# and through a positional-parameter digit
+  'set -- w x y z; echo "${!#}"'
+  'set -- foo bar; foo=HELLO; echo "${!1}"'
   # a bare `!' negates the null command; `! cmd' inverts
   '! ; echo $?'
   '! true; echo $?'
