@@ -903,6 +903,16 @@ struct Parser {
     return cur().type == Tok::Word && !cur().quoted && is_compound_kw(cur().text);
   }
 
+  // A function body must be a compound command: a brace group, subshell,
+  // arithmetic/conditional command, or a loop/if/case/select.  Unlike the
+  // general compound-start test, `function' and `coproc' are not valid bodies
+  // (bash rejects `f() coproc ...' and `f() function g ...').
+  bool at_function_body() const {
+    if (is(Tok::Lparen)) return true;  // ( subshell or (( arithmetic
+    return cur().type == Tok::Word && !cur().quoted &&
+           cur().text != "function" && is_compound_kw(cur().text);
+  }
+
   CommandPtr parse_coproc() {
     advance();  // coproc
     auto n = std::make_unique<CoprocCommand>();
@@ -989,6 +999,11 @@ struct Parser {
     expect(Tok::Lparen, "(");
     expect(Tok::Rparen, ")");
     newline_list();
+    if (!err && !at_function_body()) {
+      fail(is(Tok::Eof) ? std::string("unexpected end of file")
+                        : std::string("near unexpected token `") + tok_to_text(cur()) + "'");
+      return n;
+    }
     n->body = parse_command({});
     // bash validates the function name at the end of the definition, so an
     // invalid-name error reports the line the definition closes on.
@@ -1010,6 +1025,11 @@ struct Parser {
       expect(Tok::Rparen, ")");
     }
     newline_list();
+    if (!err && !at_function_body()) {
+      fail(is(Tok::Eof) ? std::string("unexpected end of file")
+                        : std::string("near unexpected token `") + tok_to_text(cur()) + "'");
+      return n;
+    }
     n->body = parse_command({});
     n->line = i > 0 ? toks[i - 1].line : cur().line;  // the definition's end line
     return n;
