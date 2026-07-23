@@ -144,6 +144,10 @@ scripts=(
   'declare -a arr=(1 2 3); echo "${#arr[@]} ${arr[1]}"'
   'declare -a a=(one "two three" four); echo "${#a[@]}: ${a[1]}"'
   'declare -A m=([x]=1 [y]=2); echo "${m[x]}${m[y]} ${#m[@]}"'
+  # an unquoted space inside a compound-initializer subscript is part of the key
+  'declare -A m=([a b]="c d"); echo "[${m[a b]}]"'
+  'declare -A m=([one]=1 [two words]=2 [x]=3); echo "${m[two words]} ${#m[@]}"'
+  'declare -A m=([a b]=1 [c d]=2); echo "${m[a b]}${m[c d]} n=${#m[@]}"'
   'y="hi there"; declare z=$y; echo "$z"; declare -i n=3+4; echo "$n"'
   'f(){ local -a la=(p q r); echo "${la[2]}"; }; f'
   'x=${ echo hello world; }; echo "[$x]"'

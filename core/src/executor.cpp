@@ -231,7 +231,26 @@ parse_array_elems(Shell &sh, Expander &ex, const std::string &name, bool integer
   // subscript mode: a later bare word is an error.  An all-bare list is a valid
   // flat key/value list, so only reject a bare word once a subscript was seen.
   bool saw_sub = false;
-  for (const Token &t : tokenize(inner)) {
+  // The general tokenizer word-splits an unquoted subscript that contains a
+  // space ([a b]=v -> "[a", "b]=v"); reassemble any element whose leading `['
+  // subscript is not yet closed so the [sub]=value parse below sees the whole
+  // key.  (A quoted subscript ["a b"] already survives as a single token.)
+  // Runs of whitespace inside the subscript collapse to one space -- quote the
+  // key to preserve exact spacing, as in bash.
+  std::vector<Token> toks = tokenize(inner);
+  std::vector<Token> elems;
+  for (size_t k = 0; k < toks.size(); k++) {
+    Token t = toks[k];
+    while (t.type == Tok::Word && !t.text.empty() && t.text[0] == '[' &&
+           skip_subscript(t.text, 0) == std::string::npos &&
+           k + 1 < toks.size() && toks[k + 1].type == Tok::Word) {
+      t.text += ' ' + toks[k + 1].text;
+      t.quoted = t.quoted || toks[k + 1].quoted;
+      k++;
+    }
+    elems.push_back(t);
+  }
+  for (const Token &t : elems) {
     if (t.type == Tok::Eof) break;
     if (t.type != Tok::Word) continue;
     const std::string &e = t.text;
