@@ -2490,38 +2490,43 @@ int bi_trap(Shell &sh, const std::vector<std::string> &argv) {
 
 // Apply a chmod-style symbolic mode (`u=rwx,g-w,a+x') to ALLOWED (the file
 // permission bits the umask permits).  Returns false on a malformed clause.
-static bool umask_symbolic(const std::string &s, mode_t &allowed) {
+// Apply a chmod-style symbolic mode; on failure set errch to the offending
+// character and erropr=true if it appeared where an operator (+-=) was expected
+// (else it is an invalid mode character).  Mirrors bash parse_symbolic_mode.
+static bool umask_symbolic(const std::string &s, mode_t &allowed, char &errch, bool &erropr) {
   size_t i = 0;
   while (i < s.size()) {
     int who = 0;
-    for (; i < s.size(); i++) {
+    while (i < s.size() && (s[i] == 'u' || s[i] == 'g' || s[i] == 'o' || s[i] == 'a')) {
       if (s[i] == 'u') who |= 0700;
       else if (s[i] == 'g') who |= 0070;
       else if (s[i] == 'o') who |= 0007;
-      else if (s[i] == 'a') who |= 0777;
-      else break;
+      else who |= 0777;
+      i++;
     }
     if (who == 0) who = 0777;  // no who: default to `a'
-    // One who may carry several chained operators (`u=r+w-x').
-    bool got_op = false;
-    while (i < s.size() && (s[i] == '=' || s[i] == '+' || s[i] == '-')) {
-      got_op = true;
-      char op = s[i++];
+  start_op:
+    {
+      char op = (i < s.size()) ? s[i] : '\0';
+      i++;
+      if (op != '+' && op != '-' && op != '=') { errch = op; erropr = true; return false; }
       int perms = 0;
-      for (; i < s.size(); i++) {
+      while (i < s.size() && std::strchr("rwxXst", s[i])) {
         if (s[i] == 'r') perms |= 0444;
         else if (s[i] == 'w') perms |= 0222;
-        else if (s[i] == 'x') perms |= 0111;
-        else break;
+        else if (s[i] == 'x' || s[i] == 'X') perms |= 0111;
+        // s/t (setuid/sticky) live outside the 0777 umask -- consume, ignore.
+        i++;
       }
       int bits = who & perms;
       if (op == '=') allowed = (allowed & ~who) | bits;
       else if (op == '+') allowed |= bits;
       else allowed &= ~bits;
     }
-    if (!got_op) return false;
-    if (i < s.size() && s[i] == ',') i++;
-    else if (i < s.size()) return false;
+    if (i >= s.size()) break;
+    else if (s[i] == ',') i++;
+    else if (s[i] == '+' || s[i] == '-' || s[i] == '=') goto start_op;
+    else { errch = s[i]; erropr = false; return false; }
   }
   return true;
 }
@@ -2542,7 +2547,7 @@ static std::string umask_to_symbolic(mode_t mask) {
   return r;
 }
 
-int bi_umask(const std::vector<std::string> &argv) {
+int bi_umask(Shell &sh, const std::vector<std::string> &argv) {
   bool sym = false, print = false;
   size_t i = 1;
   for (; i < argv.size() && argv[i].size() >= 2 && argv[i][0] == '-'; i++) {
@@ -2550,7 +2555,8 @@ int bi_umask(const std::vector<std::string> &argv) {
       if (argv[i][k] == 'S') sym = true;
       else if (argv[i][k] == 'p') print = true;
       else {
-        std::fprintf(stderr, "umask: -%c: invalid option\n", argv[i][k]);
+        std::fprintf(stderr, "%sumask: -%c: invalid option\n", sh.err_prefix().c_str(),
+                     argv[i][k]);
         std::fprintf(stderr, "umask: usage: umask [-p] [-S] [mode]\n");
         return 2;
       }
@@ -2562,12 +2568,21 @@ int bi_umask(const std::vector<std::string> &argv) {
   if (have_mode) {
     const std::string &mode = argv[i];
     if (!mode.empty() && std::isdigit(static_cast<unsigned char>(mode[0]))) {
+      // A numeric mode must be all octal digits (bash reports a stray 8/9 as
+      // out of range, but accepts values wider than 0777, e.g. setuid bits).
+      if (mode.find_first_not_of("01234567") != std::string::npos) {
+        std::fprintf(stderr, "%sumask: %s: octal number out of range\n",
+                     sh.err_prefix().c_str(), mode.c_str());
+        return 1;
+      }
       cur = static_cast<mode_t>(std::strtol(mode.c_str(), nullptr, 8)) & 0777;
     } else {
       mode_t allowed = ~cur & 0777;
-      if (!umask_symbolic(mode, allowed)) {
-        std::fprintf(stderr, "umask: `%s': invalid symbolic mode operator\n",
-                     mode.c_str());
+      char errch = 0;
+      bool erropr = false;
+      if (!umask_symbolic(mode, allowed, errch, erropr)) {
+        std::fprintf(stderr, "%sumask: `%c': invalid symbolic mode %s\n",
+                     sh.err_prefix().c_str(), errch, erropr ? "operator" : "character");
         return 1;
       }
       cur = ~allowed & 0777;
@@ -4766,7 +4781,7 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
   } else if (cmd == "trap") {
     st = bi_trap(sh, argv);
   } else if (cmd == "umask") {
-    st = bi_umask(argv);
+    st = bi_umask(sh, argv);
   } else if (cmd == "getopts") {
     st = bi_getopts(sh, argv);
   } else if (cmd == "times") {
