@@ -22,6 +22,7 @@
 #include <sys/resource.h>
 #include <sys/select.h>
 #include <sys/stat.h>
+#include <fcntl.h>
 #include <sys/time.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -829,6 +830,7 @@ int bi_mapfile(Shell &sh, const std::vector<std::string> &argv) {
   char delim = '\n';
   long count = 0, origin = 0, skip = 0;
   int fd = 0;
+  bool have_u = false;
   std::string name = "MAPFILE";
   size_t i = 1;
   for (; i < argv.size(); i++) {
@@ -1327,6 +1329,7 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
   std::string arrayname;            // -a NAME: read words into the array NAME
   std::string prompt;               // -p PROMPT
   int fd = 0;                       // -u FD
+  bool have_u = false;              // -u given (validate the descriptor)
   int delim = '\n';                 // -d DELIM (default newline; -d '' is NUL)
   bool have_n = false, exact = false;  // -n / -N
   long nchars = 0;
@@ -1349,7 +1352,19 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
           case 'r': raw = true; break;
           case 'a': arrayname = val(); break;
           case 'p': prompt = val(); break;
-          case 'u': fd = std::atoi(val().c_str()); break;
+          case 'u': {
+            std::string v = val();
+            char *end = nullptr;
+            long f = std::strtol(v.c_str(), &end, 10);
+            if (v.empty() || *end != '\0') {
+              std::fprintf(stderr, "%sread: %s: invalid file descriptor specification\n",
+                           sh.err_prefix().c_str(), v.c_str());
+              return 1;
+            }
+            fd = static_cast<int>(f);
+            have_u = true;
+            break;
+          }
           case 'd': { std::string d = val(); delim = d.empty() ? 0 : static_cast<unsigned char>(d[0]); break; }
           case 'n': case 'N': {
             std::string v = val();
@@ -1381,13 +1396,46 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
           case 'i': (void)val(); break;              // initial text: needs readline; accepted
           case 'e': edit = true; break;              // readline editing
           case 's': case 'E': break;                 // silent: accepted
-          default: break;
+          default:
+            std::fprintf(stderr, "%sread: -%c: invalid option\n", sh.err_prefix().c_str(), o);
+            std::fprintf(stderr, "read: usage: read [-Eers] [-a array] [-d delim] [-i text] "
+                                 "[-n nchars] [-N nchars] [-p prompt] [-t timeout] [-u fd] "
+                                 "[name ...]\n");
+            return 2;
         }
       }
     } else {
       names.push_back(a);
     }
   }
+
+  // Validate the -u descriptor and the target names before reading, as bash
+  // does, so a bad fd or an invalid identifier is diagnosed even on EOF.
+  if (have_u && fcntl(fd, F_GETFD) == -1) {
+    std::fprintf(stderr, "%sread: %d: invalid file descriptor: %s\n", sh.err_prefix().c_str(),
+                 fd, std::strerror(errno));
+    return 1;
+  }
+  auto valid_read_name = [](const std::string &s) {
+    size_t b = s.find('[');
+    std::string nm = b == std::string::npos ? s : s.substr(0, b);
+    if (nm.empty() || !(std::isalpha(static_cast<unsigned char>(nm[0])) || nm[0] == '_'))
+      return false;
+    for (char c : nm)
+      if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '_')) return false;
+    return true;
+  };
+  if (!arrayname.empty() && !valid_read_name(arrayname)) {
+    std::fprintf(stderr, "%sread: `%s': not a valid identifier\n", sh.err_prefix().c_str(),
+                 arrayname.c_str());
+    return 1;
+  }
+  for (const std::string &nm : names)
+    if (!valid_read_name(nm)) {
+      std::fprintf(stderr, "%sread: `%s': not a valid identifier\n", sh.err_prefix().c_str(),
+                   nm.c_str());
+      return 1;
+    }
 
   // $TMOUT is the default timeout, but only when reading from a terminal.
   if (!have_t && isatty(fd)) {
