@@ -88,6 +88,72 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved) {
     }
   }
 
+  // `{var}<file' etc.: allocate a fresh high, close-on-exec descriptor, open the
+  // redirection on it, and store its number in the variable.  The descriptor is
+  // recorded as an originally-closed fd so a normal command closes it afterwards
+  // while `exec' (discard_saved_fds) keeps it open.  `{var}>&-' / `{var}<&-'
+  // instead close the descriptor whose number the variable currently holds.
+  if (!r.fd_var.empty()) {
+    auto assign_fd = [&](int f) {
+      int hi = fcntl(f, F_DUPFD_CLOEXEC, 10);
+      if (hi >= 0) { close(f); f = hi; }
+      saved.push_back({f, -1});
+      sh.set(r.fd_var, std::to_string(f));
+      return true;
+    };
+    auto open_var = [&](int flags) -> bool {
+      std::string fn = ex.expand_no_split(r.target.text, true);
+      int f = open(fn.c_str(), flags, 0666);
+      if (f < 0) {
+        std::fprintf(stderr, "%s%s: %s\n", sh.err_prefix().c_str(), fn.c_str(),
+                     std::strerror(errno));
+        return false;
+      }
+      return assign_fd(f);
+    };
+    switch (r.op) {
+      case RedirOp::InputRedir:   return open_var(O_RDONLY);
+      case RedirOp::OutputRedir:
+      case RedirOp::Clobber:      return open_var(O_WRONLY | O_CREAT | O_TRUNC);
+      case RedirOp::AppendOutput: return open_var(O_WRONLY | O_CREAT | O_APPEND);
+      case RedirOp::InputOutput:  return open_var(O_RDWR | O_CREAT);
+      case RedirOp::DupOutput:
+      case RedirOp::DupInput: {
+        std::string w = ex.expand_no_split(r.target.text);
+        if (w == "-") {  // close the descriptor the variable names
+          std::string cur = sh.get(r.fd_var);
+          if (!cur.empty()) { int n = std::atoi(cur.c_str()); if (n >= 0) close(n); }
+          return true;
+        }
+        int src = std::atoi(w.c_str());
+        int f = fcntl(src, F_DUPFD_CLOEXEC, 10);
+        if (f < 0) {
+          std::fprintf(stderr, "%s%s: %s\n", sh.err_prefix().c_str(), w.c_str(),
+                       std::strerror(errno));
+          return false;
+        }
+        saved.push_back({f, -1});
+        sh.set(r.fd_var, std::to_string(f));
+        return true;
+      }
+      case RedirOp::HereDoc:
+      case RedirOp::HereDocStrip: {
+        std::string body = r.heredoc_quoted ? r.heredoc_body : ex.expand_heredoc(r.heredoc_body);
+        int f = heredoc_fd(body);
+        if (f < 0) return false;
+        return assign_fd(f);
+      }
+      case RedirOp::HereString: {
+        std::string body = ex.expand_no_split(r.target.text) + "\n";
+        int f = heredoc_fd(body);
+        if (f < 0) return false;
+        return assign_fd(f);
+      }
+      default: break;
+    }
+    return true;
+  }
+
   switch (r.op) {
     case RedirOp::InputRedir: {
       std::string fn = ex.expand_no_split(r.target.text, true);
