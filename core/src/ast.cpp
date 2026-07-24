@@ -383,8 +383,8 @@ struct MPrinter {
     }
     if (const auto *ic = dynamic_cast<const IfCommand *>(c)) {
       out += "if ";
-      inline_line_here(ic->cond.get());
-      out += "; then";
+      if (inline_line_here(ic->cond.get())) { nl(I); out += "then"; }
+      else out += "; then";
       nl(I + 4);
       list(ic->then_part.get(), I + 4);
       clause_semi();
@@ -402,8 +402,8 @@ struct MPrinter {
     }
     if (const auto *lc = dynamic_cast<const LoopCommand *>(c)) {
       out += lc->until ? "until " : "while ";
-      inline_line_here(lc->cond.get());
-      out += "; do";
+      if (inline_line_here(lc->cond.get())) { nl(I); out += "do"; }
+      else out += "; do";
       nl(I + 4);
       list(lc->body.get(), I + 4);
       clause_semi();
@@ -490,10 +490,34 @@ struct MPrinter {
   }
 
   // A condition (if/while) or subshell body on one line.
-  void inline_line_here(const Command *c) {
-    MPrinter sub;
-    sub.inline_line(c);
-    out += sub.out;
+  // Collect the here-document redirections of a command (in source order) so a
+  // condition line can emit their bodies.  The condition is a simple command or
+  // a pipeline/and-or of them, so recurse through Connection nodes.
+  static void collect_heredocs(const Command *c, std::vector<const Redirect *> &hds) {
+    if (c == nullptr) return;
+    if (const auto *sc = dynamic_cast<const SimpleCommand *>(c)) {
+      for (const Redirect &r : sc->redirects)
+        if (r.op == RedirOp::HereDoc || r.op == RedirOp::HereDocStrip) hds.push_back(&r);
+    } else if (const auto *cn = dynamic_cast<const Connection *>(c)) {
+      collect_heredocs(cn->first.get(), hds);
+      collect_heredocs(cn->second.get(), hds);
+    }
+  }
+
+  // Print a compound-command header line (an if/while condition) inline, then
+  // emit any here-document bodies it carries (bash prints them right after the
+  // condition line, before `then'/`do').  Returns true if a body was emitted,
+  // so the caller starts `then'/`do' on a fresh line instead of `; '.
+  bool inline_line_here(const Command *c) {
+    inline_line(c);
+    std::vector<const Redirect *> hds;
+    collect_heredocs(c, hds);
+    for (const Redirect *r : hds) {
+      out += '\n';
+      out += r->heredoc_body;  // body lines keep their own newlines
+      out += r->target.text;
+    }
+    return !hds.empty();
   }
   void inline_line(const Command *c) {
     std::string one;
