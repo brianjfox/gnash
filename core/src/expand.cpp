@@ -335,6 +335,7 @@ std::string Expander::param_value(const std::string &name, bool &set, bool defau
     if (sh_.opt_verbose) f += 'v';
     if (sh_.opt_xtrace) f += 'x';
     f += 'B';                       // braceexpand: on by default
+    if (sh_.opt_noclobber) f += 'C';   // noclobber: `>' won't overwrite a file
     if (sh_.opt_histexpand) f += 'H';  // histexpand (set -H; interactive default)
     if (sh_.opt_physical) f += 'P';    // physical: resolve symlinks in cd/pwd
     if (sh_.invocation_char) f += sh_.invocation_char;

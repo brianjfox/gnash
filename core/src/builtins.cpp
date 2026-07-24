@@ -1279,6 +1279,7 @@ bool set_o_option(Shell &sh, const std::string &o, bool on) {
   else if (o == "noexec") { if (!sh.interactive) sh.opt_noexec = on; }
   else if (o == "functrace" || o == "errtrace") sh.opt_functrace = on;
   else if (o == "pipefail") sh.opt_pipefail = on;
+  else if (o == "noclobber") sh.opt_noclobber = on;
   else if (o == "history") { if (on) sh.enable_history(); else sh.opt_history = false; }
   else if (o == "histexpand") sh.opt_histexpand = on;
   else if (o == "posix") sh.opt_posix = on;
@@ -1303,7 +1304,7 @@ bool set_o_option(Shell &sh, const std::string &o, bool on) {
   // (a script may set them; erroring would diverge from bash, which knows them).
   else if (o == "allexport" || o == "braceexpand" || o == "hashall" ||
            o == "ignoreeof" || o == "interactive-comments" || o == "nolog" ||
-           o == "notify" || o == "noclobber" || o == "onecmd")
+           o == "notify" || o == "onecmd")
     ;  // no-op
   else return false;
   return true;
@@ -1324,7 +1325,7 @@ std::vector<std::pair<std::string, bool>> set_option_states(Shell &sh) {
       {"hashall", true},      {"histexpand", sh.opt_histexpand},
       {"history", sh.opt_history}, {"ignoreeof", false},
       {"interactive-comments", true}, {"keyword", sh.opt_keyword},
-      {"monitor", sh.job_control || sh.opt_monitor}, {"noclobber", false},
+      {"monitor", sh.job_control || sh.opt_monitor}, {"noclobber", sh.opt_noclobber},
       {"noexec", sh.opt_noexec}, {"noglob", sh.opt_noglob},
       {"nolog", false},       {"notify", false},
       {"nounset", sh.opt_nounset}, {"onecmd", false},
@@ -1371,6 +1372,7 @@ int bi_set(Shell &sh, const std::vector<std::string> &argv) {
           case 'E': sh.opt_functrace = on; break;  // errtrace: ERR trap inheritance
           case 'H': sh.opt_histexpand = on; break;  // `!' history expansion
           case 'm': sh.opt_monitor = on; break;     // monitor: job control
+          case 'C': sh.opt_noclobber = on; break;   // noclobber: `>' won't truncate
           case 'p': sh.opt_privileged = on; break;  // privileged mode
           case 'r':  // restricted: can be turned on, never off
             if (on) sh.opt_restricted = true;
@@ -1400,8 +1402,8 @@ int bi_set(Shell &sh, const std::vector<std::string> &argv) {
             break;
           }
           // Flags accepted as no-ops where the behavior is unimplemented:
-          // allexport/notify/hashall/onecmd/braceexpand/noclobber.
-          case 'a': case 'b': case 'h': case 't': case 'B': case 'C': break;
+          // allexport/notify/hashall/onecmd/braceexpand.
+          case 'a': case 'b': case 'h': case 't': case 'B': break;
           default:
             std::fprintf(stderr, "%sset: %c%c: invalid option\n", sh.err_prefix().c_str(),
                          a[0], a[k]);

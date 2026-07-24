@@ -59,6 +59,51 @@ void save_fd(int fd, std::vector<SavedFd> &saved) {
   saved.push_back({fd, s});
 }
 
+// Expand a redirection target with the full pipeline (brace, parameter/command/
+// arithmetic substitution, word splitting, and pathname expansion) and require
+// exactly one resulting word, matching bash's redirection_expand (redir.c): a
+// target that expands to zero or more than one word is an `ambiguous redirect'.
+// On ambiguity, prints the diagnostic with the ORIGINAL unexpanded word text and
+// returns false; otherwise stores the single word in `out'.
+static bool expand_redir_target(Shell &sh, const Word &w, std::string &out) {
+  Expander ex(sh);
+  std::vector<std::string> words = ex.expand_args({w});
+  if (words.size() != 1) {
+    std::fprintf(stderr, "%s%s: ambiguous redirect\n", sh.err_prefix().c_str(),
+                 w.text.c_str());
+    return false;
+  }
+  out = std::move(words[0]);
+  return true;
+}
+
+// Sentinel from open_redir_output: `set -o noclobber' refused to overwrite an
+// existing regular file.
+static const int kNoclobberRefused = -2;
+
+// Open an output-redirect target for truncation.  When `set -o noclobber' is in
+// effect and this is a clobbering operator (`>' or `&>', not `>|'), refuse to
+// overwrite an existing regular file, mirroring bash's noclobber_open (redir.c):
+// an existing regular file returns kNoclobberRefused; a missing file is created
+// exclusively; a non-regular file (device, fifo, /dev/null) is opened without
+// truncation.  Returns the fd, -1 on a system error (errno set), or
+// kNoclobberRefused.
+static int open_redir_output(Shell &sh, const std::string &fn, bool clobbering) {
+  int flags = O_WRONLY | O_CREAT | O_TRUNC;
+  if (!(sh.opt_noclobber && clobbering))
+    return open(fn.c_str(), flags, 0666);
+  struct stat st;
+  int r = stat(fn.c_str(), &st);
+  if (r == 0 && S_ISREG(st.st_mode)) return kNoclobberRefused;
+  flags &= ~O_TRUNC;  // never truncate under noclobber
+  if (r != 0) {       // did not exist: create it, failing if someone races us
+    int fd = open(fn.c_str(), flags | O_EXCL, 0666);
+    return (fd < 0 && errno == EEXIST) ? kNoclobberRefused : fd;
+  }
+  int fd = open(fn.c_str(), flags, 0666);  // existed, non-regular: append/write
+  return (fd < 0 && errno == EEXIST) ? kNoclobberRefused : fd;
+}
+
 // Apply one redirect in-process; returns false on error.
 bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved) {
   Expander ex(sh);
@@ -102,7 +147,8 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved) {
       return true;
     };
     auto open_var = [&](int flags) -> bool {
-      std::string fn = ex.expand_no_split(r.target.text, true);
+      std::string fn;
+      if (!expand_redir_target(sh, r.target, fn)) return false;
       int f = open(fn.c_str(), flags, 0666);
       if (f < 0) {
         std::fprintf(stderr, "%s%s: %s\n", sh.err_prefix().c_str(), fn.c_str(),
@@ -156,7 +202,8 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved) {
 
   switch (r.op) {
     case RedirOp::InputRedir: {
-      std::string fn = ex.expand_no_split(r.target.text, true);
+      std::string fn;
+      if (!expand_redir_target(sh, r.target, fn)) return false;
       int f = open(fn.c_str(), O_RDONLY);
       if (f < 0) { std::fprintf(stderr, "%s%s: %s\n", sh.err_prefix().c_str(), fn.c_str(), std::strerror(errno)); return false; }
       redir_to(f, target_fd < 0 ? 0 : target_fd);
@@ -165,15 +212,23 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved) {
     }
     case RedirOp::OutputRedir:
     case RedirOp::Clobber: {
-      std::string fn = ex.expand_no_split(r.target.text, true);
-      int f = open(fn.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
+      std::string fn;
+      if (!expand_redir_target(sh, r.target, fn)) return false;
+      // `>' honors noclobber; `>|' (Clobber) always overrides it.
+      int f = open_redir_output(sh, fn, r.op == RedirOp::OutputRedir);
+      if (f == kNoclobberRefused) {
+        std::fprintf(stderr, "%s%s: cannot overwrite existing file\n",
+                     sh.err_prefix().c_str(), fn.c_str());
+        return false;
+      }
       if (f < 0) { std::fprintf(stderr, "%s%s: %s\n", sh.err_prefix().c_str(), fn.c_str(), std::strerror(errno)); return false; }
       redir_to(f, target_fd < 0 ? 1 : target_fd);
       close(f);
       return true;
     }
     case RedirOp::AppendOutput: {
-      std::string fn = ex.expand_no_split(r.target.text, true);
+      std::string fn;
+      if (!expand_redir_target(sh, r.target, fn)) return false;
       int f = open(fn.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0666);
       if (f < 0) { std::fprintf(stderr, "%s%s: %s\n", sh.err_prefix().c_str(), fn.c_str(), std::strerror(errno)); return false; }
       redir_to(f, target_fd < 0 ? 1 : target_fd);
@@ -181,7 +236,8 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved) {
       return true;
     }
     case RedirOp::InputOutput: {
-      std::string fn = ex.expand_no_split(r.target.text, true);
+      std::string fn;
+      if (!expand_redir_target(sh, r.target, fn)) return false;
       int f = open(fn.c_str(), O_RDWR | O_CREAT, 0666);
       if (f < 0) return false;
       redir_to(f, target_fd < 0 ? 0 : target_fd);
@@ -190,9 +246,19 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved) {
     }
     case RedirOp::AndOutput:
     case RedirOp::AndAppend: {
-      std::string fn = ex.expand_no_split(r.target.text, true);
-      int flags = O_WRONLY | O_CREAT | (r.op == RedirOp::AndAppend ? O_APPEND : O_TRUNC);
-      int f = open(fn.c_str(), flags, 0666);
+      std::string fn;
+      if (!expand_redir_target(sh, r.target, fn)) return false;
+      int f;
+      if (r.op == RedirOp::AndAppend) {
+        f = open(fn.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0666);
+      } else {  // `&>' truncates, so it honors noclobber
+        f = open_redir_output(sh, fn, true);
+        if (f == kNoclobberRefused) {
+          std::fprintf(stderr, "%s%s: cannot overwrite existing file\n",
+                       sh.err_prefix().c_str(), fn.c_str());
+          return false;
+        }
+      }
       if (f < 0) return false;
       redir_to(f, 1);
       save_fd(2, saved);
@@ -202,7 +268,10 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved) {
     }
     case RedirOp::DupOutput:
     case RedirOp::DupInput: {
-      std::string w = ex.expand_no_split(r.target.text);
+      // `<&word' / `>&word' likewise reject a word that splits to zero or more
+      // than one field (an unset or multi-word fd, e.g. `<&$unset').
+      std::string w;
+      if (!expand_redir_target(sh, r.target, w)) return false;
       int deffd = (r.op == RedirOp::DupInput) ? 0 : 1;
       int fd = target_fd < 0 ? deffd : target_fd;
       if (w == "-") { save_fd(fd, saved); close(fd); return true; }
