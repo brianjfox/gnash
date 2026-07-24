@@ -2062,6 +2062,13 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     // A subscripted name implies an indexed array even without `-a'
     // (`declare -r c[100]' creates an empty readonly array c).
     else if (subscript0) sh.make_array(name, false);
+    // bash applies declared attributes before the assignment, so a `declare -i'
+    // array/associative literal (`declare -ai a=(1+1 2*3)') evaluates each
+    // element arithmetically.  apply_array_assign reads the integer attribute
+    // from the variable, so set it now rather than after the assignment (the
+    // scalar path already honors the -i flag directly).
+    if (integer && eq != std::string::npos && !name.empty() && !nameref)
+      sh.vars[name].integer = true;
     if (eq != std::string::npos) {
       std::string val = a.substr(eq + 1);
       bool arraylit = val.size() >= 2 && val.front() == '(' && val.back() == ')';
