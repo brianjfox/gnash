@@ -141,27 +141,81 @@ struct Lexer {
   }
   void scan_paren(std::string &w) {  // pos at '('
     int depth = 0;
+    // A `)' that terminates a `case' pattern (`case x in x)') must not be
+    // mistaken for the substitution's closing paren.  Track the paren depth of
+    // each active (command-position) `case' body; a `)' at that depth is a
+    // pattern terminator, not the closer.  Keyword recognition is gated on
+    // command position so a `case'/`esac' used as an argument is unaffected.
+    bool cmd_pos = true;          // next plain word starts a command
+    std::vector<int> case_stack;  // paren depths of open `case' bodies
+    std::string word;             // current unquoted identifier word
+    bool word_plain = true;       // word is only identifier chars (a keyword?)
+    bool saw_word = false;        // any word content since the last delimiter
+    auto boundary = [&]() {
+      if (saw_word) {
+        if (cmd_pos && word_plain && word == "case") case_stack.push_back(depth);
+        else if (cmd_pos && word_plain && word == "esac" && !case_stack.empty())
+          case_stack.pop_back();
+        // Most words consume the command slot; a few reopen command position.
+        cmd_pos = word_plain && (word == "then" || word == "do" ||
+                                 word == "else" || word == "elif");
+      }
+      word.clear();
+      word_plain = true;
+      saw_word = false;
+    };
     do {
       char c = in[pos];
       if (c == '(') {
+        boundary();
         depth++;
         w += c;
         pos++;
+        cmd_pos = true;
       } else if (c == ')') {
-        depth--;
+        boundary();
+        if (!case_stack.empty() && case_stack.back() == depth) {
+          w += c;  // case pattern terminator: keep depth, stay open
+          pos++;
+        } else {
+          depth--;
+          w += c;
+          pos++;
+        }
+        cmd_pos = true;
+      } else if (c == ';' || c == '&' || c == '|' || c == '\n') {
+        boundary();
+        w += c;
+        pos++;
+        cmd_pos = true;
+      } else if (c == ' ' || c == '\t') {
+        boundary();
         w += c;
         pos++;
       } else if (c == '\'') {
+        saw_word = true; word_plain = false;
         scan_single(w);
       } else if (c == '"') {
+        saw_word = true; word_plain = false;
         scan_double(w);
       } else if (c == '`') {
+        saw_word = true; word_plain = false;
         scan_backtick(w);
       } else if (c == '\\') {
+        saw_word = true; word_plain = false;
         w += c;
         pos++;
         if (pos < n) w += in[pos++];
+      } else if (c == '$') {
+        saw_word = true; word_plain = false;
+        w += c;
+        pos++;
       } else {
+        saw_word = true;
+        if (word_plain && (std::isalnum(static_cast<unsigned char>(c)) || c == '_'))
+          word += c;
+        else
+          word_plain = false;
         w += c;
         pos++;
       }
