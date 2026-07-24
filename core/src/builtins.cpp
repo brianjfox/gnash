@@ -50,7 +50,11 @@ std::string join(const std::vector<std::string> &v, size_t from) {
 
 // printf %b: like echo -e but also interprets octal (\nnn, \0nnn) and hex
 // (\xHH) escapes, and \c which stops all further output.
-std::string decode_b(const std::string &s, bool &stop) {
+// Decode backslash escapes (\n \t \0nnn \xHH ...).  `bare_octal' controls the
+// `\nnn' form without a leading 0: printf's %b interprets it as octal, but echo
+// (even with -e / xpg_echo) does NOT -- it accepts only `\0nnn', leaving a bare
+// `\1'..'\7' literal (bash echo.def vs printf.def).
+std::string decode_b(const std::string &s, bool &stop, bool bare_octal = true) {
   std::string out;
   stop = false;
   for (size_t i = 0; i < s.size(); i++) {
@@ -88,6 +92,7 @@ std::string decode_b(const std::string &s, bool &stop) {
       }
       case '1': case '2': case '3':
       case '4': case '5': case '6': case '7': {
+        if (!bare_octal) { out += '\\'; out += e; break; }  // echo: only \0nnn
         int v = e - '0', k = 1;
         while (k < 3 && i + 1 < s.size() && s[i + 1] >= '0' && s[i + 1] <= '7') {
           v = v * 8 + (s[++i] - '0');
@@ -123,7 +128,7 @@ int bi_echo(Shell &, const std::vector<std::string> &argv) {
   bool stop = false;
   for (size_t j = i; j < argv.size() && !stop; j++) {
     if (j > i) out += ' ';
-    out += escapes ? decode_b(argv[j], stop) : argv[j];
+    out += escapes ? decode_b(argv[j], stop, /*bare_octal=*/false) : argv[j];
   }
   std::fwrite(out.data(), 1, out.size(), stdout);
   if (newline && !stop) std::fputc('\n', stdout);  // \c suppresses everything after
