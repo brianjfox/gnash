@@ -107,11 +107,17 @@ std::string decode_b(const std::string &s, bool &stop, bool bare_octal = true) {
   return out;
 }
 
-int bi_echo(Shell &, const std::vector<std::string> &argv) {
+int bi_echo(Shell &sh, const std::vector<std::string> &argv) {
   size_t i = 1;
-  bool newline = true, escapes = false;
+  // `shopt -s xpg_echo' makes echo interpret backslash escapes by default
+  // (bash echo.def: do_v9 = xpg_echo), as if `-e' were always given.
+  bool xpg = sh.shopt_opts.count("xpg_echo") && sh.shopt_opts.at("xpg_echo");
+  bool newline = true, escapes = xpg;
+  // In POSIX mode with xpg_echo, echo takes no options at all -- `-n'/`-e'/`-E'
+  // are printed literally (bash: `posixly_correct && xpg_echo' skips parsing).
+  bool parse_opts = !(sh.opt_posix && xpg);
   // Leading options; combined flags like -ne are accepted.
-  for (; i < argv.size(); i++) {
+  for (; parse_opts && i < argv.size(); i++) {
     const std::string &a = argv[i];
     if (a.size() < 2 || a[0] != '-') break;
     bool all_flags = true;
