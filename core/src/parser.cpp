@@ -678,6 +678,9 @@ struct Parser {
         continue;
       }
       if (is(Tok::Semi) && depth == 0) {
+        // Keep any blank before the `;' on the section just closed, so a section
+        // written as `EXPR ;' reproduces bash's raw text (`7=4 ') in an error.
+        if (!parts.back().empty() && cur().preceded_by_blank) parts.back() += ' ';
         parts.emplace_back();
         advance();
         continue;
