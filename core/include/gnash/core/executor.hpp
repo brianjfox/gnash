@@ -33,6 +33,7 @@ class Executor {
   int run_funcdef(const FunctionDef *c);
   int run_cond(const CondCommand *c);
   int run_arith(const ArithCommand *c);
+  int run_coproc(const CoprocCommand *c);
 
   // True if a break/continue/return/exit -- or an interactive C-c -- is
   // unwinding the stack.  Honoring g_sigint_received here makes every run()
