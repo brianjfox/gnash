@@ -2223,13 +2223,19 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
 }
 
 int bi_let(Shell &sh, const std::vector<std::string> &argv) {
-  if (argv.size() < 2) {  // `let' with no expression
+  // A single leading `--' ends option processing (bash), so `let -- EXPR' and
+  // the common `alias let="let --"' idiom evaluate EXPR rather than treating
+  // `--' as an expression.  Only the first `--' is consumed.
+  size_t start = (argv.size() > 1 && argv[1] == "--") ? 2 : 1;
+  if (start >= argv.size()) {  // `let' / `let --' with no expression
     std::fprintf(stderr, "%slet: expression expected\n", sh.err_prefix().c_str());
     return 1;
   }
   long long last = 0;
   bool ok = true;
-  for (size_t i = 1; i < argv.size(); i++) last = eval_arith_msg(sh, argv[i], "let", &ok);
+  // bash stops at the first expression that fails to evaluate (later ones, and
+  // their side effects, are skipped) and returns failure.
+  for (size_t i = start; i < argv.size() && ok; i++) last = eval_arith_msg(sh, argv[i], "let", &ok);
   return (ok && last != 0) ? 0 : 1;
 }
 
