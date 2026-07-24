@@ -555,6 +555,7 @@ int Executor::run(const Command *c) {
   else if (auto *pg = dynamic_cast<const FunctionDef *>(c)) st = run_funcdef(pg);
   else if (auto *ph = dynamic_cast<const CondCommand *>(c)) st = run_cond(ph);
   else if (auto *pi = dynamic_cast<const ArithCommand *>(c)) st = run_arith(pi);
+  else if (auto *pj = dynamic_cast<const CoprocCommand *>(c)) st = run_coproc(pj);
   restore_fds(saved);
   if (c->flags & CMD_INVERT_RETURN) st = st ? 0 : 1;
   sh_.last_status = st;
@@ -1307,6 +1308,68 @@ int Executor::run_simple(const SimpleCommand *c) {
     if (sh_.opt_errexit) { sh_.exiting = true; sh_.exit_status = status; }
   }
   return status;
+}
+
+int Executor::run_coproc(const CoprocCommand *c) {
+  // A coprocess runs asynchronously with its stdin and stdout wired to pipes.
+  // The shell keeps the other ends open on high, close-on-exec descriptors and
+  // publishes them as NAME[0] (read from the coproc) / NAME[1] (write to it),
+  // with NAME_PID holding the child's pid.  NAME defaults to COPROC.
+  const std::string name = c->name.empty() ? std::string("COPROC") : c->name;
+  int out_pipe[2], in_pipe[2];  // out: coproc->shell;  in: shell->coproc
+  if (pipe(out_pipe) < 0) {
+    std::fprintf(stderr, "%scoproc: pipe: %s\n", sh_.err_prefix().c_str(), std::strerror(errno));
+    return (sh_.last_status = 1);
+  }
+  if (pipe(in_pipe) < 0) {
+    std::fprintf(stderr, "%scoproc: pipe: %s\n", sh_.err_prefix().c_str(), std::strerror(errno));
+    close(out_pipe[0]); close(out_pipe[1]);
+    return (sh_.last_status = 1);
+  }
+  bool jc = sh_.job_control;
+  std::string cmd = to_string(c->body.get());
+  pid_t pid = fork();
+  if (pid == 0) {
+    if (jc) setpgid(0, 0);
+    signal(SIGINT, SIG_DFL);
+    signal(SIGQUIT, SIG_DFL);
+    signal(SIGTSTP, SIG_DFL);
+    dup2(in_pipe[0], 0);   // coproc reads its stdin from the shell
+    dup2(out_pipe[1], 1);  // coproc writes its stdout to the shell
+    close(in_pipe[0]); close(in_pipe[1]);
+    close(out_pipe[0]); close(out_pipe[1]);
+    sh_.job_control = false;
+    sh_.subshell_level++;
+    sh_.traps.erase("CHLD");  // the parent fires CHLD when it reaps this job
+    sh_.pending_sigchld = 0;
+    Executor ex(sh_);
+    int s = ex.run(c->body.get());
+    std::fflush(nullptr);
+    _exit(s & 0xff);
+  }
+  // Parent: keep the shell's read/write ends, move them to high descriptors (so
+  // they do not collide with user redirections) and mark them close-on-exec.
+  close(in_pipe[0]);
+  close(out_pipe[1]);
+  auto move_high = [](int fd) {
+    int hi = fcntl(fd, F_DUPFD, 10);
+    if (hi >= 0) { close(fd); fd = hi; }
+    fcntl(fd, F_SETFD, FD_CLOEXEC);
+    return fd;
+  };
+  int read_fd = move_high(out_pipe[0]);
+  int write_fd = move_high(in_pipe[1]);
+  if (jc) setpgid(pid, pid);
+  sh_.last_bg_pid = pid;
+  Shell::Job *j = sh_.add_job(pid, {pid}, cmd, true);
+  if (sh_.interactive) std::fprintf(stderr, "[%d] %ld\n", j->id, static_cast<long>(pid));
+
+  std::vector<std::pair<std::optional<std::string>, std::string>> elems;
+  elems.emplace_back(std::string("0"), std::to_string(read_fd));
+  elems.emplace_back(std::string("1"), std::to_string(write_fd));
+  sh_.array_assign(name, elems, false, false);
+  sh_.set(name + "_PID", std::to_string(pid));
+  return (sh_.last_status = 0);
 }
 
 int Executor::run_subshell(const Subshell *c) {
