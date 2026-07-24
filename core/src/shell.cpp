@@ -1005,6 +1005,10 @@ bool Shell::get_if_set(const std::string &n_in, std::string &out) const {
   // A nameref with no (or a self) target -- deref stops on it -- is unset.
   if (it->second.nameref) return false;
   const Variable &v = it->second;
+  // A declared-but-unassigned (invisible) variable is unset: `declare x' / `local
+  // x' make an att_invisible variable that ${x-default}/${x+...}/-v treat as unset
+  // until it is assigned.
+  if (v.invisible) return false;
   // An array in scalar context is its element 0 (indexed) / "0" (assoc).
   if (v.kind == VarKind::Indexed) {
     if (!v.idx.count(0)) return false;
@@ -1107,6 +1111,7 @@ bool Shell::set(const std::string &n_in, const std::string &v) {
     return false;
   }
   var.value = v;
+  var.invisible = false;  // an assignment makes a declared-but-unset scalar visible
   // Setting POSIXLY_CORRECT (to any value) enables POSIX mode, as in bash.
   if (n == "POSIXLY_CORRECT") opt_posix = true;
   // `declare -u' / `-l' / `-c' fold the value's case on every assignment.
@@ -1139,6 +1144,7 @@ void Shell::set_exported(const std::string &n_in, const std::string &v) {
   if (var.readonly) return;
   var.value = v;
   var.exported = true;
+  var.invisible = false;  // an assignment makes a declared-but-unset scalar visible
   if (n == "POSIXLY_CORRECT") opt_posix = true;
 }
 
