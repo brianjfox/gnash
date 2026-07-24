@@ -1078,9 +1078,10 @@ bool Shell::set(const std::string &n_in, const std::string &v) {
       return false;
     }
   }
-  // Assigning BASH_ARGV0 resets $0 (and the name used in error messages), as
-  // bash does; still stored so `$BASH_ARGV0' reads back the value.
-  if (n == "BASH_ARGV0") { arg0 = v; shell_name = v; }
+  // Assigning BASH_ARGV0 resets $0 but NOT the name shown in error messages:
+  // bash reports errors against the source file, not the mutable $0.  $0 already
+  // resolves through arg0; still stored so `$BASH_ARGV0' reads back the value.
+  if (n == "BASH_ARGV0") { arg0 = v; }
   // Assigning to a dynamic variable seeds/rebases it rather than storing.
   if (n == "RANDOM") {
     rand_seed = static_cast<unsigned long>(std::strtoul(v.c_str(), nullptr, 10));
