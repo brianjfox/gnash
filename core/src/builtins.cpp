@@ -1210,20 +1210,33 @@ std::string declare_sub_quote(const std::string &k) {
 }
 
 // `declare -p NAME': the attribute flags plus the reproducible assignment.
-void declare_print_var(const std::string &name, const Variable &v) {
+// `cmd' is the invoking builtin; in POSIX mode `readonly'/`export' list with
+// their own name and only the array-type attribute (bash show_var_attributes /
+// var_attribute_string, setattr.def), dropping the implied readonly/exported
+// flag and i/n/t/c/l/u.  Otherwise (declare, or non-POSIX) `declare -flags' is
+// used.
+void declare_print_var(const std::string &name, const Variable &v,
+                       const std::string &cmd = "declare", bool posix = false) {
+  bool posix_cmd = posix && (cmd == "readonly" || cmd == "export");
   // Attribute letters in bash's fixed order (var_attribute_string):
   // a A f i n r t x c l u.  gnash models the subset a A i n r x l u.
   std::string f;
   if (v.kind == VarKind::Indexed) f += 'a';
   if (v.kind == VarKind::Assoc) f += 'A';
-  if (v.integer) f += 'i';
-  if (v.nameref) f += 'n';
-  if (v.readonly) f += 'r';
-  if (v.exported) f += 'x';
-  if (v.capcase) f += 'c';
-  if (v.lcase) f += 'l';
-  if (v.ucase) f += 'u';
-  std::string decl = "declare -" + (f.empty() ? std::string("-") : f);
+  if (!posix_cmd) {  // POSIX readonly/export keep only the array-type attribute
+    if (v.integer) f += 'i';
+    if (v.nameref) f += 'n';
+    if (v.readonly) f += 'r';
+    if (v.exported) f += 'x';
+    if (v.capcase) f += 'c';
+    if (v.lcase) f += 'l';
+    if (v.ucase) f += 'u';
+  }
+  std::string decl;
+  if (posix_cmd)
+    decl = f.empty() ? cmd : cmd + " -" + f;
+  else
+    decl = "declare -" + (f.empty() ? std::string("-") : f);
   decl += ' ' + name;
   if (v.invisible) {
     // Declared with no value (`declare -a b'): bash prints just the attributes
@@ -1826,7 +1839,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
             if (std::find(seen.begin(), seen.end(), pr.first) != seen.end()) continue;
             seen.push_back(pr.first);
             auto it = sh.vars.find(pr.first);
-            if (it != sh.vars.end()) declare_print_var(pr.first, it->second);
+            if (it != sh.vars.end()) declare_print_var(pr.first, it->second, argv[0], sh.opt_posix);
           }
         }
       } else {
@@ -1846,7 +1859,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
           if (lcase && !v.lcase) continue;
           if (ucase && !v.ucase) continue;
           if (capcase && !v.capcase) continue;
-          declare_print_var(kv.first, v);
+          declare_print_var(kv.first, v, argv[0], sh.opt_posix);
         }
       }
     } else {
@@ -1857,7 +1870,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
                        argv[0].c_str(), argv[i].c_str());
           st = 1;
         } else {
-          declare_print_var(argv[i], it->second);
+          declare_print_var(argv[i], it->second, argv[0], sh.opt_posix);
         }
       }
     }
@@ -1937,7 +1950,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
       if (lcase && !v.lcase) continue;
       if (ucase && !v.ucase) continue;
       if (capcase && !v.capcase) continue;
-      declare_print_var(kv.first, v);
+      declare_print_var(kv.first, v, argv[0], sh.opt_posix);
     }
     return 0;
   }
