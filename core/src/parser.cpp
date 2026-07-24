@@ -999,6 +999,10 @@ struct Parser {
     expect(Tok::Lparen, "(");
     expect(Tok::Rparen, ")");
     newline_list();
+    // The body may be on a later line (`foo()' then `{...}' next line): at EOF
+    // the input is incomplete, not erroneous -- let the line reader fetch more
+    // rather than hard-failing (which would leak the body to the top level).
+    if (is(Tok::Eof)) incomplete = true;
     if (!err && !at_function_body()) {
       fail(is(Tok::Eof) ? std::string("unexpected end of file")
                         : std::string("near unexpected token `") + tok_to_text(cur()) + "'");
@@ -1025,6 +1029,10 @@ struct Parser {
       expect(Tok::Rparen, ")");
     }
     newline_list();
+    // The body may be on a later line (`foo()' then `{...}' next line): at EOF
+    // the input is incomplete, not erroneous -- let the line reader fetch more
+    // rather than hard-failing (which would leak the body to the top level).
+    if (is(Tok::Eof)) incomplete = true;
     if (!err && !at_function_body()) {
       fail(is(Tok::Eof) ? std::string("unexpected end of file")
                         : std::string("near unexpected token `") + tok_to_text(cur()) + "'");
