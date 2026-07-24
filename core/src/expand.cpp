@@ -1618,10 +1618,13 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
       if (body2[k] == '/') { slash = k; break; }
     }
     std::string pat = ex.expand_pattern(slash == std::string::npos ? body2 : body2.substr(0, slash));
-    // The replacement is expanded in double-quote context when the whole
-    // expansion is quoted, so nested quotes (`${a/#/"-n '"}') behave like bash.
-    std::string rep = slash == std::string::npos ? std::string()
-                                                 : expand_word(body2.substr(slash + 1));
+    // The replacement undergoes full quote removal like a normal word --
+    // independent of whether the enclosing ${...} is double-quoted -- so single
+    // quotes, double quotes, and a backslash before any character are all
+    // processed (`\'' -> `'', `'ab'' -> `ab'), matching bash.
+    std::string rep = slash == std::string::npos
+                          ? std::string()
+                          : ex.expand_no_split(body2.substr(slash + 1));
     // `#' matches the longest prefix, `%' the longest suffix; one replacement.
     if (anchor == '#') {
       for (size_t j = val.size() + 1; j-- > 0;)
