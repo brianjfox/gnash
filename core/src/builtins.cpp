@@ -1991,7 +1991,36 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
         else sh.vars.erase(name);
       }
     }
-    if (local && !global) sh.make_local(name);
+    if (local && !global) {
+      // bash disallows a local copy of a readonly GLOBAL variable
+      // (make_local_variable in variables.c): `readonly x; f(){ local x=1; }'
+      // errors with the builtin's name and leaves the global value visible.  A
+      // readonly copy of a *calling function's* local is allowed, so reject only
+      // when the readonly binding is global -- i.e. the name is not localized in
+      // any active scope.
+      auto vit = sh.vars.find(name);
+      if (vit != sh.vars.end() && vit->second.readonly) {
+        bool localized = false;
+        for (auto &scope : sh.local_stack) {
+          for (auto &e : scope)
+            if (e.first == name) { localized = true; break; }
+          if (localized) break;
+        }
+        if (!localized) {
+          // A compound (array) value also attempts the array binding, which
+          // reports the readonly violation bare before make_local's prefixed
+          // one, so `local a=(...)' on a readonly global emits both.
+          if (arraylit0)
+            std::fprintf(stderr, "%s%s: readonly variable\n",
+                         sh.err_prefix().c_str(), name.c_str());
+          std::fprintf(stderr, "%s%s: %s: readonly variable\n",
+                       sh.err_prefix().c_str(), argv[0].c_str(), name.c_str());
+          ret = 1;
+          continue;
+        }
+      }
+      sh.make_local(name);
+    }
     // An array cannot be switched between indexed and associative in place; bash
     // rejects the redeclaration and leaves the variable unchanged.
     if (mk_array || mk_assoc) {
