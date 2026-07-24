@@ -50,7 +50,11 @@ std::string join(const std::vector<std::string> &v, size_t from) {
 
 // printf %b: like echo -e but also interprets octal (\nnn, \0nnn) and hex
 // (\xHH) escapes, and \c which stops all further output.
-std::string decode_b(const std::string &s, bool &stop) {
+// Decode backslash escapes (\n \t \0nnn \xHH ...).  `bare_octal' controls the
+// `\nnn' form without a leading 0: printf's %b interprets it as octal, but echo
+// (even with -e / xpg_echo) does NOT -- it accepts only `\0nnn', leaving a bare
+// `\1'..'\7' literal (bash echo.def vs printf.def).
+std::string decode_b(const std::string &s, bool &stop, bool bare_octal = true) {
   std::string out;
   stop = false;
   for (size_t i = 0; i < s.size(); i++) {
@@ -88,6 +92,7 @@ std::string decode_b(const std::string &s, bool &stop) {
       }
       case '1': case '2': case '3':
       case '4': case '5': case '6': case '7': {
+        if (!bare_octal) { out += '\\'; out += e; break; }  // echo: only \0nnn
         int v = e - '0', k = 1;
         while (k < 3 && i + 1 < s.size() && s[i + 1] >= '0' && s[i + 1] <= '7') {
           v = v * 8 + (s[++i] - '0');
@@ -102,11 +107,17 @@ std::string decode_b(const std::string &s, bool &stop) {
   return out;
 }
 
-int bi_echo(Shell &, const std::vector<std::string> &argv) {
+int bi_echo(Shell &sh, const std::vector<std::string> &argv) {
   size_t i = 1;
-  bool newline = true, escapes = false;
+  // `shopt -s xpg_echo' makes echo interpret backslash escapes by default
+  // (bash echo.def: do_v9 = xpg_echo), as if `-e' were always given.
+  bool xpg = sh.shopt_opts.count("xpg_echo") && sh.shopt_opts.at("xpg_echo");
+  bool newline = true, escapes = xpg;
+  // In POSIX mode with xpg_echo, echo takes no options at all -- `-n'/`-e'/`-E'
+  // are printed literally (bash: `posixly_correct && xpg_echo' skips parsing).
+  bool parse_opts = !(sh.opt_posix && xpg);
   // Leading options; combined flags like -ne are accepted.
-  for (; i < argv.size(); i++) {
+  for (; parse_opts && i < argv.size(); i++) {
     const std::string &a = argv[i];
     if (a.size() < 2 || a[0] != '-') break;
     bool all_flags = true;
@@ -123,7 +134,7 @@ int bi_echo(Shell &, const std::vector<std::string> &argv) {
   bool stop = false;
   for (size_t j = i; j < argv.size() && !stop; j++) {
     if (j > i) out += ' ';
-    out += escapes ? decode_b(argv[j], stop) : argv[j];
+    out += escapes ? decode_b(argv[j], stop, /*bare_octal=*/false) : argv[j];
   }
   std::fwrite(out.data(), 1, out.size(), stdout);
   if (newline && !stop) std::fputc('\n', stdout);  // \c suppresses everything after
