@@ -52,19 +52,44 @@ size_t scan_balanced(const std::string &t, size_t i, char open, char close,
                      bool firstclose = false) {
   int depth = 0;
   bool wasdol = false;  // previous char was an unquoted `$` (LEX_WASDOL)
+  // When scanning a `$( ... )' command substitution, a `)' that terminates a
+  // `case' pattern (`case x in x)') is not the closer.  Track the depth of each
+  // command-position `case' body (mirrors the lexer's scan_paren).  Inactive for
+  // `[' / `{' scans, which are byte-identical to before.
+  const bool case_aware = (open == '(');
+  bool cmd_pos = true;
+  std::vector<int> case_stack;
+  std::string word;
+  bool word_plain = true;
+  bool saw_word = false;
+  auto boundary = [&]() {
+    if (case_aware && saw_word) {
+      if (cmd_pos && word_plain && word == "case") case_stack.push_back(depth);
+      else if (cmd_pos && word_plain && word == "esac" && !case_stack.empty())
+        case_stack.pop_back();
+      cmd_pos = word_plain && (word == "then" || word == "do" ||
+                               word == "else" || word == "elif");
+    }
+    word.clear();
+    word_plain = true;
+    saw_word = false;
+  };
+  auto contaminate = [&]() { if (case_aware) { saw_word = true; word_plain = false; } };
   for (; i < t.size(); i++) {
     char c = t[i];
-    if (c == '\\') { i++; wasdol = false; continue; }
+    if (c == '\\') { contaminate(); i++; wasdol = false; continue; }
     if (c == '$' && i + 1 < t.size() && t[i + 1] == '\'') {
       // $'...': ANSI-C quoting, where a backslash escapes the next character
       // (so \' is not a terminator).
+      contaminate();
       i += 2;
       while (i < t.size() && t[i] != '\'') { if (t[i] == '\\' && i + 1 < t.size()) i++; i++; }
       wasdol = false;
       continue;
     }
-    if (c == '\'') { while (++i < t.size() && t[i] != '\'') {} wasdol = false; continue; }
+    if (c == '\'') { contaminate(); while (++i < t.size() && t[i] != '\'') {} wasdol = false; continue; }
     if (c == '"') {
+      contaminate();
       while (++i < t.size() && t[i] != '"')
         if (t[i] == '\\') i++;
       wasdol = false;
@@ -81,8 +106,33 @@ size_t scan_balanced(const std::string &t, size_t i, char open, char close,
       continue;
     }
     if (c == open) {
+      if (case_aware) boundary();
       if (!firstclose || open != '{' || depth == 0 || wasdol) depth++;
-    } else if (c == close) { if (--depth == 0) return i; }
+      if (case_aware) cmd_pos = true;
+    } else if (c == close) {
+      if (case_aware) {
+        boundary();
+        if (!case_stack.empty() && case_stack.back() == depth) {
+          cmd_pos = true;  // case pattern terminator: keep depth, stay open
+          wasdol = false;
+          continue;
+        }
+      }
+      if (--depth == 0) return i;
+      if (case_aware) cmd_pos = true;
+    } else if (case_aware && (c == ';' || c == '&' || c == '|' || c == '\n')) {
+      boundary();
+      cmd_pos = true;
+    } else if (case_aware && (c == ' ' || c == '\t')) {
+      boundary();
+    } else if (case_aware && c == '$') {
+      saw_word = true;
+      word_plain = false;
+    } else if (case_aware) {
+      saw_word = true;
+      if (word_plain && (std::isalnum(static_cast<unsigned char>(c)) || c == '_')) word += c;
+      else word_plain = false;
+    }
     wasdol = (c == '$');
   }
   return std::string::npos;
