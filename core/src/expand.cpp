@@ -125,6 +125,9 @@ size_t scan_balanced(const std::string &t, size_t i, char open, char close,
       cmd_pos = true;
     } else if (case_aware && (c == ' ' || c == '\t')) {
       boundary();
+    } else if (case_aware && c == '#' && !saw_word) {
+      // A comment runs to the end of the line: a `)' in it is not the closer.
+      while (i + 1 < t.size() && t[i + 1] != '\n') i++;
     } else if (case_aware && c == '$') {
       saw_word = true;
       word_plain = false;
