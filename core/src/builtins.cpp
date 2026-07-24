@@ -1991,6 +1991,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
         else sh.vars.erase(name);
       }
     }
+    bool fresh_local = false;  // a genuinely new local created by this `local'
     if (local && !global) {
       // bash disallows a local copy of a readonly GLOBAL variable
       // (make_local_variable in variables.c): `readonly x; f(){ local x=1; }'
@@ -2018,6 +2019,11 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
           ret = 1;
           continue;
         }
+      }
+      if (!sh.local_stack.empty()) {
+        fresh_local = true;
+        for (auto &e : sh.local_stack.back())
+          if (e.first == name) { fresh_local = false; break; }  // a re-declaration
       }
       sh.make_local(name);
     }
@@ -2197,7 +2203,17 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
       auto nit = sh.vars.find(name);
       if (nit != sh.vars.end() && nit->second.nameref) aname = sh.deref(name);
     }
+    // A brand-new scalar declared with no value is invisible (unset) until
+    // assigned, matching bash's att_invisible: `declare x' / `local -i n' create
+    // a variable that ${x-word} and `-v' treat as unset.  A `local' makes a fresh
+    // binding (fresh_local); at global scope the var is fresh if it did not
+    // already exist.  Arrays set this in make_array; an existing variable keeps
+    // its current value/visibility.
+    bool fresh_var = fresh_local || sh.vars.find(aname) == sh.vars.end();
     Variable &v = sh.vars[aname];
+    if (fresh_var && eq == std::string::npos && !nameref &&
+        v.kind == VarKind::Scalar)
+      v.invisible = true;
     if (readonly) v.readonly = true;
     if (exported) v.exported = true;
     if (integer) v.integer = true;
