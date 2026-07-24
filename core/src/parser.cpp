@@ -218,8 +218,33 @@ struct Parser {
     }
   }
 
-  bool parse_redirect(std::vector<Redirect> &redirs) {
+  // A redirection *operator* token (not an IoNumber): what may follow a `{var}'
+  // fd-variable specifier or an IoNumber.
+  static bool is_redir_op(Tok t) {
+    switch (t) {
+      case Tok::Less: case Tok::Great: case Tok::DGreat: case Tok::DLess:
+      case Tok::DLessDash: case Tok::TLess: case Tok::LessAnd: case Tok::GreatAnd:
+      case Tok::LessGreat: case Tok::Clobber: case Tok::AndGreat: case Tok::AndDGreat:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  // If W is a `{name}' fd-variable specifier (`{fd}>file'), return `name', else
+  // "".  Only a bare identifier in braces qualifies.
+  static std::string fd_var_name(const std::string &w) {
+    if (w.size() < 3 || w.front() != '{' || w.back() != '}') return "";
+    std::string n = w.substr(1, w.size() - 2);
+    if (!(std::isalpha(static_cast<unsigned char>(n[0])) || n[0] == '_')) return "";
+    for (char c : n)
+      if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '_')) return "";
+    return n;
+  }
+
+  bool parse_redirect(std::vector<Redirect> &redirs, const std::string &fd_var = "") {
     Redirect r;
+    r.fd_var = fd_var;
     if (is(Tok::IoNumber)) {
       r.source_fd = std::atoi(cur().text.c_str());
       advance();
@@ -259,8 +284,24 @@ struct Parser {
     return true;
   }
 
+  // An unquoted `{name}' glued to a redirection operator (`{fd}>file'); returns
+  // the variable name via NAME.
+  bool at_var_redirect(std::string &name) {
+    if (cur().type == Tok::Word && !cur().quoted && is_redir_op(peek(1).type) &&
+        !peek(1).preceded_by_blank) {
+      name = fd_var_name(cur().text);
+      return !name.empty();
+    }
+    return false;
+  }
+
   void parse_redirect_list(std::vector<Redirect> &redirs) {
-    while (!err && at_redirect()) parse_redirect(redirs);
+    for (;;) {
+      if (!err && at_redirect()) { parse_redirect(redirs); continue; }
+      std::string fv;
+      if (!err && at_var_redirect(fv)) { advance(); parse_redirect(redirs, fv); continue; }
+      break;
+    }
   }
 
   // -- lists ---------------------------------------------------------------
@@ -464,6 +505,17 @@ struct Parser {
         parse_redirect(sc->redirects);
         got = true;
         continue;
+      }
+      // `{var}<file': an unquoted `{name}' glued to a redirection operator names
+      // the variable that receives the freshly allocated descriptor.
+      {
+        std::string fv;
+        if (at_var_redirect(fv)) {
+          advance();  // consume `{name}'
+          parse_redirect(sc->redirects, fv);
+          got = true;
+          continue;
+        }
       }
       if (cur().type == Tok::Word) {
         int wf = cur().quoted ? W_QUOTED : 0;

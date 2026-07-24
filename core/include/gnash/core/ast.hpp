@@ -54,6 +54,9 @@ struct Redirect {
   Word target;          // filename, fd word, or here-doc delimiter
   std::string heredoc_body;
   bool heredoc_quoted = false;  // delimiter was quoted => no expansion
+  // `{var}<file' etc.: a fresh descriptor is allocated, the redirection opened on
+  // it, and its number stored in this variable (empty => ordinary redirection).
+  std::string fd_var;
 };
 
 // Command flags (subset of bash's).

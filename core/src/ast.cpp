@@ -53,8 +53,8 @@ int effective_source_fd(const Redirect &r) {
 void print_redirects(const std::vector<Redirect> &redirs, std::string &out) {
   for (const Redirect &r : redirs) {
     out += ' ';
-    int sfd = effective_source_fd(r);
-    if (sfd >= 0) out += std::to_string(sfd);
+    if (!r.fd_var.empty()) { out += '{'; out += r.fd_var; out += '}'; }
+    else { int sfd = effective_source_fd(r); if (sfd >= 0) out += std::to_string(sfd); }
     out += op_string(r.op);
     out += r.target.text;
   }
@@ -238,8 +238,8 @@ struct MPrinter {
 
   void print_redir(const Redirect &r) {
     out += ' ';
-    int sfd = effective_source_fd(r);
-    if (sfd >= 0) out += std::to_string(sfd);
+    if (!r.fd_var.empty()) { out += '{'; out += r.fd_var; out += '}'; }
+    else { int sfd = effective_source_fd(r); if (sfd >= 0) out += std::to_string(sfd); }
     switch (r.op) {
       case RedirOp::HereDoc: out += "<<"; out += r.target.text; return;
       case RedirOp::HereDocStrip: out += "<<-"; out += r.target.text; return;
