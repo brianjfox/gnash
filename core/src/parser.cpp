@@ -1140,6 +1140,39 @@ struct Parser {
 
 }  // namespace
 
+// A redirection operator (its target word, and any leading fd number, form part
+// of a command's prefix and do not end command position).
+static bool is_redir_op(Tok t) {
+  switch (t) {
+    case Tok::Less: case Tok::Great: case Tok::DLess: case Tok::DGreat:
+    case Tok::DLessDash: case Tok::TLess: case Tok::LessAnd: case Tok::GreatAnd:
+    case Tok::LessGreat: case Tok::Clobber: case Tok::AndGreat: case Tok::AndDGreat:
+      return true;
+    default:
+      return false;
+  }
+}
+
+// An assignment-prefix word: NAME=, NAME+=, or NAME[subscript]= (NAME an
+// identifier).  Such words precede the command word and do not end command
+// position, so `VAR=val alias-name ...' still expands the alias.
+static bool is_assignment_word(const std::string &w) {
+  if (w.empty() || !(std::isalpha(static_cast<unsigned char>(w[0])) || w[0] == '_'))
+    return false;
+  size_t i = 1;
+  while (i < w.size() && (std::isalnum(static_cast<unsigned char>(w[i])) || w[i] == '_'))
+    i++;
+  if (i < w.size() && w[i] == '[') {  // NAME[subscript]=
+    int depth = 1;
+    for (i++; i < w.size() && depth; i++) {
+      if (w[i] == '[') depth++;
+      else if (w[i] == ']') depth--;
+    }
+  }
+  if (i < w.size() && w[i] == '+') i++;  // NAME+=
+  return i < w.size() && w[i] == '=';
+}
+
 // Expand aliases in command position on a token stream (in place).  An
 // unquoted word in command position that names an alias is replaced by the
 // alias body's tokens; a body ending in blank makes the following word eligible
@@ -1162,8 +1195,18 @@ static void expand_alias_tokens(std::vector<Token> &toks,
   for (size_t i = 0; i < toks.size() && guard < 10000;) {
     Tok ty = toks[i].type;
     if (ty == Tok::Newline || ty == Tok::Semi || ty == Tok::Amp || ty == Tok::Pipe ||
-        ty == Tok::AndAnd || ty == Tok::OrOr || ty == Tok::Lparen || ty == Tok::SemiSemi) {
+        ty == Tok::AndAnd || ty == Tok::OrOr || ty == Tok::Lparen || ty == Tok::SemiSemi ||
+        ty == Tok::PipeAnd || ty == Tok::SemiAnd || ty == Tok::SemiSemiAnd) {
       cmd_pos = true; next_also = false; name_next = false; active.clear(); i++; continue;
+    }
+    // A leading redirection (with an optional fd number and its target word)
+    // belongs to the command prefix and does not end command position, so an
+    // alias in the command word after `< file cmd' still expands.
+    if (ty == Tok::IoNumber) { i++; continue; }
+    if (is_redir_op(ty)) {
+      i++;  // the operator
+      if (i < toks.size() && toks[i].type == Tok::Word) i++;  // its target word
+      continue;  // cmd_pos unchanged
     }
     if (ty != Tok::Word) { i++; continue; }
     const std::string text = toks[i].text;
@@ -1236,6 +1279,8 @@ static void expand_alias_tokens(std::vector<Token> &toks,
       next_also = false;
       continue;  // reprocess from i (its command word may itself be an alias)
     }
+    // A prefix assignment keeps command position for the following command word.
+    if (cmd_pos && !quoted && is_assignment_word(text)) { i++; continue; }
     cmd_pos = false; next_also = false; i++;
   }
 }
