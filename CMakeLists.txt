@@ -4,7 +4,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project(gnash
-  VERSION 1.4.3
+  VERSION 1.4.4
   DESCRIPTION "A modular C++ reimplementation of bash 5.3"
   LANGUAGES C CXX)
 
