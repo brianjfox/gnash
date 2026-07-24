@@ -192,6 +192,9 @@ struct Lexer {
         boundary();
         w += c;
         pos++;
+      } else if (c == '#' && !saw_word) {
+        // A comment runs to the end of the line: a `)' in it is not the closer.
+        while (pos < n && in[pos] != '\n') { w += in[pos]; pos++; }
       } else if (c == '\'') {
         saw_word = true; word_plain = false;
         scan_single(w);
