@@ -2293,9 +2293,12 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
         // declare/typeset/local report a readonly-assignment failure with the
         // builtin name prefixed (bind_variable in declare.def), where a plain
         // `name=val' -- and readonly/export -- print it bare via Shell::set.
+        // A nameref that resolves to a readonly target is reported against the
+        // name as written (`declare ref=X' -> `declare: ref: readonly variable')
+        // and the readonly target name (`foo0') is not exposed.
         if (argv[0] == "declare" || argv[0] == "typeset" || argv[0] == "local") {
-          auto rit = sh.vars.find(name);
-          if (rit != sh.vars.end() && rit->second.readonly && !rit->second.nameref) {
+          auto rit = sh.vars.find(sh.deref(name));
+          if (rit != sh.vars.end() && rit->second.readonly) {
             std::fprintf(stderr, "%s%s: %s: readonly variable\n",
                          sh.err_prefix().c_str(), argv[0].c_str(), name.c_str());
             ret = 1;
