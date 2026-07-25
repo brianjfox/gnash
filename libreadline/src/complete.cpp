@@ -368,6 +368,17 @@ int menu_step(int dir) {
   rl_insert_text((menu_filenames ? quote_filename(pick) : pick).c_str());
   // zsh appends `/' when the chosen completion is a directory.
   if (menu_filenames && completion_is_dir(pick)) rl_insert_text("/");
+  // Keep the candidate listing visible below the input line while cycling, as
+  // zsh does: the read loop erased the previous copy before this keystroke, so
+  // repaint it and drop the cursor back onto the input line for the pending
+  // redisplay.  Without this the list vanishes as soon as cycling begins.
+  FILE *o = rl_outstream ? rl_outstream : stdout;
+  int rows = completion_grid(menu_items, /*print=*/true);
+  if (rows > 0) {
+    std::fprintf(o, "\033[%dA\r", rows + 1);
+    std::fflush(o);
+    menu_below = 1;
+  }
   return 0;
 }
 
