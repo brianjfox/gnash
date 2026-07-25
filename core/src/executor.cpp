@@ -27,6 +27,10 @@
 #include "gnash/core/lexer.hpp"
 #include "strmatch.h"
 
+#if defined(__GLIBC__)
+#include <stdio_ext.h>  // __fpurge
+#endif
+
 extern "C" char **environ;
 
 namespace gnash::core {
@@ -37,6 +41,21 @@ struct SavedFd {
   int fd;
   int saved;  // dup of the original, or -1 if the fd was originally closed
 };
+
+// Flush a builtin's buffered stdout while its redirections are still active.
+// If the write fails -- e.g. stdout was closed with `>&-' or points at a broken
+// pipe -- discard the unwritten data so it cannot leak out onto the restored
+// descriptor afterward, matching bash (whose builtins write straight to the fd
+// and simply lose the output).
+void flush_builtin_stdout() {
+  if (std::fflush(stdout) == 0) return;
+  std::clearerr(stdout);
+#if defined(__GLIBC__)
+  __fpurge(stdout);
+#else
+  fpurge(stdout);  // BSD/macOS
+#endif
+}
 
 // Write BODY to a temp file and return an fd open for reading at offset 0.
 int heredoc_fd(const std::string &body) {
@@ -1429,8 +1448,9 @@ int Executor::run_simple(const SimpleCommand *c) {
   (void)builtin;
 
   // Flush buffered builtin/function output while our redirections are still in
-  // effect, so it lands on the right fd and in program order.
-  std::fflush(stdout);
+  // effect, so it lands on the right fd and in program order; drop it if the
+  // target fd was closed (`>&-') rather than letting it leak out on restore.
+  flush_builtin_stdout();
   // `exec' makes its redirections permanent in the current shell (this path is
   // only reached when exec had no command word, or its exec failed).
   if (builtin && !argv.empty() && argv[0] == "exec" && status == 0)
