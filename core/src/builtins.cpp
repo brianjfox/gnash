@@ -5239,6 +5239,13 @@ struct CondEval {
     Expander ex(sh);
     return ex.expand_no_split(s);
   }
+  // A `=='/`!=' right-hand side is a pattern: quoted/backslash-escaped glob
+  // metacharacters must match literally (bash quotes them before matching), so
+  // expand it like a case pattern rather than removing the quotes.
+  std::string expand_pat(const std::string &s) {
+    Expander ex(sh);
+    return ex.expand_pattern(s);
+  }
 
   bool or_expr() {
     bool v = and_expr();
@@ -5314,12 +5321,12 @@ struct CondEval {
         std::string rhs_raw = at_end() ? "" : t[i].text;
         if (!at_end()) i++;
         if (op == "==" || op == "=") {
-          std::string pat = expand(rhs_raw);
+          std::string pat = expand_pat(rhs_raw);
           std::string p = pat, l = lhs;
           return strmatch(p.data(), l.data(), FNM_EXTMATCH) == 0;
         }
         if (op == "!=") {
-          std::string pat = expand(rhs_raw);
+          std::string pat = expand_pat(rhs_raw);
           std::string p = pat, l = lhs;
           return strmatch(p.data(), l.data(), FNM_EXTMATCH) != 0;
         }
