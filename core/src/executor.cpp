@@ -301,6 +301,20 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved) {
       int deffd = (r.op == RedirOp::DupInput) ? 0 : 1;
       int fd = target_fd < 0 ? deffd : target_fd;
       if (w == "-") { save_fd(fd, saved); close(fd); return true; }
+      // The source must be a plain fd number (optionally with a trailing `-'
+      // for the move form).  Anything else -- a negative or non-numeric value
+      // such as `<&$fd' with fd=-1 -- is an ambiguous redirect, as in bash.
+      bool valid_fd = !w.empty();
+      for (size_t k = 0; k < w.size() && valid_fd; k++) {
+        if (std::isdigit(static_cast<unsigned char>(w[k]))) continue;
+        if (w[k] == '-' && k + 1 == w.size() && k > 0) continue;  // trailing move `-'
+        valid_fd = false;
+      }
+      if (!valid_fd) {
+        std::fprintf(stderr, "%s%s: ambiguous redirect\n", sh.err_prefix().c_str(),
+                     w.c_str());
+        return false;
+      }
       int src = std::atoi(w.c_str());
       save_fd(fd, saved);
       dup2(src, fd);
