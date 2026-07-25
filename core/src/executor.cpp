@@ -1029,19 +1029,21 @@ int Executor::run_simple(const SimpleCommand *c) {
     // then word-expanded, so `$LINENO' and friends resolve for the traced line.
     std::string ps4 = sh_.is_set("PS4") ? sh_.get("PS4") : "+ ";
     Expander xex(sh_);
-    std::string line = xex.expand_no_split(expand_prompt(sh_, ps4), false, false);
-    bool first = true;
-    for (const auto &a : assigns) {
-      if (!first) line += ' ';
-      line += a.first + "=" + a.second;
-      first = false;
+    std::string xt_prefix = xex.expand_no_split(expand_prompt(sh_, ps4), false, false);
+    // bash traces each temporary/standalone assignment on its own line, then the
+    // command word list (if any) on a separate line.
+    for (const auto &a : assigns)
+      std::fprintf(stderr, "%s%s=%s\n", xt_prefix.c_str(), a.first.c_str(), a.second.c_str());
+    if (!argv.empty()) {
+      std::string line = xt_prefix;
+      bool first = true;
+      for (const auto &a : argv) {
+        if (!first) line += ' ';
+        line += a;
+        first = false;
+      }
+      std::fprintf(stderr, "%s\n", line.c_str());
     }
-    for (const auto &a : argv) {
-      if (!first) line += ' ';
-      line += a;
-      first = false;
-    }
-    std::fprintf(stderr, "%s\n", line.c_str());
   }
 
   // `command [-pvV] NAME [args...]': run NAME as a builtin or external, bypassing
@@ -1645,13 +1647,16 @@ int Executor::run_for(const ForCommand *c) {
     items = ex.expand_args(c->words);
   else
     items = sh_.positional;
+  // bash re-emits the `for NAME in WORDS' trace before EVERY iteration (not
+  // once for the whole loop), so build it once and print it at the top of each.
+  std::string xtrace_line;
   if (sh_.opt_xtrace) {
-    std::string line = "+ for " + c->var + " in";
-    for (const std::string &it : items) line += " " + it;
-    std::fprintf(stderr, "%s\n", line.c_str());
+    xtrace_line = "+ for " + c->var + " in";
+    for (const std::string &it : items) xtrace_line += " " + it;
   }
   sh_.loop_depth++;
   for (const std::string &item : items) {
+    if (sh_.opt_xtrace) std::fprintf(stderr, "%s\n", xtrace_line.c_str());
     // A nameref loop variable is special: each iteration *retargets* the
     // reference to name ITEM rather than writing ITEM through to its current
     // target (bash treats `for ref in a b c' like successive `declare -n
@@ -1679,6 +1684,7 @@ int Executor::run_case(const CaseCommand *c) {
   Expander ex(sh_);
   std::string word = ex.expand_no_split(c->word.text);
   if (sh_.arith_error) { sh_.arith_error = false; return (sh_.last_status = 1); }
+  if (sh_.opt_xtrace) std::fprintf(stderr, "+ case %s in\n", word.c_str());
   int st = 0;
   size_t i = 0;
   while (i < c->clauses.size()) {
