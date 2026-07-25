@@ -86,7 +86,14 @@ void save_fd(int fd, std::vector<SavedFd> &saved) {
 // returns false; otherwise stores the single word in `out'.
 static bool expand_redir_target(Shell &sh, const Word &w, std::string &out) {
   Expander ex(sh);
+  // POSIX: a non-interactive shell performs no pathname expansion on a
+  // redirection target (`cat < redir1.*' opens the literal name).  Suppress
+  // globbing for that case without disturbing the other expansions or the word
+  // splitting that still makes a multi-word target ambiguous.
+  bool saved_noglob = sh.opt_noglob;
+  if (sh.opt_posix && !sh.interactive) sh.opt_noglob = true;
   std::vector<std::string> words = ex.expand_args({w});
+  sh.opt_noglob = saved_noglob;
   if (words.size() != 1) {
     std::fprintf(stderr, "%s%s: ambiguous redirect\n", sh.err_prefix().c_str(),
                  w.text.c_str());
