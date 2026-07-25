@@ -7,6 +7,7 @@
 // yet covered: arrays (${a[@]}), ${!prefix*}, some locale/case operators; these
 // are follow-ons.
 
+#include "gnash/core/builtins.hpp"
 #include "gnash/core/expand.hpp"
 #include "gnash/core/subscript.hpp"
 
@@ -993,7 +994,28 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
       char asel;
       if (array_op_ref(body, aoname, asel, arest)) {
         std::vector<std::string> items;
-        if (arest == "@k" || arest == "@K") {
+        if (arest == "@A") {
+          // Whole-array @A: a single `declare' statement recreating the array,
+          // emitted as its three top-level words (`declare', `-flags',
+          // `name=(...)') -- quoted it stays three words, unquoted the third is
+          // then IFS-split, matching bash.  Reuses declare -p's exact rendering.
+          std::string dn = sh_.deref(aoname);
+          auto vit = sh_.vars.find(dn);
+          if (vit != sh_.vars.end()) {
+            std::string ds = declare_var_string(dn, vit->second, "declare", false);
+            // Split off the leading `declare' and `-flags' words; keep the
+            // `name=(...)' remainder whole (it may contain spaces).
+            size_t s1 = ds.find(' ');
+            size_t s2 = s1 == std::string::npos ? s1 : ds.find(' ', s1 + 1);
+            if (s2 == std::string::npos) {
+              items.push_back(ds);
+            } else {
+              items.push_back(ds.substr(0, s1));
+              items.push_back(ds.substr(s1 + 1, s2 - s1 - 1));
+              items.push_back(ds.substr(s2 + 1));
+            }
+          }
+        } else if (arest == "@k" || arest == "@K") {
           // Key/value transforms.  @k emits the keys interleaved with values as
           // raw words; @K collapses to one "key value ..." string (values, and
           // assoc keys, quoted for re-input).

@@ -1224,6 +1224,15 @@ std::string declare_sub_quote(const std::string &k) {
 // used.
 void declare_print_var(const std::string &name, const Variable &v,
                        const std::string &cmd = "declare", bool posix = false) {
+  std::printf("%s\n", declare_var_string(name, v, cmd, posix).c_str());
+}
+
+}  // anon namespace (reopened after the exported string builder below)
+
+// Build the `declare -p'-form string for V without a trailing newline; shared
+// by declare_print_var and the ${var@A} transform (see builtins.hpp).
+std::string declare_var_string(const std::string &name, const Variable &v,
+                               const std::string &cmd, bool posix) {
   bool posix_cmd = posix && (cmd == "readonly" || cmd == "export");
   // Attribute letters in bash's fixed order (var_attribute_string):
   // a A f i n r t x c l u.  gnash models the subset a A i n r x l u.
@@ -1273,8 +1282,10 @@ void declare_print_var(const std::string &name, const Variable &v,
     // case (`declare x' / `export bar') is handled by the branch above.
     decl += "=" + declare_quote(v.value);
   }
-  std::printf("%s\n", decl.c_str());
+  return decl;
 }
+
+namespace {  // reopen the anonymous namespace
 
 void set_print_var(const std::string &name, const Variable &v) {
   if (v.kind == VarKind::Indexed) {

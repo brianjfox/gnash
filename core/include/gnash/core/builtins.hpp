@@ -29,6 +29,14 @@ std::vector<std::string> command_completions(Shell &sh, const std::string &prefi
 // Called at startup so $BASHOPTS reflects the defaults before any `shopt' runs.
 void shopt_seed(Shell &sh);
 
+// The `declare -p'-form string that recreates variable V named NAME (e.g.
+// "declare -A a=([k]=\"v\" )"), without a trailing newline.  CMD selects the
+// builtin personality for POSIX readonly/export output.  Shared with the
+// ${var@A} parameter transformation so both render identically.
+std::string declare_var_string(const std::string &name, const Variable &v,
+                               const std::string &cmd = "declare",
+                               bool posix = false);
+
 }  // namespace gnash::core
 
 #endif  // GNASH_CORE_BUILTINS_HPP
