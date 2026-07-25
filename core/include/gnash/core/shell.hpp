@@ -344,6 +344,7 @@ class Shell {
   bool opt_vi = false;          // -o vi: vi command-line editing mode
   bool opt_monitor = false;     // -m / -o monitor: job control
   bool opt_privileged = false;  // -p / -o privileged
+  bool opt_hashall = true;      // -h / -o hashall: remember command locations
   // Set when a top-level $((...)) / $[...] arithmetic expansion failed (bad
   // expression or an assignment to a readonly variable); run_simple aborts the
   // current command (bash aborts but the shell continues).

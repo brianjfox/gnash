@@ -326,7 +326,7 @@ std::string Expander::param_value(const std::string &name, bool &set, bool defau
     std::string f;
     if (sh_.opt_errexit) f += 'e';
     if (sh_.opt_noglob) f += 'f';
-    f += 'h';                       // hashall: on by default
+    if (sh_.opt_hashall) f += 'h'; // hashall: on by default, dropped by `set +h'
     if (sh_.interactive) f += 'i';  // rc files test `case $- in *i*)'
     if (sh_.opt_keyword) f += 'k';  // keyword: assignments anywhere
     if (sh_.job_control) f += 'm';  // monitor: interactive job control

@@ -368,7 +368,8 @@ int main(int argc, char **argv) {
         case 'n': sh.opt_noexec = set; break;  // read but don't execute
         case 'r': if (set) sh.opt_restricted = true; break;  // restricted shell
         case 'C': sh.opt_noclobber = set; break;  // noclobber: `>' won't overwrite
-        case 'm': case 'B': case 'h': case 'H':
+        case 'h': sh.opt_hashall = set; break;  // hashall (on by default)
+        case 'm': case 'B': case 'H':
           break;  // accepted, not (yet) acted on
         // `-c' takes its command from the next word, but other flags grouped in
         // the same word still apply -- `-ce cmd' means both `-c' and `-e'.  So

@@ -1327,9 +1327,10 @@ bool set_o_option(Shell &sh, const std::string &o, bool on) {
   }
   else if (o == "monitor") sh.opt_monitor = on;
   else if (o == "privileged") sh.opt_privileged = on;
+  else if (o == "hashall") sh.opt_hashall = on;
   // Valid bash `set -o' names whose behavior is unimplemented: accept as no-ops
   // (a script may set them; erroring would diverge from bash, which knows them).
-  else if (o == "allexport" || o == "braceexpand" || o == "hashall" ||
+  else if (o == "allexport" || o == "braceexpand" ||
            o == "ignoreeof" || o == "interactive-comments" || o == "nolog" ||
            o == "notify" || o == "onecmd")
     ;  // no-op
@@ -1349,7 +1350,7 @@ std::vector<std::pair<std::string, bool>> set_option_states(Shell &sh) {
       {"emacs", i ? (rl_editing_mode == 1) : sh.opt_emacs},
       {"errexit", sh.opt_errexit},
       {"errtrace", sh.opt_functrace}, {"functrace", sh.opt_functrace},
-      {"hashall", true},      {"histexpand", sh.opt_histexpand},
+      {"hashall", sh.opt_hashall}, {"histexpand", sh.opt_histexpand},
       {"history", sh.opt_history}, {"ignoreeof", false},
       {"interactive-comments", true}, {"keyword", sh.opt_keyword},
       {"monitor", sh.job_control || sh.opt_monitor}, {"noclobber", sh.opt_noclobber},
@@ -1428,9 +1429,10 @@ int bi_set(Shell &sh, const std::vector<std::string> &argv) {
             k = a.size();  // -o consumes the rest of the word
             break;
           }
+          case 'h': sh.opt_hashall = on; break;  // -h/+h: hashall
           // Flags accepted as no-ops where the behavior is unimplemented:
-          // allexport/notify/hashall/onecmd/braceexpand.
-          case 'a': case 'b': case 'h': case 't': case 'B': break;
+          // allexport/notify/onecmd/braceexpand.
+          case 'a': case 'b': case 't': case 'B': break;
           default:
             std::fprintf(stderr, "%sset: %c%c: invalid option\n", sh.err_prefix().c_str(),
                          a[0], a[k]);
@@ -3303,6 +3305,13 @@ int bi_logout(Shell &sh, const std::vector<std::string> &argv) {
 }
 
 int bi_hash(Shell &sh, const std::vector<std::string> &argv) {
+  // With `set +o hashall' (`set +h') the hash table is unavailable: every form
+  // of `hash' -- listing, adding, `-r', or an invalid option -- fails before
+  // any processing (hash.def checks hashing_enabled first).
+  if (!sh.opt_hashall) {
+    std::fprintf(stderr, "%shash: hashing disabled\n", sh.err_prefix().c_str());
+    return 1;
+  }
   bool list_l = false, del_d = false, print_t = false, expunge = false;
   std::string ppath;
   size_t i = 1;
