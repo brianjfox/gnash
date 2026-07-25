@@ -94,9 +94,10 @@ void Connection::print(std::string &out) const {
 
 void Subshell::print(std::string &out) const {
   invert_prefix(this, out);
-  out += "(";
+  // bash renders a subshell with inner spaces: `( list )'.
+  out += "( ";
   if (body) body->print(out);
-  out += ")";
+  out += " )";
   print_redirects(redirects, out);
 }
 
