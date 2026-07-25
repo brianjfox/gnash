@@ -24,6 +24,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <sys/stat.h>
 #include <sys/utsname.h>
 #include <unistd.h>
 #include <vector>
@@ -251,6 +252,25 @@ void configure_persona(Shell &sh, const std::string &personality, const std::str
   sh.set_personality(personality);
 }
 
+// Print bash's invocation usage message to stderr, mirroring show_shell_usage
+// (shell.c).  Emitted after an invalid invocation option, before exiting 2.
+void show_shell_usage(const std::string &name) {
+  static const char *const kLongOpts[] = {
+      "debug",   "debugger",    "dump-po-strings", "dump-strings", "help",
+      "init-file", "login",     "noediting",       "noprofile",    "norc",
+      "posix",   "pretty-print", "rcfile",         "restricted",   "verbose",
+      "version"};
+  std::fprintf(stderr,
+               "Usage:\t%s [GNU long option] [option] ...\n"
+               "\t%s [GNU long option] [option] script-file ...\n",
+               name.c_str(), name.c_str());
+  std::fputs("GNU long options:\n", stderr);
+  for (const char *lo : kLongOpts) std::fprintf(stderr, "\t--%s\n", lo);
+  std::fputs("Shell options:\n", stderr);
+  std::fputs("\t-ilrsD or -c command or -O shopt_option\t\t(invocation only)\n", stderr);
+  std::fputs("\t-abefhkmnptuvxBCEHPT or -o option\n", stderr);
+}
+
 }  // namespace
 
 int main(int argc, char **argv) {
@@ -307,7 +327,12 @@ int main(int argc, char **argv) {
       if (lo == "login") login = true;
       else if (lo == "norc") sopts.norc = true;
       else if (lo == "noprofile") sopts.noprofile = true;
-      else if (lo == "posix" || lo == "noediting") { /* accepted, ignored */ }
+      else if (lo == "posix" || lo == "noediting" || lo == "pretty-print" ||
+               lo == "dump-strings" || lo == "dump-po-strings" || lo == "verbose" ||
+               lo == "debug" || lo == "debugger" || lo == "restricted") {
+        /* accepted (some not yet acted on), but recognized so they do not fall
+           through to the invalid-option/usage path */
+      }
       else if (lo == "rcfile" || lo == "init-file") {
         sopts.rcfile = !val.empty() ? val : (idx + 1 < args.size() ? args[++idx] : "");
       } else if (lo == "personality") {
@@ -320,6 +345,7 @@ int main(int argc, char **argv) {
         return 0;
       } else {
         std::fprintf(stderr, "%s: %s: invalid option\n", sh.shell_name.c_str(), a.c_str());
+        show_shell_usage(sh.shell_name);
         return 2;
       }
       continue;
@@ -355,8 +381,22 @@ int main(int argc, char **argv) {
           stop_after = true;  // -o consumed the rest of this word / next word
           break;
         }
+        case 'O': {  // -O optname enables a shopt, +O disables (bash invocation)
+          std::string name = (k + 1 < a.size()) ? a.substr(k + 1)
+                             : (idx + 1 < args.size() ? args[++idx] : "");
+          if (sh.shopt_opts.find(name) != sh.shopt_opts.end()) {
+            sh.shopt_opts[name] = set;
+          } else {  // invalid shopt name at invocation is fatal (bash exits 2)
+            std::fprintf(stderr, "%s: line 0: %s: invalid shell option name\n",
+                         sh.shell_name.c_str(), name.c_str());
+            return 2;
+          }
+          stop_after = true;  // -O consumed the rest of this word / next word
+          break;
+        }
         default:
           std::fprintf(stderr, "%s: -%c: invalid option\n", sh.shell_name.c_str(), o);
+          show_shell_usage(sh.shell_name);
           return 2;
       }
       if (stop_after) break;
@@ -382,6 +422,10 @@ int main(int argc, char **argv) {
   // ---- dispatch ----------------------------------------------------------
   if (have_c) {
     sh.invocation_char = 'c';  // $- includes `c'
+    if (idx >= args.size()) {  // `-c' with no command word
+      std::fprintf(stderr, "%s: -c: option requires an argument\n", sh.shell_name.c_str());
+      return 2;
+    }
     std::string cmd = idx < args.size() ? args[idx++] : "";
     if (idx < args.size()) {
       sh.arg0 = args[idx];
@@ -392,6 +436,13 @@ int main(int argc, char **argv) {
     read_startup_files(sh, startup_prefix, login, false, sopts);
     sh.run_string(cmd);
   } else if (!force_stdin && idx < args.size()) {
+    // A directory named as a script: bash reports it with the script name as
+    // the error prefix (not argv0) and exits 126.
+    struct stat scriptst;
+    if (stat(args[idx].c_str(), &scriptst) == 0 && S_ISDIR(scriptst.st_mode)) {
+      std::fprintf(stderr, "%s: %s: Is a directory\n", args[idx].c_str(), args[idx].c_str());
+      return 126;
+    }
     std::ifstream f(args[idx]);
     if (!f) {
       std::fprintf(stderr, "%s: %s: %s\n", sh.shell_name.c_str(), args[idx].c_str(),
