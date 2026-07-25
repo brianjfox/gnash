@@ -97,8 +97,11 @@ void collect_dirs(const std::string &base, std::vector<std::string> &out, bool m
   for (auto &s : subs) collect_dirs(s, out, matchdot);
 }
 
+// literal_prefix is true when every path component consumed to reach `dir' was
+// a plain literal (no `**' or other glob).  It controls the trailing-slash form
+// of the terminal `**' zero-segment match (see below).
 void glob_recurse(const std::string &dir, const std::string &pat, int smflags, bool matchdot,
-                  int gxflags, std::vector<std::string> &results) {
+                  int gxflags, std::vector<std::string> &results, bool literal_prefix = true) {
   size_t slash = pat.find('/');
   std::string head = (slash == std::string::npos) ? pat : pat.substr(0, slash);
   std::string rest = (slash == std::string::npos) ? "" : pat.substr(slash + 1);
@@ -106,9 +109,39 @@ void glob_recurse(const std::string &dir, const std::string &pat, int smflags, b
 
   // globstar: ** matches zero or more directory levels.
   if ((gxflags & GX_GLOBSTAR) && head == "**") {
+    // Collapse a run of `**/'...`**' components into a single `**' (bash does
+    // this so `**/**' is equivalent to `**').  Absorb each following `**/' (or
+    // trailing `**') into this one.
+    bool collapsed = false;
+    while (!last && (rest == "**" || rest.compare(0, 3, "**/") == 0)) {
+      collapsed = true;
+      if (rest == "**") {
+        rest.clear();
+        last = true;
+      } else {
+        rest.erase(0, 3);
+        while (!rest.empty() && rest[0] == '/') rest.erase(0, 1);
+        if (rest.empty()) last = true;
+      }
+    }
     std::vector<std::string> dirs;
     collect_dirs(dir, dirs, matchdot);
     if (last) {
+      // `**' matches zero path segments too, i.e. the base directory itself.
+      // bash renders this base with a trailing slash only when the whole prefix
+      // was a single literal path followed directly by a terminal `**'
+      // (`a/**' -> `a/'); any `**'/glob ancestor or a collapsed `**/**' yields
+      // the base without the slash (`a/**/**', `**/a/**' -> `a').  A bare `**'
+      // (empty dir) contributes no base.
+      if (!dir.empty()) {
+        if (literal_prefix && !collapsed) {
+          results.push_back(dir);
+        } else {
+          std::string base = dir;
+          if (base.size() > 1 && base.back() == '/') base.pop_back();
+          results.push_back(base);
+        }
+      }
       for (const std::string &D : dirs) {
         DIR *dd = opendir(D.empty() ? "." : D.c_str());
         if (!dd) continue;
@@ -122,7 +155,8 @@ void glob_recurse(const std::string &dir, const std::string &pat, int smflags, b
         closedir(dd);
       }
     } else {
-      for (const std::string &D : dirs) glob_recurse(D, rest, smflags, matchdot, gxflags, results);
+      for (const std::string &D : dirs)
+        glob_recurse(D, rest, smflags, matchdot, gxflags, results, /*literal_prefix=*/false);
     }
     return;
   }
@@ -132,7 +166,7 @@ void glob_recurse(const std::string &dir, const std::string &pat, int smflags, b
     if (last) {
       if (path_exists(next)) results.push_back(next);
     } else if (is_dir(next)) {
-      glob_recurse(next + "/", rest, smflags, matchdot, gxflags, results);
+      glob_recurse(next + "/", rest, smflags, matchdot, gxflags, results, literal_prefix);
     }
     return;
   }
@@ -146,7 +180,7 @@ void glob_recurse(const std::string &dir, const std::string &pat, int smflags, b
       if ((gxflags & GX_MATCHDIRS) && !is_dir(full)) continue;
       results.push_back((gxflags & GX_MARKDIRS) && is_dir(full) ? full + "/" : full);
     } else if (is_dir(full)) {
-      glob_recurse(full + "/", rest, smflags, matchdot, gxflags, results);
+      glob_recurse(full + "/", rest, smflags, matchdot, gxflags, results, /*literal_prefix=*/false);
     }
   }
 }
