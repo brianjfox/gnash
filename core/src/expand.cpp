@@ -1021,13 +1021,30 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
             if (k) for (char c : j) { out += c; mask += '1'; }
             for (char c : items[k]) { out += c; mask += '1'; }
           }
-        } else {
-          char m = (asel == '@' && dq) ? '1' : '0';
-          if (asel == '@' && dq) absorb_qnull();
+        } else if (asel == '@' && dq) {
+          absorb_qnull();
           for (size_t k = 0; k < items.size(); k++) {
             if (k) { out += FIELD_SEP; mask += MMARK; }
-            if (asel == '@' && dq) { out += QNULL; mask += MMARK; }  // keep empty element
-            for (char c : items[k]) { out += c; mask += m; }
+            out += QNULL; mask += MMARK;  // keep empty element as a field
+            for (char c : items[k]) { out += c; mask += '1'; }
+          }
+        } else if (asel == '*') {
+          // Unquoted ${a[*]OP}: join with the first IFS char, left splittable.
+          std::string is = sh_.ifs();
+          std::string j = is.empty() ? std::string() : std::string(1, is[0]);
+          for (size_t k = 0; k < items.size(); k++) {
+            if (k) for (char c : j) { out += c; mask += '0'; }
+            for (char c : items[k]) { out += c; mask += '0'; }
+          }
+        } else {
+          // Unquoted ${a[@]OP}: an element the operator makes empty produces no
+          // word (it splits away), so skip it rather than emitting an empty field.
+          bool first = true;
+          for (size_t k = 0; k < items.size(); k++) {
+            if (items[k].empty()) continue;
+            if (!first) { out += FIELD_SEP; mask += MMARK; }
+            first = false;
+            for (char c : items[k]) { out += c; mask += '0'; }
           }
         }
         i = end + 1;
