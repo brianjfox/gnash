@@ -109,7 +109,9 @@ class Shell {
   void array_set(const std::string &n, const std::string &sub, const std::string &v);
   // Remove one element of an array (`unset a[2]'); a `@'/`*' subscript unsets
   // the whole array.  A negative index on an indexed array counts from the end.
-  void array_unset(const std::string &n, const std::string &sub);
+  // Returns false when the subscript resolves out of range (a negative index
+  // below the first element) so the caller can report a bad array subscript.
+  bool array_unset(const std::string &n, const std::string &sub);
   int array_count(const std::string &n) const;
   // Under `shopt -s array_expand_once', an already-expanded array subscript is
   // not re-expanded: for an indexed array it is evaluated strictly here, so a

@@ -1118,7 +1118,14 @@ int bi_unset(Shell &sh, const std::vector<std::string> &argv) {
         ret = 1;
         continue;
       }
-      sh.array_unset(base, sub);
+      // A negative subscript below the array's first element is rejected
+      // (`unset a[-2]' on an empty or too-short indexed array); bash names just
+      // the bracketed subscript, not the array.
+      if (!sh.array_unset(base, sub)) {
+        std::fprintf(stderr, "%sunset: [%s]: bad array subscript\n",
+                     sh.err_prefix().c_str(), sub.c_str());
+        ret = 1;
+      }
       continue;
     }
     // A readonly variable cannot be unset.  Resolve through a nameref (unless
