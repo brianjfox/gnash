@@ -1758,6 +1758,8 @@ std::vector<std::string> builtin_names_sorted() {
   return v;
 }
 
+static bool valid_identifier(const std::string &s);
+
 // Shared logic for declare/local/readonly/typeset.
 int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local, bool force_ro) {
   bool mk_array = false, mk_assoc = false, integer = false, readonly = force_ro;
@@ -1917,6 +1919,14 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
       return 0;
     }
     for (; i < argv.size(); i++) {
+      // `-f'/`-F' cannot create functions: an argument carrying an assignment
+      // (`declare -f name=value') is rejected outright and stops processing,
+      // always naming `-f' in the diagnostic even under `-F' (declare.def).
+      if (argv[i].find('=') != std::string::npos) {
+        std::fprintf(stderr, "%s%s: cannot use `-f' to make functions\n",
+                     sh.err_prefix().c_str(), argv[0].c_str());
+        return 1;
+      }
       auto it = sh.functions.find(argv[i]);
       if (it == sh.functions.end()) {
         // `declare -fp NAME' (the -p form) reports a missing function; the bare
@@ -1990,6 +2000,19 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     if (subscript0 && nameref) {
       std::string tgt = (eq == std::string::npos) ? a : a.substr(0, eq);
       std::fprintf(stderr, "%s%s: %s: reference variable cannot be an array\n",
+                   sh.err_prefix().c_str(), argv[0].c_str(), tgt.c_str());
+      ret = 1;
+      continue;
+    }
+    // The name must be a valid identifier (a `[subscript]' was stripped from
+    // `name' above and is allowed).  `declare /bin/sh', or a stray `-z' left
+    // as an operand after `--', is rejected; the offending name is reported
+    // and skipped while the remaining arguments are still processed.  `local -'
+    // is the one exception: for `local' a bare `-' is the special save-options
+    // operand (bash), not an identifier, so it is not rejected here.
+    if (!valid_identifier(name) && !(local && a == "-")) {
+      std::string tgt = (eq == std::string::npos) ? a : a.substr(0, eq);
+      std::fprintf(stderr, "%s%s: `%s': not a valid identifier\n",
                    sh.err_prefix().c_str(), argv[0].c_str(), tgt.c_str());
       ret = 1;
       continue;
@@ -2225,7 +2248,19 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
           if (!sh.in_function()) sh.vars.erase(name);
           continue;
         }
-        sh.set(name, val);
+        // declare/typeset/local report a readonly-assignment failure with the
+        // builtin name prefixed (bind_variable in declare.def), where a plain
+        // `name=val' -- and readonly/export -- print it bare via Shell::set.
+        if (argv[0] == "declare" || argv[0] == "typeset" || argv[0] == "local") {
+          auto rit = sh.vars.find(name);
+          if (rit != sh.vars.end() && rit->second.readonly && !rit->second.nameref) {
+            std::fprintf(stderr, "%s%s: %s: readonly variable\n",
+                         sh.err_prefix().c_str(), argv[0].c_str(), name.c_str());
+            ret = 1;
+            continue;
+          }
+        }
+        if (!sh.set(name, val)) ret = 1;  // e.g. assignment to a readonly var
       }
     }
     // Applying an attribute to an existing nameref (without a `-n'/`+n' on this
@@ -2284,7 +2319,17 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     // `+X' removes attributes.  Applied after the assignment so `typeset +n
     // foo=other' writes through the still-active nameref to its target before
     // the reference is torn down, matching bash.
-    if (rm_readonly) v.readonly = false;
+    // `+r' cannot clear an existing readonly attribute: bash reports the
+    // variable as readonly and leaves the flag set (declare.def refuses to
+    // turn off att_readonly).  Only declare/typeset/local reach here with a
+    // removable readonly, and they carry the builtin-name prefix.
+    if (rm_readonly) {
+      if (v.readonly) {
+        std::fprintf(stderr, "%s%s: %s: readonly variable\n",
+                     sh.err_prefix().c_str(), argv[0].c_str(), aname.c_str());
+        ret = 1;
+      }
+    }
     if (rm_exported) v.exported = false;
     if (rm_integer) v.integer = false;
     if (rm_nameref) v.nameref = false;
