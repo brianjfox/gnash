@@ -233,9 +233,17 @@ void Shell::reap_jobs(bool notify) {
 
 void Shell::print_jobs() {
   reap_jobs(false);
+  // bash marks the current job `+' and the previous job `-' (others a space);
+  // approximate with the two most recently started jobs (the last two entries).
+  int cur = jobs.empty() ? -1 : jobs.back().id;
+  int prev = jobs.size() >= 2 ? jobs[jobs.size() - 2].id : -1;
   for (const Job &j : jobs) {
     const char *state = j.done ? "Done" : (j.stopped ? "Stopped" : "Running");
-    std::printf("[%d]%c  %-22s %s\n", j.id, '+', state, j.command.c_str());
+    char mark = j.id == cur ? '+' : j.id == prev ? '-' : ' ';
+    // A running background job is shown with a trailing ` &' (bash: RUNNING &&
+    // not foreground); the status field is padded to LONGEST_SIGNAL_DESC (27).
+    const char *amp = (j.background && !j.done && !j.stopped) ? " &" : "";
+    std::printf("[%d]%c  %-27s%s%s\n", j.id, mark, state, j.command.c_str(), amp);
   }
 }
 
