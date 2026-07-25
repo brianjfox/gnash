@@ -817,8 +817,26 @@ void Shell::array_assign(
     const std::vector<std::pair<std::optional<std::string>, std::string>> &elems,
     bool append, bool assoc) {
   std::string n = deref(n_in);
+  // A compound assignment through a nameref that points at an array element
+  // (`declare -n ref=XXX[0]; ref+=(...)') has no valid whole-array target: bash
+  // rejects the resolved `XXX[0]' as not a valid identifier and assigns nothing.
+  if (n.find('[') != std::string::npos) {
+    std::fprintf(stderr, "%s`%s': not a valid identifier\n", err_prefix().c_str(),
+                 n.c_str());
+    return;
+  }
   Variable &v = vars[n];
   if (v.readonly) return;
+  // Array-assigning to an unset nameref (deref stopped on the nameref itself)
+  // converts it into a real array and drops the nameref attribute, with bash's
+  // warning (assign_array_var_from_word_list -> make_variable_value).  A nameref
+  // with a valid target resolves to that target above, so this never fires for
+  // it.
+  if (v.nameref) {
+    std::fprintf(stderr, "%swarning: %s: removing nameref attribute\n",
+                 err_prefix().c_str(), n.c_str());
+    v.nameref = false;
+  }
   v.invisible = false;  // even `b=()' makes a declared-but-unset array visible
   if (!append) {
     v.idx.clear();
