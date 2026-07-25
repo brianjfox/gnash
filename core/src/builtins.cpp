@@ -3794,6 +3794,11 @@ int bi_unalias(Shell &sh, const std::vector<std::string> &argv) {
     sh.suffix_aliases.clear();
     return 0;
   }
+  // With neither `-a' nor any name to remove, unalias reports a usage error.
+  if (i >= argv.size()) {
+    std::fprintf(stderr, "unalias: usage: unalias [-a] name [name ...]\n");
+    return 2;
+  }
   int st = 0;
   for (; i < argv.size(); i++) {
     bool removed;
@@ -5171,6 +5176,8 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
     if (bad_opt) {
       std::fprintf(stderr, "%sexec: %s: invalid option\n", sh.err_prefix().c_str(),
                    argv[i].c_str());
+      std::fprintf(stderr, "exec: usage: exec [-cl] [-a name] [command "
+                           "[argument ...]] [redirection ...]\n");
       st = 2;
     } else if (i >= argv.size()) {
       // No command word: `exec' with only options/redirections is a no-op here
