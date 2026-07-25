@@ -27,6 +27,10 @@
 #include "gnash/core/lexer.hpp"
 #include "strmatch.h"
 
+#if defined(__GLIBC__)
+#include <stdio_ext.h>  // __fpurge
+#endif
+
 extern "C" char **environ;
 
 namespace gnash::core {
@@ -37,6 +41,21 @@ struct SavedFd {
   int fd;
   int saved;  // dup of the original, or -1 if the fd was originally closed
 };
+
+// Flush a builtin's buffered stdout while its redirections are still active.
+// If the write fails -- e.g. stdout was closed with `>&-' or points at a broken
+// pipe -- discard the unwritten data so it cannot leak out onto the restored
+// descriptor afterward, matching bash (whose builtins write straight to the fd
+// and simply lose the output).
+void flush_builtin_stdout() {
+  if (std::fflush(stdout) == 0) return;
+  std::clearerr(stdout);
+#if defined(__GLIBC__)
+  __fpurge(stdout);
+#else
+  fpurge(stdout);  // BSD/macOS
+#endif
+}
 
 // Write BODY to a temp file and return an fd open for reading at offset 0.
 int heredoc_fd(const std::string &body) {
@@ -67,7 +86,14 @@ void save_fd(int fd, std::vector<SavedFd> &saved) {
 // returns false; otherwise stores the single word in `out'.
 static bool expand_redir_target(Shell &sh, const Word &w, std::string &out) {
   Expander ex(sh);
+  // POSIX: a non-interactive shell performs no pathname expansion on a
+  // redirection target (`cat < redir1.*' opens the literal name).  Suppress
+  // globbing for that case without disturbing the other expansions or the word
+  // splitting that still makes a multi-word target ambiguous.
+  bool saved_noglob = sh.opt_noglob;
+  if (sh.opt_posix && !sh.interactive) sh.opt_noglob = true;
   std::vector<std::string> words = ex.expand_args({w});
+  sh.opt_noglob = saved_noglob;
   if (words.size() != 1) {
     std::fprintf(stderr, "%s%s: ambiguous redirect\n", sh.err_prefix().c_str(),
                  w.text.c_str());
@@ -275,6 +301,20 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved) {
       int deffd = (r.op == RedirOp::DupInput) ? 0 : 1;
       int fd = target_fd < 0 ? deffd : target_fd;
       if (w == "-") { save_fd(fd, saved); close(fd); return true; }
+      // The source must be a plain fd number (optionally with a trailing `-'
+      // for the move form).  Anything else -- a negative or non-numeric value
+      // such as `<&$fd' with fd=-1 -- is an ambiguous redirect, as in bash.
+      bool valid_fd = !w.empty();
+      for (size_t k = 0; k < w.size() && valid_fd; k++) {
+        if (std::isdigit(static_cast<unsigned char>(w[k]))) continue;
+        if (w[k] == '-' && k + 1 == w.size() && k > 0) continue;  // trailing move `-'
+        valid_fd = false;
+      }
+      if (!valid_fd) {
+        std::fprintf(stderr, "%s%s: ambiguous redirect\n", sh.err_prefix().c_str(),
+                     w.c_str());
+        return false;
+      }
       int src = std::atoi(w.c_str());
       save_fd(fd, saved);
       dup2(src, fd);
@@ -1429,8 +1469,9 @@ int Executor::run_simple(const SimpleCommand *c) {
   (void)builtin;
 
   // Flush buffered builtin/function output while our redirections are still in
-  // effect, so it lands on the right fd and in program order.
-  std::fflush(stdout);
+  // effect, so it lands on the right fd and in program order; drop it if the
+  // target fd was closed (`>&-') rather than letting it leak out on restore.
+  flush_builtin_stdout();
   // `exec' makes its redirections permanent in the current shell (this path is
   // only reached when exec had no command word, or its exec failed).
   if (builtin && !argv.empty() && argv[0] == "exec" && status == 0)
