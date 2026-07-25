@@ -311,6 +311,28 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved) {
         valid_fd = false;
       }
       if (!valid_fd) {
+        // A bare `>&word' (no explicit source fd) whose word is a filename
+        // rather than an fd is bash's shorthand for redirecting BOTH stdout and
+        // stderr to that file, equivalent to `&>word'.  With an explicit source
+        // fd (`2>&word') or for input (`<&word') a non-fd word is ambiguous.
+        if (r.op == RedirOp::DupOutput && target_fd < 0 && !w.empty()) {
+          int f = open_redir_output(sh, w, true);  // `>&file' honors noclobber
+          if (f == kNoclobberRefused) {
+            std::fprintf(stderr, "%s%s: cannot overwrite existing file\n",
+                         sh.err_prefix().c_str(), w.c_str());
+            return false;
+          }
+          if (f < 0) {
+            std::fprintf(stderr, "%s%s: %s\n", sh.err_prefix().c_str(), w.c_str(),
+                         std::strerror(errno));
+            return false;
+          }
+          redir_to(f, 1);
+          save_fd(2, saved);
+          dup2(f, 2);
+          close(f);
+          return true;
+        }
         std::fprintf(stderr, "%s%s: ambiguous redirect\n", sh.err_prefix().c_str(),
                      w.c_str());
         return false;
