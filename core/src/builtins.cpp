@@ -1118,7 +1118,14 @@ int bi_unset(Shell &sh, const std::vector<std::string> &argv) {
         ret = 1;
         continue;
       }
-      sh.array_unset(base, sub);
+      // A negative subscript below the array's first element is rejected
+      // (`unset a[-2]' on an empty or too-short indexed array); bash names just
+      // the bracketed subscript, not the array.
+      if (!sh.array_unset(base, sub)) {
+        std::fprintf(stderr, "%sunset: [%s]: bad array subscript\n",
+                     sh.err_prefix().c_str(), sub.c_str());
+        ret = 1;
+      }
       continue;
     }
     // A readonly variable cannot be unset.  Resolve through a nameref (unless
@@ -1217,6 +1224,15 @@ std::string declare_sub_quote(const std::string &k) {
 // used.
 void declare_print_var(const std::string &name, const Variable &v,
                        const std::string &cmd = "declare", bool posix = false) {
+  std::printf("%s\n", declare_var_string(name, v, cmd, posix).c_str());
+}
+
+}  // anon namespace (reopened after the exported string builder below)
+
+// Build the `declare -p'-form string for V without a trailing newline; shared
+// by declare_print_var and the ${var@A} transform (see builtins.hpp).
+std::string declare_var_string(const std::string &name, const Variable &v,
+                               const std::string &cmd, bool posix) {
   bool posix_cmd = posix && (cmd == "readonly" || cmd == "export");
   // Attribute letters in bash's fixed order (var_attribute_string):
   // a A f i n r t x c l u.  gnash models the subset a A i n r x l u.
@@ -1266,8 +1282,10 @@ void declare_print_var(const std::string &name, const Variable &v,
     // case (`declare x' / `export bar') is handled by the branch above.
     decl += "=" + declare_quote(v.value);
   }
-  std::printf("%s\n", decl.c_str());
+  return decl;
 }
+
+namespace {  // reopen the anonymous namespace
 
 void set_print_var(const std::string &name, const Variable &v) {
   if (v.kind == VarKind::Indexed) {
@@ -1327,9 +1345,10 @@ bool set_o_option(Shell &sh, const std::string &o, bool on) {
   }
   else if (o == "monitor") sh.opt_monitor = on;
   else if (o == "privileged") sh.opt_privileged = on;
+  else if (o == "hashall") sh.opt_hashall = on;
   // Valid bash `set -o' names whose behavior is unimplemented: accept as no-ops
   // (a script may set them; erroring would diverge from bash, which knows them).
-  else if (o == "allexport" || o == "braceexpand" || o == "hashall" ||
+  else if (o == "allexport" || o == "braceexpand" ||
            o == "ignoreeof" || o == "interactive-comments" || o == "nolog" ||
            o == "notify" || o == "onecmd")
     ;  // no-op
@@ -1349,7 +1368,7 @@ std::vector<std::pair<std::string, bool>> set_option_states(Shell &sh) {
       {"emacs", i ? (rl_editing_mode == 1) : sh.opt_emacs},
       {"errexit", sh.opt_errexit},
       {"errtrace", sh.opt_functrace}, {"functrace", sh.opt_functrace},
-      {"hashall", true},      {"histexpand", sh.opt_histexpand},
+      {"hashall", sh.opt_hashall}, {"histexpand", sh.opt_histexpand},
       {"history", sh.opt_history}, {"ignoreeof", false},
       {"interactive-comments", true}, {"keyword", sh.opt_keyword},
       {"monitor", sh.job_control || sh.opt_monitor}, {"noclobber", sh.opt_noclobber},
@@ -1428,9 +1447,10 @@ int bi_set(Shell &sh, const std::vector<std::string> &argv) {
             k = a.size();  // -o consumes the rest of the word
             break;
           }
+          case 'h': sh.opt_hashall = on; break;  // -h/+h: hashall
           // Flags accepted as no-ops where the behavior is unimplemented:
-          // allexport/notify/hashall/onecmd/braceexpand.
-          case 'a': case 'b': case 'h': case 't': case 'B': break;
+          // allexport/notify/onecmd/braceexpand.
+          case 'a': case 'b': case 't': case 'B': break;
           default:
             std::fprintf(stderr, "%sset: %c%c: invalid option\n", sh.err_prefix().c_str(),
                          a[0], a[k]);
@@ -1758,6 +1778,8 @@ std::vector<std::string> builtin_names_sorted() {
   return v;
 }
 
+static bool valid_identifier(const std::string &s);
+
 // Shared logic for declare/local/readonly/typeset.
 int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local, bool force_ro) {
   bool mk_array = false, mk_assoc = false, integer = false, readonly = force_ro;
@@ -1917,6 +1939,14 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
       return 0;
     }
     for (; i < argv.size(); i++) {
+      // `-f'/`-F' cannot create functions: an argument carrying an assignment
+      // (`declare -f name=value') is rejected outright and stops processing,
+      // always naming `-f' in the diagnostic even under `-F' (declare.def).
+      if (argv[i].find('=') != std::string::npos) {
+        std::fprintf(stderr, "%s%s: cannot use `-f' to make functions\n",
+                     sh.err_prefix().c_str(), argv[0].c_str());
+        return 1;
+      }
       auto it = sh.functions.find(argv[i]);
       if (it == sh.functions.end()) {
         // `declare -fp NAME' (the -p form) reports a missing function; the bare
@@ -1990,6 +2020,19 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     if (subscript0 && nameref) {
       std::string tgt = (eq == std::string::npos) ? a : a.substr(0, eq);
       std::fprintf(stderr, "%s%s: %s: reference variable cannot be an array\n",
+                   sh.err_prefix().c_str(), argv[0].c_str(), tgt.c_str());
+      ret = 1;
+      continue;
+    }
+    // The name must be a valid identifier (a `[subscript]' was stripped from
+    // `name' above and is allowed).  `declare /bin/sh', or a stray `-z' left
+    // as an operand after `--', is rejected; the offending name is reported
+    // and skipped while the remaining arguments are still processed.  `local -'
+    // is the one exception: for `local' a bare `-' is the special save-options
+    // operand (bash), not an identifier, so it is not rejected here.
+    if (!valid_identifier(name) && !(local && a == "-")) {
+      std::string tgt = (eq == std::string::npos) ? a : a.substr(0, eq);
+      std::fprintf(stderr, "%s%s: `%s': not a valid identifier\n",
                    sh.err_prefix().c_str(), argv[0].c_str(), tgt.c_str());
       ret = 1;
       continue;
@@ -2225,7 +2268,19 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
           if (!sh.in_function()) sh.vars.erase(name);
           continue;
         }
-        sh.set(name, val);
+        // declare/typeset/local report a readonly-assignment failure with the
+        // builtin name prefixed (bind_variable in declare.def), where a plain
+        // `name=val' -- and readonly/export -- print it bare via Shell::set.
+        if (argv[0] == "declare" || argv[0] == "typeset" || argv[0] == "local") {
+          auto rit = sh.vars.find(name);
+          if (rit != sh.vars.end() && rit->second.readonly && !rit->second.nameref) {
+            std::fprintf(stderr, "%s%s: %s: readonly variable\n",
+                         sh.err_prefix().c_str(), argv[0].c_str(), name.c_str());
+            ret = 1;
+            continue;
+          }
+        }
+        if (!sh.set(name, val)) ret = 1;  // e.g. assignment to a readonly var
       }
     }
     // Applying an attribute to an existing nameref (without a `-n'/`+n' on this
@@ -2284,7 +2339,17 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     // `+X' removes attributes.  Applied after the assignment so `typeset +n
     // foo=other' writes through the still-active nameref to its target before
     // the reference is torn down, matching bash.
-    if (rm_readonly) v.readonly = false;
+    // `+r' cannot clear an existing readonly attribute: bash reports the
+    // variable as readonly and leaves the flag set (declare.def refuses to
+    // turn off att_readonly).  Only declare/typeset/local reach here with a
+    // removable readonly, and they carry the builtin-name prefix.
+    if (rm_readonly) {
+      if (v.readonly) {
+        std::fprintf(stderr, "%s%s: %s: readonly variable\n",
+                     sh.err_prefix().c_str(), argv[0].c_str(), aname.c_str());
+        ret = 1;
+      }
+    }
     if (rm_exported) v.exported = false;
     if (rm_integer) v.integer = false;
     if (rm_nameref) v.nameref = false;
@@ -3258,6 +3323,13 @@ int bi_logout(Shell &sh, const std::vector<std::string> &argv) {
 }
 
 int bi_hash(Shell &sh, const std::vector<std::string> &argv) {
+  // With `set +o hashall' (`set +h') the hash table is unavailable: every form
+  // of `hash' -- listing, adding, `-r', or an invalid option -- fails before
+  // any processing (hash.def checks hashing_enabled first).
+  if (!sh.opt_hashall) {
+    std::fprintf(stderr, "%shash: hashing disabled\n", sh.err_prefix().c_str());
+    return 1;
+  }
   bool list_l = false, del_d = false, print_t = false, expunge = false;
   std::string ppath;
   size_t i = 1;
@@ -3748,6 +3820,11 @@ int bi_unalias(Shell &sh, const std::vector<std::string> &argv) {
     sh.global_aliases.clear();
     sh.suffix_aliases.clear();
     return 0;
+  }
+  // With neither `-a' nor any name to remove, unalias reports a usage error.
+  if (i >= argv.size()) {
+    std::fprintf(stderr, "unalias: usage: unalias [-a] name [name ...]\n");
+    return 2;
   }
   int st = 0;
   for (; i < argv.size(); i++) {
@@ -5126,6 +5203,8 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
     if (bad_opt) {
       std::fprintf(stderr, "%sexec: %s: invalid option\n", sh.err_prefix().c_str(),
                    argv[i].c_str());
+      std::fprintf(stderr, "exec: usage: exec [-cl] [-a name] [command "
+                           "[argument ...]] [redirection ...]\n");
       st = 2;
     } else if (i >= argv.size()) {
       // No command word: `exec' with only options/redirections is a no-op here
