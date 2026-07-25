@@ -948,6 +948,17 @@ int bi_mapfile(Shell &sh, const std::vector<std::string> &argv) {
       return 1;
     }
   }
+  // A nameref target must resolve to a plain array name: mapfile fills a whole
+  // array and cannot write through a nameref that points at an element
+  // (`declare -n ref=XXX[0]'), which bash rejects as not a valid identifier.
+  {
+    std::string resolved = sh.deref(name);
+    if (resolved.find('[') != std::string::npos) {
+      std::fprintf(stderr, "%smapfile: `%s': not a valid identifier\n",
+                   sh.err_prefix().c_str(), resolved.c_str());
+      return 1;
+    }
+  }
 
   std::string data;
   char buf[4096];
@@ -1573,6 +1584,17 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
     std::fprintf(stderr, "%sread: `%s': not a valid identifier\n", sh.err_prefix().c_str(),
                  arrayname.c_str());
     return 1;
+  }
+  // `read -a' fills a whole array, so a nameref target must resolve to a plain
+  // array name; one that points at an element (`declare -n ref=XXX[0]') is
+  // rejected as not a valid identifier, as in bash.
+  if (!arrayname.empty()) {
+    std::string resolved = sh.deref(arrayname);
+    if (resolved.find('[') != std::string::npos) {
+      std::fprintf(stderr, "%sread: `%s': not a valid identifier\n",
+                   sh.err_prefix().c_str(), resolved.c_str());
+      return 1;
+    }
   }
   for (const std::string &nm : names)
     if (!valid_read_name(nm)) {
