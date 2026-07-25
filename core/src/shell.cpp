@@ -1148,7 +1148,16 @@ void Shell::set_exported(const std::string &n_in, const std::string &v) {
   if (n == "POSIXLY_CORRECT") opt_posix = true;
 }
 
-void Shell::export_name(const std::string &n) { vars[n].exported = true; }
+void Shell::export_name(const std::string &n) {
+  // `export NAME' with no value marks NAME for export but does not give it a
+  // value: a previously-unset variable stays unset (bash's att_invisible), so
+  // `${NAME+set}' is empty and `declare -p NAME' prints just `declare -x NAME'
+  // (no `=').  An existing variable keeps its value and visibility.
+  bool fresh = vars.find(n) == vars.end();
+  Variable &var = vars[n];
+  var.exported = true;
+  if (fresh) var.invisible = true;
+}
 
 void Shell::unset(const std::string &n_in, bool force, bool noref) {
   if (n_in == "HISTSIZE" && history_loaded) unstifle_history();

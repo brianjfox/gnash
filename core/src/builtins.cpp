@@ -1260,7 +1260,10 @@ void declare_print_var(const std::string &name, const Variable &v,
     }
     // bash prints a space before the closing paren for a non-empty assoc.
     decl += first ? ")" : " )";
-  } else if (!v.value.empty() || v.integer) {
+  } else {
+    // A visible scalar always prints `=value', even when the value is empty
+    // (`foo=""' / `export baz=' -> `declare -x foo=""'); the unset/invisible
+    // case (`declare x' / `export bar') is handled by the branch above.
     decl += "=" + declare_quote(v.value);
   }
   std::printf("%s\n", decl.c_str());
@@ -2242,9 +2245,8 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     // its current value/visibility.
     bool fresh_var = fresh_local || sh.vars.find(aname) == sh.vars.end();
     Variable &v = sh.vars[aname];
-    if (fresh_var && eq == std::string::npos && !nameref &&
-        v.kind == VarKind::Scalar)
-      v.invisible = true;
+    if (fresh_var && eq == std::string::npos && v.kind == VarKind::Scalar)
+      v.invisible = true;  // includes a targetless `declare -n foo' (unset nameref)
     if (readonly) v.readonly = true;
     if (exported) v.exported = true;
     if (integer) v.integer = true;

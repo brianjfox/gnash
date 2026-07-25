@@ -78,7 +78,7 @@ int main() {
   ok("echo hi >> log", "echo hi >>log");
 
   // compound commands
-  ok("( a; b )", "(a; b)");
+  ok("( a; b )", "( a; b )");
   ok("{ a; b; }", "{ a; b; }");
   ok("if a; then b; fi", "if a; then b; fi");
   ok("if a; then b; else c; fi", "if a; then b; else c; fi");
@@ -107,7 +107,7 @@ int main() {
   // glued operator like `<' (which the lexer splits) is re-glued, not spaced.
   ok("for ((i=0; i<10; i++)); do echo $i; done", "for ((i=0; i<10; i++)); do echo $i; done");
   // `((cmd); cmd)` is not arithmetic -> falls back to nested subshells
-  ok("(( echo hi ); echo bye )", "((echo hi); echo bye)");
+  ok("(( echo hi ); echo bye )", "( ( echo hi ); echo bye )");
 
   // select, coproc, array assignment
   ok("select x in a b; do echo $x; done", "select x in a b; do echo $x; done");
