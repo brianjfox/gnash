@@ -27,6 +27,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "gnash/core/builtins.hpp"
 #include "gnash/core/expand.hpp"
 #include "gnash/glob.hpp"
 #include "strmatch.h"
@@ -605,6 +606,10 @@ struct Interp {
     if (c == "setenv") { if (a.size() >= 3) { setenv(a[1].c_str(), a[2].c_str(), 1); sh.set_exported(a[1], a[2]); } else if (a.size() == 2) { setenv(a[1].c_str(), "", 1); sh.set_exported(a[1], ""); } return 0; }
     if (c == "unsetenv") { for (size_t i = 1; i < a.size(); i++) { unsetenv(a[i].c_str()); sh.unset(a[i]); } return 0; }
     if (c == "unset") { for (size_t i = 1; i < a.size(); i++) sh.csh_vars.erase(a[i]); return 0; }
+    // `personality' is a gnash pseudo-builtin available in every persona (it is
+    // how a csh/tcsh session switches back or queries its current mode); route
+    // it through the shared dispatcher.
+    if (c == "personality") { int st = 0; run_builtin(sh, a, &st); return st; }
     if (c == "cd" || c == "chdir") { std::string d = a.size() > 1 ? a[1] : var_str("home"); if (chdir(d.c_str()) != 0) { std::fprintf(stderr, "%s: Can't change to \"%s\".\n", sh.shell_name.c_str(), d.c_str()); return 1; } char b[4096]; if (getcwd(b, sizeof b)) sh.csh_vars["cwd"] = {b}; return 0; }
     if (c == "exit") { exiting = true; exit_code = a.size() > 1 ? (int)eval_arith(a[1]) : status; return exit_code; }
     if (c == "source") { if (a.size() > 1) { std::FILE *f = std::fopen(a[1].c_str(), "r"); if (f) { std::string body; char b[4096]; size_t n; while ((n = std::fread(b, 1, sizeof b, f)) > 0) body.append(b, n); std::fclose(f); Parser pr(body); run_block(pr.parse_block({})); } } return 0; }
@@ -692,7 +697,8 @@ struct Interp {
         "echo", "set", "@", "setenv", "unsetenv", "unset", "cd", "chdir", "exit",
         "source", "alias", "unalias", "rehash", "unhash", "hashstat", "limit",
         "unlimit", "nice", "onintr", "notify", "history", "bindkey", "complete",
-        "uncomplete", "umask", "stty", "ttyctl", "sched", "settc", "setty"};
+        "uncomplete", "umask", "stty", "ttyctl", "sched", "settc", "setty",
+        "personality"};
     return b.count(c) != 0;
   }
   void apply_redirs(const std::vector<Redir> &rs) {
