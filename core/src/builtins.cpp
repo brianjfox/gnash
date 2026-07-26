@@ -1357,10 +1357,15 @@ bool set_o_option(Shell &sh, const std::string &o, bool on) {
   else if (o == "monitor") sh.opt_monitor = on;
   else if (o == "privileged") sh.opt_privileged = on;
   else if (o == "hashall") sh.opt_hashall = on;
+  // `ignoreeof' is backed by $IGNOREEOF: `set -o ignoreeof' seeds it to 10 and
+  // `set +o' unsets it, while the option's reported state tracks whether the
+  // variable is set (so a direct `IGNOREEOF=n' also turns it on) -- matching
+  // bash's binding.
+  else if (o == "ignoreeof") { if (on) sh.set("IGNOREEOF", "10"); else sh.unset("IGNOREEOF"); }
   // Valid bash `set -o' names whose behavior is unimplemented: accept as no-ops
   // (a script may set them; erroring would diverge from bash, which knows them).
   else if (o == "allexport" || o == "braceexpand" ||
-           o == "ignoreeof" || o == "interactive-comments" || o == "nolog" ||
+           o == "interactive-comments" || o == "nolog" ||
            o == "notify" || o == "onecmd")
     ;  // no-op
   else return false;
@@ -1380,7 +1385,7 @@ std::vector<std::pair<std::string, bool>> set_option_states(Shell &sh) {
       {"errexit", sh.opt_errexit},
       {"errtrace", sh.opt_functrace}, {"functrace", sh.opt_functrace},
       {"hashall", sh.opt_hashall}, {"histexpand", sh.opt_histexpand},
-      {"history", sh.opt_history}, {"ignoreeof", false},
+      {"history", sh.opt_history}, {"ignoreeof", sh.is_set("IGNOREEOF")},
       {"interactive-comments", true}, {"keyword", sh.opt_keyword},
       {"monitor", sh.job_control || sh.opt_monitor}, {"noclobber", sh.opt_noclobber},
       {"noexec", sh.opt_noexec}, {"noglob", sh.opt_noglob},
@@ -3540,7 +3545,11 @@ int bi_shopt(Shell &sh, const std::vector<std::string> &argv) {
       }
       if (set_s || unset_u) set_o_option(sh, n, set_s);
       else if (quiet_q) { if (!cur) st = 1; }
-      else show_o(n, cur);
+      // A named `shopt -o NAME' query prints through the shopt path, which pads
+      // the option name to width 20 -- unlike the `shopt -o'/`set -o' full
+      // listing (width 15).  bash preserves this difference.
+      else if (print_p) std::printf("set %co %s\n", cur ? '-' : '+', n.c_str());
+      else std::printf("%-20s\t%s\n", n.c_str(), cur ? "on" : "off");
     }
     return st;
   }
