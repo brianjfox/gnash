@@ -296,6 +296,15 @@ source /tmp/gnrx3.$$; rm -f /tmp/gnrx3.$$'
   'echo " A B " | { read; echo "[$REPLY]"; }'
   # exec redirections are permanent in the current shell
   'echo file-line > /tmp/gnash_exec_$$; exec < /tmp/gnash_exec_$$; read v; echo "[$v]"; rm -f /tmp/gnash_exec_$$'
+  # bare `>&file'"'"' redirects BOTH stdout and stderr to the file (= `&>file'"'"'),
+  # not an fd dup: both streams land in the file.  Regression for the batch95
+  # ambiguous-redirect check that wrongly rejected the filename form (#313).
+  '{ echo out; echo err >&2; } >&/tmp/gnash_rboth_$$; cat /tmp/gnash_rboth_$$; rm -f /tmp/gnash_rboth_$$'
+  'echo discarded >&/dev/null; echo kept'
+  # an explicit source fd (`2>&file'"'"') or an input dup (`<&file'"'"') with a
+  # non-fd word stays an ambiguous redirect (rc 1, the command does not run).
+  'echo hi 2>&/dev/null; echo "rc=$?"'
+  'cat <&/dev/null; echo "rc=$?"'
   # printf: octal/hex escapes in the format string; %q of nonprintable bytes
   'LC_ALL=C printf "%s\n" "$(printf "a\101b")"'
   'printf "x\11y\n" | cat -v'
