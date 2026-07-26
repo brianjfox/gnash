@@ -1810,6 +1810,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
   bool capcase = false;               // -c capitalize-first attribute
   bool funcs = false, funcnames = false;  // -f (definitions) / -F (names)
   bool fp = false;                        // -p (display reproducibly)
+  bool force_inherit = false;             // -I: inherit a surrounding value/attrs
   size_t i = 1;
   // `+X' flags remove an attribute rather than adding it (`typeset +n foo').
   bool rm_integer = false, rm_readonly = false, rm_exported = false;
@@ -1857,6 +1858,10 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
           case 'u': (add ? ucase : rm_ucase) = true; break;
           case 'c': (add ? capcase : rm_capcase) = true; break;
           case 'p': fp = true; break;
+          // `-I': inherit the value and attributes of a surrounding variable of
+          // the same name for this local, as `shopt -s localvar_inherit' does
+          // globally.
+          case 'I': force_inherit = true; break;
           default: break;
         }
       }
@@ -2118,7 +2123,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
         for (auto &e : sh.local_stack.back())
           if (e.first == name) { fresh_local = false; break; }  // a re-declaration
       }
-      if (sh.make_local(name)) inherited_local = true;
+      if (sh.make_local(name, force_inherit)) inherited_local = true;
     }
     // An array cannot be switched between indexed and associative in place; bash
     // rejects the redeclaration and leaves the variable unchanged.
