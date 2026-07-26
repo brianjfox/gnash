@@ -144,11 +144,12 @@ class Shell {
   size_t getopt_charidx = 1;
   std::string getopt_curarg;
   int getopt_optind = 0;
-  // Save the outer binding and create a fresh local.  Returns true when
-  // `shopt -s localvar_inherit' made the local inherit the enclosing value and
-  // attributes instead of starting unset (the caller then skips the usual
-  // declared-but-unset marking).
-  bool make_local(const std::string &n);
+  // Save the outer binding and create a fresh local.  Returns true when the
+  // local inherited the enclosing value and attributes instead of starting
+  // unset (the caller then skips the usual declared-but-unset marking) --
+  // either because `shopt -s localvar_inherit' is set or because INHERIT_FORCE
+  // (the declare/local `-I' flag) was passed.
+  bool make_local(const std::string &n, bool inherit_force = false);
   bool in_function() const { return !local_stack.empty(); }
   std::vector<std::vector<std::pair<std::string, std::optional<Variable>>>> local_stack;
   // Per-scope saved getopt state, set when that scope localizes OPTIND.

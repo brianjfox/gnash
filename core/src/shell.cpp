@@ -972,21 +972,22 @@ void Shell::pop_scope() {
   }
 }
 
-bool Shell::make_local(const std::string &n) {
+bool Shell::make_local(const std::string &n, bool inherit_force) {
   if (local_stack.empty()) return false;  // `local' outside a function: no-op scope
   auto &scope = local_stack.back();
   for (auto &e : scope)
     if (e.first == n) return false;  // already made local in this scope
   auto it = vars.find(n);
   scope.emplace_back(n, it == vars.end() ? std::nullopt : std::optional<Variable>(it->second));
-  // Under `shopt -s localvar_inherit' a fresh local inherits the value and
-  // attributes of the nearest enclosing variable of the same name rather than
-  // starting unset (bash); a later `=value' on the local overrides the value.
-  // The enclosing binding is still live in `vars[n]', so inheriting just means
-  // leaving it in place.  (A readonly enclosing global is rejected before we
-  // reach here, so an inherited copy is always assignable.)
+  // A fresh local inherits the value and attributes of the nearest enclosing
+  // variable of the same name rather than starting unset when `-I' was given or
+  // `shopt -s localvar_inherit' is set (bash); a later `=value' on the local
+  // overrides the value.  The enclosing binding is still live in `vars[n]', so
+  // inheriting just means leaving it in place.  (A readonly enclosing global is
+  // rejected before we reach here, so an inherited copy is always assignable.)
   auto liv = shopt_opts.find("localvar_inherit");
-  bool inherit = it != vars.end() && liv != shopt_opts.end() && liv->second;
+  bool shopt_on = liv != shopt_opts.end() && liv->second;
+  bool inherit = it != vars.end() && (inherit_force || shopt_on);
   if (!inherit) vars[n] = Variable{};  // fresh empty local
   // Localizing OPTIND saves and resets the getopts scan state (bash restores
   // it when the function returns).
