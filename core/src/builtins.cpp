@@ -2084,6 +2084,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
       }
     }
     bool fresh_local = false;  // a genuinely new local created by this `local'
+    bool inherited_local = false;  // localvar_inherit copied an enclosing value
     if (local && !global) {
       // bash disallows a local copy of a readonly GLOBAL variable
       // (make_local_variable in variables.c): `readonly x; f(){ local x=1; }'
@@ -2117,7 +2118,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
         for (auto &e : sh.local_stack.back())
           if (e.first == name) { fresh_local = false; break; }  // a re-declaration
       }
-      sh.make_local(name);
+      if (sh.make_local(name)) inherited_local = true;
     }
     // An array cannot be switched between indexed and associative in place; bash
     // rejects the redeclaration and leaves the variable unchanged.
@@ -2325,7 +2326,9 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     // its current value/visibility.
     bool fresh_var = fresh_local || sh.vars.find(aname) == sh.vars.end();
     Variable &v = sh.vars[aname];
-    if (fresh_var && eq == std::string::npos && v.kind == VarKind::Scalar)
+    // A localvar_inherit'd local already holds the enclosing value, so it stays
+    // visible; only a genuinely empty fresh scalar is marked declared-but-unset.
+    if (fresh_var && !inherited_local && eq == std::string::npos && v.kind == VarKind::Scalar)
       v.invisible = true;  // includes a targetless `declare -n foo' (unset nameref)
     if (readonly) v.readonly = true;
     if (exported) v.exported = true;
