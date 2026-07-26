@@ -1330,14 +1330,18 @@ int Executor::run_simple(const SimpleCommand *c) {
     undo_temp();
   } else if ((apply_temp(), run_builtin(sh_, argv, &status))) {
     // A preceding `VAR=val builtin' applies to the builtin (e.g. IFS=, read),
-    // then is restored.  Two exceptions keep it permanent: the assignment
-    // builtins `export'/`readonly' (and `declare -x', which exports too) always
-    // do, and in posix mode so do all the POSIX special builtins.
+    // then is restored.  It keeps effect permanently when the builtin makes the
+    // variable readonly or exported: `export'/`readonly' always do, `declare'/
+    // `typeset' when given `-r' (readonly) or `-x' (export) -- a temp-env var so
+    // marked is promoted to a real, still-exported variable (`x=4 declare -r x'
+    // -> `declare -rx x="4"'), where a plain `-i' does not persist.  In posix
+    // mode all the POSIX special builtins persist too.
     builtin = true;
     bool persist = argv[0] == "export" || argv[0] == "readonly";
     if (!persist && (argv[0] == "declare" || argv[0] == "typeset")) {
       for (size_t k = 1; k < argv.size() && argv[k].size() > 1 && argv[k][0] == '-'; k++)
-        if (argv[k].find('x') != std::string::npos) { persist = true; break; }
+        if (argv[k].find('x') != std::string::npos ||
+            argv[k].find('r') != std::string::npos) { persist = true; break; }
     }
     if (!persist && sh_.opt_posix) {
       static const std::set<std::string> kSpecial = {
