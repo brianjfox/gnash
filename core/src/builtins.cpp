@@ -2316,7 +2316,17 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
             continue;
           }
         }
-        if (!sh.set(name, val)) ret = 1;  // e.g. assignment to a readonly var
+        // A scalar value assigned to a name that is already an array targets
+        // element 0 (`declare a=0' on an existing array a sets a[0], as a plain
+        // `a=0' does); Shell::set would otherwise write only the scalar shadow,
+        // leaving `declare -p' showing an empty array.
+        std::string atgt = sh.deref(name);
+        auto ait = sh.vars.find(atgt);
+        if (ait != sh.vars.end() && (ait->second.kind == VarKind::Indexed ||
+                                     ait->second.kind == VarKind::Assoc))
+          sh.array_set(atgt, "0", val);
+        else if (!sh.set(name, val))
+          ret = 1;  // e.g. assignment to a readonly var
       }
     }
     // Applying an attribute to an existing nameref (without a `-n'/`+n' on this
