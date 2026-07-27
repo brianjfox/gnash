@@ -515,6 +515,12 @@ int main(int argc, char **argv) {
     std::string cmd = it->second;
     sh.traps.erase(it);
     sh.exiting = false;
+    // If `exit' fired inside a function, restore that call context so the trap
+    // sees $FUNCNAME/BASH_SOURCE as bash does.
+    if (sh.have_exit_frames) {
+      sh.src_frames = sh.exit_src_frames;
+      sh.sync_source_arrays();
+    }
     sh.run_string(cmd);
   }
 

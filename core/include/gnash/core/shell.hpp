@@ -193,6 +193,11 @@ class Shell {
   void push_src_frame(const std::string &name, const std::string &source, int line, bool is_func);
   void pop_src_frame();
   void sync_source_arrays();  // rewrite BASH_SOURCE/FUNCNAME/BASH_LINENO
+  // The call-frame stack captured when `exit' is invoked inside a function, so
+  // the EXIT trap runs with that context ($FUNCNAME etc.) still visible as bash
+  // does, even though the frames have unwound by the time the trap fires.
+  std::vector<SrcFrame> exit_src_frames;
+  bool have_exit_frames = false;
 
   // --- traps -------------------------------------------------------------
   std::map<std::string, std::string> traps;  // signal name (e.g. "EXIT") -> command
