@@ -1920,9 +1920,19 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
         }
       }
     } else {
+      // `local -p NAME' reports only variables local to the CURRENT function
+      // frame; a NAME visible only through an enclosing scope (e.g. one made
+      // readonly at a previous scope) is `not found', matching bash.  This is
+      // the `local' builtin specifically -- a `declare -p NAME' in a function
+      // (also force_local) still finds enclosing/global variables.
+      bool local_p = argv[0] == "local";
+      std::set<std::string> cur_locals;
+      if (local_p && !sh.local_stack.empty())
+        for (const auto &pr : sh.local_stack.back()) cur_locals.insert(pr.first);
       for (; i < argv.size(); i++) {
         auto it = sh.vars.find(argv[i]);
-        if (it == sh.vars.end()) {
+        if (it == sh.vars.end() ||
+            (local_p && !cur_locals.count(argv[i]))) {
           std::fprintf(stderr, "%s%s: %s: not found\n", sh.err_prefix().c_str(),
                        argv[0].c_str(), argv[i].c_str());
           st = 1;
