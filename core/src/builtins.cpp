@@ -4886,6 +4886,9 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
     sh.exiting = true;
     sh.exit_status = argv.size() > 1 ? (std::atoi(argv[1].c_str()) & 0xff) : sh.last_status;
     st = sh.exit_status;
+    // `exit' inside a function runs the EXIT trap with that function's frame
+    // still active ($FUNCNAME), so snapshot the call stack before it unwinds.
+    if (sh.in_function()) { sh.exit_src_frames = sh.src_frames; sh.have_exit_frames = true; }
   } else if (cmd == "return") {
     // `return' is only meaningful in a function or a sourced script; elsewhere
     // it is an error and must not unwind the current input (bash).

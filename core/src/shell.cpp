@@ -1209,7 +1209,20 @@ void Shell::unset(const std::string &n_in, bool force, bool noref) {
   std::string n = (force || noref) ? n_in : deref(n_in);
   if (n == "POSIXLY_CORRECT") opt_posix = false;  // unsetting leaves POSIX mode
   auto it = vars.find(n);
-  if (it != vars.end() && (force || !it->second.readonly)) vars.erase(it);
+  if (it != vars.end() && (force || !it->second.readonly)) {
+    // Unsetting a variable that is local to the CURRENT function scope leaves
+    // the (now unset) local binding in place rather than removing it, so it
+    // keeps shadowing any enclosing value and a later assignment reuses the
+    // local -- `local v=x; unset v; declare -p v' still reports `declare -- v'
+    // (bash).  A forced unset (getopts clearing OPTARG) and a non-local target
+    // are removed outright.
+    bool cur_local = false;
+    if (!force && !local_stack.empty())
+      for (auto &e : local_stack.back())
+        if (e.first == n) { cur_local = true; break; }
+    if (cur_local) { Variable v; v.invisible = true; vars[n] = v; }
+    else vars.erase(it);
+  }
 }
 
 std::string Shell::ifs() const {
