@@ -54,6 +54,19 @@ check "emulate absent in bash mode" "127" bash \
 check "-c csh runs csh syntax" "b" bash \
   'personality csh -c '\''set x = (a b c); echo $x[2]'\'''
 
+# an exported variable set under one personality is visible under another;
+# csh reads the shared shell environment, not just the process environ
+check "exported var crosses bash->csh" "frombash" bash \
+  'export FOO=frombash; personality csh -c '\''echo $FOO'\'''
+check "exported var crosses zsh->csh" "fromzsh" zsh \
+  'export ZED=fromzsh; personality csh -c '\''echo $ZED'\'''
+# csh setenv is visible back in bash (the reverse direction still works)
+check "csh setenv crosses csh->bash" "fromcsh" csh \
+  'setenv BAZ fromcsh; personality bash -c '\''echo $BAZ'\'''
+# a non-exported variable is not an environment variable and does not cross
+check "non-exported var does not cross to csh" "0" bash \
+  'PLAIN=local; personality csh -c '\''echo $?PLAIN'\'''
+
 # an unknown personality name is rejected
 check "unknown name is an error" "1" bash \
   'personality nonesuch >/dev/null 2>&1; echo $?'
