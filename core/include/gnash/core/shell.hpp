@@ -154,6 +154,10 @@ class Shell {
   std::vector<std::vector<std::pair<std::string, std::optional<Variable>>>> local_stack;
   // Per-scope saved getopt state, set when that scope localizes OPTIND.
   std::vector<std::optional<std::tuple<size_t, std::string, int>>> getopt_scope_saves;
+  // Names currently bound by a `VAR=val cmd' temporary environment.  make_local
+  // inherits such a variable's value/attributes when a called function localizes
+  // it (`v=t f; f(){ local v; }' -> the local is `v=t', exported), matching bash.
+  std::set<std::string> temp_env_active;
 
   // --- shell state for builtins -----------------------------------------
   bool login_shell = false;                  // logout only works in a login shell

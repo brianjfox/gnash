@@ -987,8 +987,20 @@ bool Shell::make_local(const std::string &n, bool inherit_force) {
   // rejected before we reach here, so an inherited copy is always assignable.)
   auto liv = shopt_opts.find("localvar_inherit");
   bool shopt_on = liv != shopt_opts.end() && liv->second;
-  bool inherit = it != vars.end() && (inherit_force || shopt_on);
-  if (!inherit) vars[n] = Variable{};  // fresh empty local
+  // A variable passed in the temporary environment (`v=t f') is inherited by a
+  // `local'/`typeset' of the same name inside the called function -- value and
+  // (exported) attributes -- unconditionally, like `-I'/localvar_inherit do.
+  bool inherit = it != vars.end() &&
+                 (inherit_force || shopt_on || temp_env_active.count(n) != 0);
+  if (!inherit) {
+    // A local of an exported variable stays exported even without inheriting
+    // its value, so the environment the function passes to child processes is
+    // unchanged (bash): `export V; f(){ local V; }' keeps V in the environment,
+    // and a temp-env `V=x f' makes the local `V' exported too.
+    bool was_exported = it != vars.end() && it->second.exported;
+    vars[n] = Variable{};  // fresh (unset) local
+    vars[n].exported = was_exported;
+  }
   // Localizing OPTIND saves and resets the getopts scan state (bash restores
   // it when the function returns).
   if (n == "OPTIND" && !getopt_scope_saves.empty() && !getopt_scope_saves.back()) {

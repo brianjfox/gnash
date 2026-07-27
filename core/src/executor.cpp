@@ -1204,6 +1204,7 @@ int Executor::run_simple(const SimpleCommand *c) {
   std::vector<std::pair<std::string, std::optional<Variable>>> restore;
   auto apply_temp = [&]() {
     for (const auto &a : assigns) {
+      sh_.temp_env_active.insert(a.first);  // let a called function's `local' inherit it
       auto it = sh_.vars.find(a.first);
       restore.push_back({a.first,
                          it == sh_.vars.end() ? std::nullopt : std::optional<Variable>(it->second)});
@@ -1228,6 +1229,7 @@ int Executor::run_simple(const SimpleCommand *c) {
       else sh_.vars.erase(it->first);
     }
     restore.clear();
+    for (const auto &a : assigns) sh_.temp_env_active.erase(a.first);
   };
 
   int status = 0;
