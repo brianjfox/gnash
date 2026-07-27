@@ -308,17 +308,30 @@ struct Interp {
     auto it = sh.csh_vars.find(n);
     return it == sh.csh_vars.end() ? nullptr : &it->second;
   }
+  // An environment variable as csh sees it: the shared shell's exported
+  // variables come first, so an `export FOO=bar' run under the bash/zsh/ksh
+  // personalities (which store it only in the shell table, never touching the
+  // process environment via libc setenv) is visible here.  The process
+  // environment is the fallback.  Returns false when NAME is unset.
+  bool env_get(const std::string &n, std::string &out) const {
+    auto it = sh.vars.find(n);
+    if (it != sh.vars.end() && it->second.exported) { out = it->second.value; return true; }
+    const char *e = std::getenv(n.c_str());
+    if (e) { out = e; return true; }
+    return false;
+  }
   std::string var_str(const std::string &n) {  // first-word/scalar view
     if (n == "status" || n == "?") return std::to_string(status);
     if (n == "0") return sh.arg0;
     auto *v = var_ptr(n);
     if (v) { std::string r; for (size_t i = 0; i < v->size(); i++) { if (i) r += ' '; r += (*v)[i]; } return r; }
-    const char *e = std::getenv(n.c_str());
-    return e ? e : "";
+    std::string e;
+    return env_get(n, e) ? e : "";
   }
   bool var_set(const std::string &n) {
     if (n == "status" || n == "?" || n == "0") return true;
-    return var_ptr(n) != nullptr || std::getenv(n.c_str()) != nullptr;
+    std::string e;
+    return var_ptr(n) != nullptr || env_get(n, e);
   }
 
   // Expand a word-initial, unquoted tilde: ~, ~/path, ~user, ~user/path.
@@ -442,7 +455,7 @@ struct Interp {
     else if (v) vals = *v;
     else if (name == "status" || name == "?") vals = {std::to_string(status)};
     else if (name == "0") vals = {sh.arg0};
-    else { const char *e = std::getenv(name.c_str()); if (e) vals = {e}; }
+    else { std::string e; if (env_get(name, e)) vals = {e}; }
 
     std::vector<std::string> result;
     if (!index.empty()) {
