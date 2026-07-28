@@ -1007,6 +1007,11 @@ int Executor::run_simple(const SimpleCommand *c) {
   } psg{sh_, sh_.procsubs.size()};
   std::vector<std::pair<std::string, std::string>> assigns;
   std::vector<std::string> argv;
+  // Pre-formatted `set -x' trace lines for the assignment words, in source
+  // order: a scalar assignment as NAME=<quoted-value> (or NAME+=...), an array
+  // compound assignment as its verbatim source word, so xtrace matches bash even
+  // for values needing single- or ANSI-C quoting.  Only built when xtrace is on.
+  std::vector<std::string> xtrace_lines;
   bool prefix = true;
   // Track command substitutions in the assignment RHS: a pure-assignment
   // command takes the status of the last one (bash), or 0 if there were none.
@@ -1022,6 +1027,10 @@ int Executor::run_simple(const SimpleCommand *c) {
       Assign a;
       parse_assign(w.text, a);
       if (a.sub || a.is_array) {
+        // NOTE: an array/element assignment is not xtrace'd here -- bash prints it
+        // via its compound-assignment word-list deparser (each element expanded
+        // then re-quoted, e.g. source `$'\t'' -> `'<tab>''), which gnash does not
+        // reproduce; tracing the verbatim source word would not match.  Deferred.
         apply_array_assign(sh_, ex, a);  // array element / literal: applied now
       } else {
         auto vit = sh_.vars.find(a.name);
@@ -1042,6 +1051,9 @@ int Executor::run_simple(const SimpleCommand *c) {
           sh_.set(pa.first, pa.second);
         }
         std::string v = ex.expand_assignment(a.value);
+        // The traced value is the expanded RHS as written (for `+=' the appended
+        // part, not the concatenation); overwritten with the result for integers.
+        std::string xtrace_rhs = v;
         // Only the old value is needed for `+=' / integer arithmetic; reading it
         // for a plain assignment would spuriously resolve a circular nameref.
         std::string cur = (integer || a.append)
@@ -1060,9 +1072,14 @@ int Executor::run_simple(const SimpleCommand *c) {
           if (ok && a.append) rv = eval_arith_msg(sh_, cur, "", &ok) + rv;
           if (!ok) { sh_.arith_error = true; break; }
           v = std::to_string(rv);
+          xtrace_rhs = v;
         } else if (a.append) {
           v = cur + v;
         }
+        if (sh_.opt_xtrace)
+          xtrace_lines.push_back(a.name + (a.append ? "+=" : "=") +
+                                 (xtrace_rhs.empty() ? std::string()
+                                                     : xtrace_quote_word(xtrace_rhs)));
         if (is_arr) sh_.array_set(a.name, "0", v);
         else assigns.emplace_back(a.name, v);
       }
@@ -1094,15 +1111,17 @@ int Executor::run_simple(const SimpleCommand *c) {
     Expander xex(sh_);
     std::string xt_prefix = xex.expand_no_split(expand_prompt(sh_, ps4), false, false);
     // bash traces each temporary/standalone assignment on its own line, then the
-    // command word list (if any) on a separate line.
-    for (const auto &a : assigns)
-      std::fprintf(stderr, "%s%s=%s\n", xt_prefix.c_str(), a.first.c_str(), a.second.c_str());
+    // command word list (if any) on a separate line.  Assignment lines were
+    // pre-formatted in source order (scalar values and command words are quoted
+    // as bash's sh_single_quote/ANSI-C xtrace conventions require).
+    for (const auto &a : xtrace_lines)
+      std::fprintf(stderr, "%s%s\n", xt_prefix.c_str(), a.c_str());
     if (!argv.empty()) {
       std::string line = xt_prefix;
       bool first = true;
       for (const auto &a : argv) {
         if (!first) line += ' ';
-        line += a;
+        line += xtrace_quote_word(a);
         first = false;
       }
       std::fprintf(stderr, "%s\n", line.c_str());

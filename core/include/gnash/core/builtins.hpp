@@ -37,6 +37,10 @@ std::string declare_var_string(const std::string &name, const Variable &v,
                                const std::string &cmd = "declare",
                                bool posix = false);
 
+// Quote WORD as bash's `set -x' (xtrace) does: '' for empty, $'...' for a word
+// with non-printable bytes, '...' for one with shell metacharacters, else bare.
+std::string xtrace_quote_word(const std::string &w);
+
 }  // namespace gnash::core
 
 #endif  // GNASH_CORE_BUILTINS_HPP
