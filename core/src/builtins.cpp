@@ -990,17 +990,25 @@ int bi_mapfile(Shell &sh, const std::vector<std::string> &argv) {
   return 0;
 }
 
+// `export' delegates its assignment/array handling to `declare' (they share
+// bash's declare_internal); declared here as bi_declare is defined further down.
+int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local,
+               bool force_ro);
+
 int bi_export(Shell &sh, const std::vector<std::string> &argv) {
   bool funcs = false;
+  char array_flag = 0;  // `-a' / `-A': force an indexed/associative array
   int st = 0;
   size_t i = 1;
-  // Parse leading options: `export' takes only -f/-n/-p (and `--').
+  // Parse leading options: `export' takes -f/-n/-p and, like bash's export
+  // (which is `declare -x' under the hood), the array flags -a/-A (and `--').
   for (; i < argv.size(); i++) {
     const std::string &a = argv[i];
     if (a == "--") { i++; break; }
     if (a.size() < 2 || a[0] != '-') break;
     for (size_t k = 1; k < a.size(); k++) {
       if (a[k] == 'f') funcs = true;
+      else if (a[k] == 'a' || a[k] == 'A') array_flag = a[k];
       else if (a[k] == 'n' || a[k] == 'p') { /* unmodeled here / no-op */ }
       else {
         std::fprintf(stderr, "%sexport: -%c: invalid option\n", sh.err_prefix().c_str(), a[k]);
@@ -1040,21 +1048,21 @@ int bi_export(Shell &sh, const std::vector<std::string> &argv) {
       st = 1;
       continue;
     }
-    if (eq != std::string::npos) {
-      // `export name+=value' appends to the current value.
-      bool append = eq > 0 && a[eq - 1] == '+';
-      std::string nm = a.substr(0, append ? eq - 1 : eq);
-      std::string val = a.substr(eq + 1);
-      auto exv = sh.vars.find(nm);
-      if (exv != sh.vars.end() && exv->second.integer) {
-        bool ok = true;
-        long long rhs = eval_arith(sh, val, &ok);
-        long long base = append ? eval_arith(sh, sh.get(nm), &ok) : 0;
-        val = std::to_string(base + rhs);
-      } else if (append) {
-        val = sh.get(nm) + val;
-      }
-      sh.set_exported(nm, val);
+    // An assignment (`export NAME=VALUE'), or any name under `-a'/`-A', is
+    // handled exactly as `declare -xg' on the GLOBAL scope: export marks a
+    // variable exported without ever creating a function-local, applies the
+    // array attribute, evaluates integer/`+=' assignments, and parses a `(...)'
+    // value as declare would (a compound array literal only when `-a'/`-A' is
+    // given or the target is already an array).  Delegating keeps export and
+    // declare in lockstep, as bash does (both go through declare_internal).  The
+    // builtin name stays "export" so diagnostics and the quoted-compound rule
+    // (readonly/export keep a quoted `(...)' literal without -a) are correct.
+    if (eq != std::string::npos || array_flag) {
+      std::string opt = "-xg";
+      if (array_flag) opt.push_back(array_flag);
+      std::vector<std::string> d = {"export", opt, a};
+      int r = bi_declare(sh, d, false, false);
+      if (r) st = r;
     } else
       sh.export_name(a);
   }
@@ -2175,14 +2183,20 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
       std::string val = a.substr(eq + 1);
       bool arraylit = val.size() >= 2 && val.front() == '(' && val.back() == ')';
       bool subscript = nend != std::string::npos && a[nend] == '[';
-      // A quoted compound value (`declare -a d='(...)'`) is an array literal
-      // when the target is an array: unwrap one layer of matched outer quotes so
-      // the parentheses are recognized and the elements expanded.  Any subscript
-      // is dropped -- the compound replaces the whole array, as in bash.
+      // A quoted compound value (`declare -a d='(...)'`) is an array literal:
+      // unwrap one layer of matched outer quotes so the parentheses are
+      // recognized and the elements expanded.  Any subscript is dropped -- the
+      // compound replaces the whole array, as in bash.  But WHICH builtins do
+      // this differs: `declare'/`typeset' reparse a quoted compound against an
+      // existing array even without `-a', whereas `readonly'/`export' do so ONLY
+      // when `-a'/`-A' is explicit -- otherwise the parentheses are a literal
+      // scalar value (element 0), matching bash's declare.def.
       auto cur = sh.vars.find(name);
       bool arrayvar = cur != sh.vars.end() &&
           (cur->second.kind == VarKind::Indexed || cur->second.kind == VarKind::Assoc);
-      if (!arraylit && arrayvar && val.size() >= 4 &&
+      bool unwrap_quoted = mk_array || mk_assoc ||
+          (arrayvar && (argv[0] == "declare" || argv[0] == "typeset"));
+      if (!arraylit && unwrap_quoted && val.size() >= 4 &&
           (val.front() == '\'' || val.front() == '"') && val.back() == val.front() &&
           val[1] == '(' && val[val.size() - 2] == ')') {
         apply_assignment_word(sh, name + (append ? "+=" : "=") +
@@ -2333,9 +2347,19 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
         std::string atgt = sh.deref(name);
         auto ait = sh.vars.find(atgt);
         if (ait != sh.vars.end() && (ait->second.kind == VarKind::Indexed ||
-                                     ait->second.kind == VarKind::Assoc))
-          sh.array_set(atgt, "0", val);
-        else if (!sh.set(name, val))
+                                     ait->second.kind == VarKind::Assoc)) {
+          // array_set silently ignores a readonly array, so report the failure
+          // here the way Shell::set does for a readonly scalar -- bare, with no
+          // builtin prefix (the declare/typeset/local prefix case was handled
+          // above, so this bare form is reached only by readonly/export).
+          if (ait->second.readonly) {
+            std::fprintf(stderr, "%s%s: readonly variable\n", sh.err_prefix().c_str(),
+                         name.c_str());
+            ret = 1;
+          } else {
+            sh.array_set(atgt, "0", val);
+          }
+        } else if (!sh.set(name, val))
           ret = 1;  // e.g. assignment to a readonly var
       }
     }

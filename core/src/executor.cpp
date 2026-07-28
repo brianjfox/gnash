@@ -614,7 +614,8 @@ bool is_assignment_word_text(const std::string &w) {
 }
 
 bool is_assignment_builtin(const std::string &cmd) {
-  return cmd == "declare" || cmd == "typeset" || cmd == "local" || cmd == "readonly";
+  return cmd == "declare" || cmd == "typeset" || cmd == "local" ||
+         cmd == "readonly" || cmd == "export";
 }
 }  // namespace
 
