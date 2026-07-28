@@ -720,6 +720,35 @@ int bi_pwd(Shell &sh, const std::vector<std::string> &argv) {
 }  // namespace (reopened below)
 }  // namespace gnash::core
 namespace gnash::core {
+// bash's xtrace word quoting (xtrace_print_word_list, print_cmd.c): an empty
+// word prints as '', a word with any non-printable byte is ANSI-C quoted
+// ($'...'), one containing a shell metacharacter is single-quoted ('...'), and a
+// plain word is printed as-is.  ANSI-C is tried BEFORE the metacharacter test so
+// a word mixing whitespace and a control byte (` \t\n') renders as $' \t\n'.  `~'
+// and `#' are metacharacters only at the start of the word.
+std::string xtrace_quote_word(const std::string &w) {
+  if (w.empty()) return "''";
+  if (q_needs_ansic(w)) return q_ansic(w);
+  bool meta = false;
+  for (size_t i = 0; i < w.size() && !meta; i++) {
+    switch (static_cast<unsigned char>(w[i])) {
+      case ' ': case '\t': case '\n': case '\'': case '"': case '\\':
+      case '|': case '&': case ';': case '(': case ')': case '<': case '>':
+      case '!': case '{': case '}': case '*': case '[': case '?': case ']':
+      case '^': case '$': case '`':
+        meta = true; break;
+      case '~': case '#':
+        if (i == 0) meta = true;
+        break;
+      default: break;
+    }
+  }
+  if (!meta) return w;
+  std::string r = "'";
+  for (char c : w) { if (c == '\'') r += "'\\''"; else r += c; }
+  return r + "'";
+}
+
 std::vector<std::string> Shell::dirstack() const {
   std::vector<std::string> v;
   std::string pwd = get("PWD");
