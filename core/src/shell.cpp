@@ -673,6 +673,16 @@ void Shell::array_set(const std::string &n_in, const std::string &sub, const std
     hashed[sub] = full;
     return;
   }
+  // DIRSTACK is the live directory stack: DIRSTACK[N]=dir rewrites a stack entry
+  // (index 0 is $PWD, kept implicit; 1.. map to dir_stack[N-1]).  Assigning it
+  // must update the real stack, not create a shadow array that reads ignore.
+  if (n == "DIRSTACK" && !is_zsh()) {
+    bool ok = true;
+    long long k = eval_arith(*this, sub, &ok);
+    if (ok && k >= 1 && k - 1 < static_cast<long long>(dir_stack.size()))
+      dir_stack[k - 1] = val;
+    return;
+  }
   Variable &v = vars[n];
   if (v.readonly) return;
   v.invisible = false;  // an assignment makes a declared-but-unset array visible

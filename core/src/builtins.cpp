@@ -856,7 +856,9 @@ int bi_pushd(Shell &sh, const std::vector<std::string> &argv) {
     std::rotate(v.begin(), v.begin() + idx, v.end());
     if (!no_cd && change_dir(sh, v[0], false, "pushd") != 0) return 1;
     sh.dir_stack.assign(v.begin() + 1, v.end());
-    return bi_dirs(sh, {"dirs"});
+    // A numeric rotation under `-n' manipulates the stack but does not cd and,
+    // unlike `pushd -n dir', prints nothing at all (bash).
+    return no_cd ? 0 : bi_dirs(sh, {"dirs"});
   }
   // A `+'/`-' argument that isn't a numeric index is a malformed rotation count.
   if (a.size() > 1 && (a[1][0] == '+' || a[1][0] == '-')) {
@@ -885,25 +887,30 @@ int bi_pushd(Shell &sh, const std::vector<std::string> &argv) {
 }
 
 int bi_popd(Shell &sh, const std::vector<std::string> &argv) {
-  if (argv.size() > 1 && (argv[1][0] == '+' || argv[1][0] == '-') && argv[1].size() > 1 &&
-      std::isdigit(static_cast<unsigned char>(argv[1][1]))) {
+  // A leading `-n' suppresses the directory change (only the stack is touched);
+  // it does not otherwise change which entry is removed.
+  std::vector<std::string> a(argv.begin(), argv.end());
+  bool no_cd = false;
+  if (a.size() > 1 && a[1] == "-n") { no_cd = true; a.erase(a.begin() + 1); }
+  if (a.size() > 1 && (a[1][0] == '+' || a[1][0] == '-') && a[1].size() > 1 &&
+      std::isdigit(static_cast<unsigned char>(a[1][1]))) {
     std::vector<std::string> v = full_dirstack(sh);
-    int idx = rot_index(argv[1], v.size());
-    if (idx < 0) { std::fprintf(stderr, "%spopd: %s: directory stack index out of range\n", sh.err_prefix().c_str(), argv[1].c_str()); return 1; }
-    if (idx == 0) {  // removing the top: cd to the next entry
+    int idx = rot_index(a[1], v.size());
+    if (idx < 0) { std::fprintf(stderr, "%spopd: %s: directory stack index out of range\n", sh.err_prefix().c_str(), a[1].c_str()); return 1; }
+    if (idx == 0) {  // removing the top: cd to the next entry (unless `-n')
       if (sh.dir_stack.empty()) { std::fprintf(stderr, "%spopd: directory stack empty\n", sh.err_prefix().c_str()); return 1; }
       std::string target = sh.dir_stack.front();
       sh.dir_stack.erase(sh.dir_stack.begin());
-      if (change_dir(sh, target, false, "popd") != 0) return 1;
+      if (!no_cd && change_dir(sh, target, false, "popd") != 0) return 1;
     } else {
       sh.dir_stack.erase(sh.dir_stack.begin() + (idx - 1));
     }
     return bi_dirs(sh, {"dirs"});
   }
-  // A `+'/`-' argument that isn't a numeric index (and isn't the `-n' option).
-  if (argv.size() > 1 && (argv[1][0] == '+' || argv[1][0] == '-') && argv[1] != "-n") {
+  // A `+'/`-' argument that isn't a numeric index is a malformed number.
+  if (a.size() > 1 && (a[1][0] == '+' || a[1][0] == '-')) {
     std::fprintf(stderr, "%spopd: %s: invalid number\n", sh.err_prefix().c_str(),
-                 argv[1].c_str());
+                 a[1].c_str());
     std::fprintf(stderr, "popd: usage: popd [-n] [+N | -N]\n");
     return 2;
   }
@@ -911,9 +918,11 @@ int bi_popd(Shell &sh, const std::vector<std::string> &argv) {
     std::fprintf(stderr, "%spopd: directory stack empty\n", sh.err_prefix().c_str());
     return 1;
   }
+  // Remove the entry that would become the current directory; `popd' cd's to it,
+  // `popd -n' leaves the current directory in place (so it drops the next entry).
   std::string target = sh.dir_stack.front();
   sh.dir_stack.erase(sh.dir_stack.begin());
-  if (change_dir(sh, target, false, "popd") != 0) return 1;
+  if (!no_cd && change_dir(sh, target, false, "popd") != 0) return 1;
   return bi_dirs(sh, {"dirs"});
 }
 
