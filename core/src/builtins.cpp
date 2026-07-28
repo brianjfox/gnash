@@ -2533,6 +2533,17 @@ std::vector<std::string> find_all_in_path(Shell &sh, const std::string &name) {
 //   -P  force a $PATH search, ignoring functions/builtins/keywords
 //   -a  report every location, not just the first
 //   -f  suppress shell-function lookup
+// POSIX special built-ins: in POSIX mode `type' (and `command -V') describe
+// these as "a special shell builtin".  Matches bash's `special_builtin_p' / the
+// `special' attribute in the builtin .def files (which include bash's `source').
+static bool is_special_builtin(const std::string &n) {
+  static const std::set<std::string> kSpecial = {
+      ".",      ":",     "break", "continue", "eval",  "exec",
+      "exit",   "export", "readonly", "return", "set", "shift",
+      "source", "times", "trap",  "unset"};
+  return kSpecial.count(n) != 0;
+}
+
 int bi_type(Shell &sh, const std::vector<std::string> &argv) {
   bool ft = false, fp = false, fP = false, fa = false, ff = false;
   size_t i = 1;
@@ -2557,6 +2568,14 @@ int bi_type(Shell &sh, const std::vector<std::string> &argv) {
     if (!ok) break;
   }
 
+  // `type'/`command -v' report an alias only when aliases would actually be
+  // expanded -- interactive, or `shopt -s expand_aliases' (bash: a non-expanding
+  // alias is invisible to type, so `type al' is "not found").  The `alias'
+  // builtin still lists it; only command identification skips it.
+  bool aliases_on = sh.interactive;
+  auto eit = sh.shopt_opts.find("expand_aliases");
+  if (eit != sh.shopt_opts.end() && eit->second) aliases_on = true;
+
   int st = 0;
   for (; i < argv.size(); i++) {
     const std::string &n = argv[i];
@@ -2573,7 +2592,7 @@ int bi_type(Shell &sh, const std::vector<std::string> &argv) {
     // Ordered candidate locations: keyword, function, builtin, then files.
     struct Loc { char kind; std::string text; };  // a/k/f/b/F
     std::vector<Loc> locs;
-    if (sh.aliases.count(n)) locs.push_back({'a', sh.aliases.at(n)});
+    if (aliases_on && sh.aliases.count(n)) locs.push_back({'a', sh.aliases.at(n)});
     if (is_reserved_word(n)) locs.push_back({'k', {}});
     if (!ff && sh.functions.count(n)) locs.push_back({'f', {}});
     if (is_builtin_name(n)) locs.push_back({'b', {}});
@@ -2582,7 +2601,10 @@ int bi_type(Shell &sh, const std::vector<std::string> &argv) {
     if (locs.empty()) {
       if (!ft && !fp) {
         std::fflush(stdout);  // keep interleaving with prior stdout lines
-        std::fprintf(stderr, "%stype: %s: not found\n", sh.err_prefix().c_str(), n.c_str());
+        // `command -V NAME' invokes this with argv[0] == "command", so the
+        // diagnostic names the invoking builtin (bash: `command: NAME: not found').
+        std::fprintf(stderr, "%s%s: %s: not found\n", sh.err_prefix().c_str(),
+                     argv[0].c_str(), n.c_str());
       }
       st = 1;
       continue;
@@ -2609,7 +2631,10 @@ int bi_type(Shell &sh, const std::vector<std::string> &argv) {
             std::printf("%s is a function\n%s\n", n.c_str(),
                         named_function_string(n, sh.functions[n]).c_str());
             break;
-          case 'b': std::printf("%s is a shell builtin\n", n.c_str()); break;
+          case 'b':
+            std::printf("%s is a %sshell builtin\n", n.c_str(),
+                        (sh.opt_posix && is_special_builtin(n)) ? "special " : "");
+            break;
           case 'F': std::printf("%s is %s\n", n.c_str(), L.text.c_str()); break;
         }
       }
@@ -5265,8 +5290,9 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
       std::fprintf(stderr, "command: usage: command [-pVv] command [arg ...]\n");
       st = 2;
     } else if (desc_V) {
-      // `command -V NAME...' == `type NAME...'.
-      std::vector<std::string> t = {"type"};
+      // `command -V NAME...' == `type NAME...', but a not-found name is reported
+      // against `command' (bi_type uses argv[0] for that diagnostic).
+      std::vector<std::string> t = {"command"};
       t.insert(t.end(), argv.begin() + i, argv.end());
       st = bi_type(sh, t);
     } else if (desc_v) {
