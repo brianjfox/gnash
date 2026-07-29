@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <optional>
 #include <cstdlib>
+#include <clocale>
 #include <cstring>
 #include <ctime>
 #include <fstream>
@@ -3363,6 +3364,12 @@ int bi_help(Shell &sh, const std::vector<std::string> &argv) {
       if (a[k] == 'd') dflag = true;
       else if (a[k] == 's') sflag = true;
       else if (a[k] == 'm') { /* man format: accepted */ }
+      else {
+        std::fflush(stdout);
+        std::fprintf(stderr, "%shelp: -%c: invalid option\n", sh.err_prefix().c_str(), a[k]);
+        std::fprintf(stderr, "help: usage: help [-dms] [pattern ...]\n");
+        return 2;
+      }
     }
   }
   if (i >= argv.size()) {
@@ -3379,31 +3386,74 @@ int bi_help(Shell &sh, const std::vector<std::string> &argv) {
       if (std::strcmp(h.name, "personality") != 0) items.push_back(&h);
     std::sort(items.begin(), items.end(),
               [](const BuiltinHelp *a, const BuiltinHelp *b) { return std::strcmp(a->name, b->name) < 0; });
-    // bash's dispcolumn(): a two-column layout of width 40.  Each cell is a
-    // leading space (`*' if disabled -- never here) then the synopsis; when it
-    // is too long it is truncated and a `>' marks the cut.  The first column is
-    // padded with spaces to the column width; the second is not.
-    // bash's dispcolumn(): two columns of field width 40.  A cell is a leading
-    // marker (space; `*' if disabled -- never here) then the synopsis, cut with
-    // a trailing `>' when too long.  Matching bash byte-for-byte, the first
-    // column shows up to 37 synopsis chars and is padded to 40; the second up
-    // to 35.
-    const size_t kWidth = 40, kCol1 = 37, kCol2 = 36;
+    // bash's help listing (builtins/help.def) is a two-column layout of field
+    // width 40 (default_columns()/2).  Each cell is a leading marker (space, or
+    // `*' if disabled -- never here) then the synopsis, cut with a trailing `>'
+    // when it overflows the field.  bash has two implementations that truncate
+    // ONE column apart, and it picks between them exactly as we must here:
+    //   * single-byte locale  -> dispcolumn():  strncpy + stamp `>'.  Column 1
+    //     truncates once len >= width-3 (showing width-3 chars); column 2 once
+    //     len >= width-4 (showing width-4).
+    //   * multibyte locale     -> wdispcolumn(): places `>' at dispchars   for
+    //     column 1 and dispchars-1 for column 2, where dispchars = min(len,
+    //     width-2), truncating once dispchars >= width-3.  For a synopsis of
+    //     exactly width-3 (e.g. `source [-p path] filename [arguments]', 37)
+    //     this shows one fewer char than the byte path -- the observable
+    //     difference the test's UTF-8 `help --' exercises.
+    // All synopses are pure ASCII, so a byte is one display column throughout.
+    const size_t W = 40;
+    // bash calls setlocale(LC_ALL,"") at startup, so its MB_CUR_MAX reflects the
+    // environment's locale and it picks wdispcolumn() in a UTF-8 locale.  gnash
+    // does not set its locale, so query the environment's LC_CTYPE transiently
+    // (restoring afterwards) to make the same choice without global side effects.
+    bool mb;
+    {
+      std::string saved = std::setlocale(LC_CTYPE, nullptr);
+      std::setlocale(LC_CTYPE, "");
+      mb = MB_CUR_MAX > 1;
+      std::setlocale(LC_CTYPE, saved.c_str());
+    }
     size_t height = (items.size() + 1) / 2;
-    auto cell = [](const std::string &syn, size_t cap) {
-      std::string s = " ";
-      if (syn.size() > cap) s += syn.substr(0, cap) + ">";  // truncated
-      else s += syn;
+    auto cell = [mb](const std::string &syn, int col) {
+      const size_t L = syn.size();
+      std::string s(1, ' ');  // enabled marker; `*' (disabled) never occurs
+      if (mb) {
+        size_t dispchars = std::min(L, W - 2);
+        if (dispchars >= W - 3)  // dispcols (== dispchars+1) >= width-2
+          s += syn.substr(0, dispchars - (col == 0 ? 1 : 2)) + ">";
+        else
+          s += syn;
+      } else {
+        size_t cap = (col == 0) ? W - 3 : W - 4;
+        if (L >= cap) s += syn.substr(0, cap) + ">";
+        else s += syn;
+      }
       return s;
     };
     for (size_t r = 0; r < height; r++) {
-      std::string left = cell(items[r]->synopsis, kCol1);
+      std::string left = cell(items[r]->synopsis, 0);
       if (r + height >= items.size()) { std::printf("%s\n", left.c_str()); continue; }
       std::printf("%s", left.c_str());
-      for (size_t j = left.size(); j < kWidth; j++) std::putchar(' ');
-      std::printf("%s\n", cell(items[r + height]->synopsis, kCol2).c_str());
+      for (size_t j = left.size(); j < W; j++) std::putchar(' ');
+      std::printf("%s\n", cell(items[r + height]->synopsis, 1).c_str());
     }
     return 0;
+  }
+
+  // When the first operand is a glob pattern, bash prints a header naming the
+  // patterns (`Shell commands matching keyword(s) `PAT'') before the matches.
+  auto is_glob = [](const std::string &p) {
+    for (size_t k = 0; k < p.size(); k++) {
+      if (p[k] == '\\') { k++; continue; }
+      if (p[k] == '*' || p[k] == '?' || p[k] == '[') return true;
+    }
+    return false;
+  };
+  if (i < argv.size() && is_glob(argv[i])) {
+    std::printf("Shell commands matching keyword%s `", argv.size() - i > 1 ? "s" : "");
+    for (size_t k = i; k < argv.size(); k++)
+      std::printf("%s%s", k > i ? ", " : "", argv[k].c_str());
+    std::printf("'\n\n");
   }
 
   int st = 0;
@@ -3416,6 +3466,11 @@ int bi_help(Shell &sh, const std::vector<std::string> &argv) {
     if (hits.empty())  // fall back to a prefix match
       for (const auto &h : kBuiltinHelp)
         if (std::strncmp(h.name, pat.c_str(), pat.size()) == 0) hits.push_back(&h);
+    // bash iterates its alphabetically-ordered builtin table, so matches for a
+    // single pattern come out sorted by name; gnash's table is not sorted.
+    std::sort(hits.begin(), hits.end(), [](const BuiltinHelp *a, const BuiltinHelp *b) {
+      return std::strcmp(a->name, b->name) < 0;
+    });
     if (hits.empty()) {
       std::fflush(stdout);
       std::fprintf(stderr,
