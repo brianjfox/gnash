@@ -377,7 +377,8 @@ std::string Expander::param_value(const std::string &name, bool &set, bool defau
 // if the result is subject to word splitting (always, for consistency here).
 static std::string expand_brace_body(Expander &, Shell &, const std::string &, bool dq);
 static std::string apply_param_op(Expander &, Shell &, const std::string &name,
-                                  std::string val, bool set, const std::string &rest, bool dq);
+                                  std::string val, bool set, const std::string &rest, bool dq,
+                                  bool have_sub = false, const std::string &sub = std::string());
 // Build the ${a[@]@K} "key value ..." string for array NAME (defined below).
 static std::string kv_build_K(Shell &sh, const std::string &name, bool assoc);
 
@@ -1595,17 +1596,21 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
 
   bool set = false;
   std::string val;
+  std::string tsub;  // the expanded, zsh-translated subscript, for have_sub
   if (have_sub) {
     // zsh subscripts are 1-based; translate before the (0-based) array read.
     std::string esub = ex.expand_no_split(sub);
     if (!sh.array_expand_once_ok(name, esub)) { sh.arith_error = true; return std::string(); }
-    val = sh.array_get(name, sh.zsh_subscript(name, esub));
-    set = sh.is_set(name);
+    tsub = sh.zsh_subscript(name, esub);
+    val = sh.array_get(name, tsub);
+    // A defaulting/alternative operator on a single element (${a[i]-x}, ${a[i]=x},
+    // ${a[i]+x}, ${a[i]?}) keys off whether THAT element is set, not the array.
+    set = sh.array_elem_set(name, tsub);
   } else {
     val = ex.param_value(name, set, defaulting_op);
   }
   if (length) return std::to_string(val.size());
-  return apply_param_op(ex, sh, name, val, set, rest, dq);
+  return apply_param_op(ex, sh, name, val, set, rest, dq, have_sub, tsub);
 }
 
 // Apply the operator suffix `rest' (everything after the name/subscript) of a
@@ -1613,7 +1618,7 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
 // array expansions can apply it to each element of ${a[@]} / ${a[*]}.
 static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &name,
                                   std::string val, bool set, const std::string &rest,
-                                  bool dq) {
+                                  bool dq, bool have_sub, const std::string &sub) {
   if (rest.empty()) return val;
 
   // In a double-quoted context the alternative word is expanded in double-quote
@@ -1649,6 +1654,19 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
     if (op == '=') {
       if (empty) {
         std::string w = expand_word(word);
+        if (have_sub) {
+          // Assign to the array element, not a scalar named `name'.  Mirror a
+          // plain a[i]=w: an integer-attributed array evaluates the RHS as
+          // arithmetic; array_set applies any -u/-l/-c case folding.  Return the
+          // stored value so the expansion reflects those transforms.
+          auto it = sh.vars.find(sh.deref(name));
+          if (it != sh.vars.end() && it->second.integer) {
+            bool ok = true;
+            w = std::to_string(eval_arith(sh, w, &ok));
+          }
+          sh.array_set(name, sub, w);
+          return sh.array_get(name, sub);
+        }
         sh.set(name, w);
         return w;
       }
