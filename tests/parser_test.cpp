@@ -71,11 +71,11 @@ int main() {
   ok("! foo", "! foo");
   ok("a |& b", "a 2>&1 | b");   // |& adds 2>&1 to the left command
 
-  // redirections
-  ok("ls > out", "ls >out");
-  ok("cat < in > out", "cat <in >out");
+  // redirections (bash separates the operator from its target with a space)
+  ok("ls > out", "ls > out");
+  ok("cat < in > out", "cat < in > out");
   ok("ls 2>&1", "ls 2>&1");
-  ok("echo hi >> log", "echo hi >>log");
+  ok("echo hi >> log", "echo hi >> log");
 
   // compound commands
   ok("( a; b )", "( a; b )");
@@ -90,7 +90,7 @@ int main() {
   ok("case $x in a) echo 1;; b|c) echo 2;; esac",
      "case $x in a) echo 1 ;; b | c) echo 2 ;; esac");
   ok("f() { echo hi; }", "f () { echo hi; }");
-  ok("{ a; } > out", "{ a; } >out");
+  ok("{ a; } > out", "{ a; } > out");
 
   // conditional [[ ]]
   ok("[[ -f foo ]]", "[[ -f foo ]]");

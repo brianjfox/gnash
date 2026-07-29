@@ -55,7 +55,18 @@ void print_redirects(const std::vector<Redirect> &redirs, std::string &out) {
     out += ' ';
     if (!r.fd_var.empty()) { out += '{'; out += r.fd_var; out += '}'; }
     else { int sfd = effective_source_fd(r); if (sfd >= 0) out += std::to_string(sfd); }
+    // bash separates the operator from its target with a space (`> bar', `< f'),
+    // except the here-document and dup operators, whose target abuts (`<<EOF',
+    // `1>&2').  (Matches MPrinter::print_redir, used for function bodies.)
+    switch (r.op) {
+      case RedirOp::HereDoc: out += "<<"; out += r.target.text; continue;
+      case RedirOp::HereDocStrip: out += "<<-"; out += r.target.text; continue;
+      case RedirOp::DupInput: out += "<&"; out += r.target.text; continue;
+      case RedirOp::DupOutput: out += ">&"; out += r.target.text; continue;
+      default: break;
+    }
     out += op_string(r.op);
+    out += ' ';
     out += r.target.text;
   }
 }
@@ -231,7 +242,8 @@ std::string canonical_word(const std::string &w);
 struct MPrinter {
   std::string out;
   std::vector<const Redirect *> pending_heredocs;
-  bool last_was_heredoc = false;
+  bool last_was_heredoc = false;   // a simple command ended with a here-document
+  bool compound_heredoc = false;   // a for/while/if body ended with a here-document
   bool last_was_amp = false;
 
   void ind(int n) { out.append(static_cast<size_t>(n), ' '); }
@@ -277,8 +289,18 @@ struct MPrinter {
   // caller knows whether to append `;'.
   void stmt(const Command *c, int I) {
     last_was_amp = false;
+    last_was_heredoc = false;
+    compound_heredoc = false;
     inline_cmd(c, I);
-    last_was_heredoc = flush_heredocs();
+    // A for/while/if whose body ended with a here-document leaves last_was_heredoc
+    // set (its body flushed inside).  bash then suppresses the `;' separator but,
+    // unlike a direct simple-command here-document, adds NO blank line before the
+    // next statement -- so track it separately.  A simple command instead leaves
+    // its here-documents pending; flushing them marks the direct (blank-line) case.
+    bool body_heredoc = last_was_heredoc;
+    last_was_heredoc = compound_heredoc = false;
+    if (body_heredoc) compound_heredoc = true;
+    else if (flush_heredocs()) last_was_heredoc = true;
   }
 
   // Statement sequences: each Semi-connected element on its own line.  The
@@ -288,7 +310,8 @@ struct MPrinter {
     if (cn && (cn->conn == Connector::Semi || cn->conn == Connector::Newline)) {
       list(cn->first.get(), I);
       if (cn->second) {
-        if (last_was_heredoc) { out += '\n'; nl(I); }
+        if (last_was_heredoc) { out += '\n'; nl(I); }  // simple heredoc: blank line
+        else if (compound_heredoc) { nl(I); }          // compound heredoc: no `;', no blank
         else if (last_was_amp) { nl(I); }
         else { out += ';'; nl(I); }
         list(cn->second.get(), I);
@@ -313,7 +336,15 @@ struct MPrinter {
   // Terminate a clause body (then/else/do): append `;' unless the last
   // statement ended with `&' or a here-document.
   void clause_semi() {
-    if (!last_was_amp && !last_was_heredoc) out += ';';
+    if (!last_was_amp && !last_was_heredoc && !compound_heredoc) out += ';';
+  }
+
+  // Move to a compound closer's line (`done'/`fi'/`}'/`esac').  When the body
+  // ended with a here-document, bash's deferred-heredoc flush leaves a trailing
+  // newline, so the closer follows a blank line.
+  void close_nl(int I) {
+    if (last_was_heredoc) out += '\n';
+    nl(I);
   }
 
   // Render one command; compounds span lines from INDENT.
@@ -370,15 +401,22 @@ struct MPrinter {
       out += "{ ";
       nl(I + 4);
       list(g->body.get(), I + 4);
-      nl(I);
+      close_nl(I);
       out += '}';
+      // A brace group flushes its body's here-documents and is followed by the
+      // normal `;' separator (unlike for/while/if), so clear the flag.
+      last_was_heredoc = false;
       print_redirs(g->redirects);
       return;
     }
     if (const auto *ss = dynamic_cast<const Subshell *>(c)) {
       out += "( ";
       inline_cmd(ss->body.get(), I);
-      out += " )";
+      // A here-document in the subshell body is flushed before the closing `)'
+      // (bash's PRINT_DEFERRED_HEREDOCS), which then starts its own line.
+      if (flush_heredocs()) out += "\n )";
+      else out += " )";
+      last_was_heredoc = false;
       print_redirs(ss->redirects);
       return;
     }
@@ -389,13 +427,13 @@ struct MPrinter {
       nl(I + 4);
       list(ic->then_part.get(), I + 4);
       clause_semi();
-      nl(I);
+      close_nl(I);
       if (ic->else_part) {
         out += "else";
         nl(I + 4);
         list(ic->else_part.get(), I + 4);
         clause_semi();
-        nl(I);
+        close_nl(I);
       }
       out += "fi";
       print_redirs(ic->redirects);
@@ -408,7 +446,7 @@ struct MPrinter {
       nl(I + 4);
       list(lc->body.get(), I + 4);
       clause_semi();
-      nl(I);
+      close_nl(I);
       out += "done";
       print_redirs(lc->redirects);
       return;
@@ -442,7 +480,7 @@ struct MPrinter {
       nl(I + 4);
       list(fc->body.get(), I + 4);
       clause_semi();
-      nl(I);
+      close_nl(I);
       out += "done";
       print_redirs(fc->redirects);
       return;
@@ -484,7 +522,23 @@ struct MPrinter {
       print_func_body(fd->body.get(), I);
       return;
     }
-    // [[ ]] / (( )) / coproc / anything else: the single-line rendering.
+    if (const auto *cp = dynamic_cast<const CoprocCommand *>(c)) {
+      out += "coproc ";
+      // bash prints the coproc name only when the body is a compound command
+      // (`{ ... }' / `( ... )'), defaulting to COPROC; a simple-command coproc
+      // is printed without a name.  The body then renders like any command, so a
+      // here-document in it is flushed at the right place.
+      bool compound = dynamic_cast<const Group *>(cp->body.get()) ||
+                      dynamic_cast<const Subshell *>(cp->body.get());
+      if (compound) {
+        out += cp->name.empty() ? "COPROC" : cp->name;
+        out += ' ';
+      }
+      inline_cmd(cp->body.get(), I);
+      print_redirs(cp->redirects);
+      return;
+    }
+    // [[ ]] / (( )) / anything else: the single-line rendering.
     std::string one;
     c->print(one);
     out += one;
@@ -537,7 +591,8 @@ struct MPrinter {
     out += "{ ";
     nl(I + 4);
     inline_cmd(body, I + 4);
-    nl(I);
+    last_was_heredoc = flush_heredocs();
+    close_nl(I);
     out += '}';
   }
 };
@@ -573,7 +628,10 @@ std::string canonical_word(const std::string &w) {
         out += "$(";
         std::string one;
         pr.command->print(one);
-        out += one;
+        // A command with no words but a leading redirection (`$(< file)') prints
+        // with a leading space from print_redirects; bash abuts it to the `$('.
+        size_t s = one.find_first_not_of(' ');
+        out += (s == std::string::npos) ? one : one.substr(s);
         out += ')';
       } else {
         out += w.substr(i, j - i + 1);
