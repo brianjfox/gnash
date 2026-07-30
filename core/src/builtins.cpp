@@ -2126,9 +2126,9 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     // is the one exception: for `local' a bare `-' is the special save-options
     // operand (bash), not an identifier, so it is not rejected here.
     if (!valid_identifier(name) && !(local && a == "-")) {
-      std::string tgt = (eq == std::string::npos) ? a : a.substr(0, eq);
+      // bash reports the whole offending word, including any `=value'.
       std::fprintf(stderr, "%s%s: `%s': not a valid identifier\n",
-                   sh.err_prefix().c_str(), argv[0].c_str(), tgt.c_str());
+                   sh.err_prefix().c_str(), argv[0].c_str(), a.c_str());
       ret = 1;
       continue;
     }
