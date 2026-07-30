@@ -5314,12 +5314,88 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
   } else if (cmd == "times") {
     st = 0;
   } else if (cmd == "wait") {
-    if (argv.size() > 1) {
-      Shell::Job *j = sh.job_by_spec(argv[1]);
-      if (j) { for (long p : j->pids) st = sh.wait_for_pid(p); }
-      else st = sh.wait_for_pid(std::atol(argv[1].c_str()));
+    // Options: -f (wait for termination, not just a status change), -n (return
+    // after the next job finishes) and -p VAR (store the finished job's pid in
+    // VAR).  A leading `-<digit>' is a (negative) id, not an option.
+    bool nflag = false, have_p = false, opt_err = false;
+    std::string pvar, badopt;
+    size_t ai = 1;
+    for (; ai < argv.size(); ai++) {
+      const std::string &o = argv[ai];
+      if (o == "--") { ai++; break; }
+      if (o.size() < 2 || o[0] != '-' ||
+          std::isdigit(static_cast<unsigned char>(o[1])))
+        break;
+      bool consumed_p = false;
+      for (size_t k = 1; k < o.size() && !opt_err; k++) {
+        char c = o[k];
+        if (c == 'n') nflag = true;
+        else if (c == 'f') { /* no async status tracking: -f is a no-op here */ }
+        else if (c == 'p') {
+          have_p = true;
+          if (k + 1 < o.size()) pvar = o.substr(k + 1);
+          else if (ai + 1 < argv.size()) pvar = argv[++ai];
+          consumed_p = true;
+          break;
+        } else { opt_err = true; badopt = std::string("-") + c; }
+      }
+      if (opt_err || consumed_p) { if (opt_err) break; else continue; }
+    }
+    if (opt_err) {
+      std::fprintf(stderr, "%swait: %s: invalid option\n", sh.err_prefix().c_str(),
+                   badopt.c_str());
+      std::fprintf(stderr, "wait: usage: wait [-fn] [-p var] [id ...]\n");
+      st = 2;
     } else {
-      st = sh.wait_all();
+      // Wait for the requested ids (bash waits for all of them; `-n' stops after
+      // the first), or for every job when none were named.  Capture a pid for -p.
+      long finished_pid = -1;
+      if (ai < argv.size()) {
+        for (size_t k = ai; k < argv.size(); k++) {
+          Shell::Job *j = sh.job_by_spec(argv[k]);
+          if (j) {
+            for (long p : j->pids) st = sh.wait_for_pid(p);
+            if (!j->pids.empty()) finished_pid = j->pids.front();
+          } else {
+            long pp = std::atol(argv[k].c_str());
+            st = sh.wait_for_pid(pp);
+            finished_pid = pp;
+          }
+          if (nflag) break;  // -n: return after the first id completes
+        }
+      } else if (!nflag && !have_p) {
+        st = sh.wait_all();
+      } else {
+        // Options but no ids and nothing to select: reap without blocking.  bash
+        // returns 127 ("no such job") when -n/-p find no job to wait for.
+        sh.reap_jobs(false);
+        st = 127;
+      }
+      // -p VAR: store the finished pid.  The name is validated like other
+      // builtins, and an array element subscript is arithmetic -- a bad one
+      // (e.g. under array_expand_once) raises bash's arithmetic diagnostic.
+      if (have_p) {
+        auto lb = pvar.find('[');
+        if (lb != std::string::npos && !pvar.empty() && pvar.back() == ']') {
+          std::string base = pvar.substr(0, lb);
+          std::string psub = pvar.substr(lb + 1, pvar.size() - lb - 2);
+          if (!valid_identifier(base)) {
+            std::fprintf(stderr, "%swait: `%s': not a valid identifier\n",
+                         sh.err_prefix().c_str(), pvar.c_str());
+            st = 1;
+          } else if (!sh.array_expand_once_ok(base, psub)) {
+            st = 1;  // array_expand_once_ok already printed the arithmetic error
+          } else if (finished_pid >= 0) {
+            sh.array_set(base, psub, std::to_string(finished_pid));
+          }
+        } else if (!valid_identifier(pvar)) {
+          std::fprintf(stderr, "%swait: `%s': not a valid identifier\n",
+                       sh.err_prefix().c_str(), pvar.c_str());
+          st = 1;
+        } else if (finished_pid >= 0) {
+          sh.set(pvar, std::to_string(finished_pid));
+        }
+      }
     }
   } else if (cmd == "jobs") {
     sh.print_jobs();
