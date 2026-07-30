@@ -802,9 +802,12 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
             if (k) for (char c : joiner) { out += c; mask += '0'; }
             for (char c : pos[k]) { out += c; mask += '0'; }
           }
-        } else {  // unquoted ${@}
+        } else {  // unquoted ${@}: empties vanish only when splitting
+          bool first = true;
           for (size_t k = 0; k < pos.size(); k++) {
-            if (k) { out += FIELD_SEP; mask += MMARK; }
+            if (splitting_ && pos[k].empty()) continue;
+            if (!first) { out += FIELD_SEP; mask += MMARK; }
+            first = false;
             for (char c : pos[k]) { out += c; mask += '0'; }
           }
         }
@@ -908,9 +911,12 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
                       if (k) for (char c : j) { out += c; mask += '0'; }
                       for (char c : pos[k]) { out += c; mask += '0'; }
                     }
-                  } else {  // unquoted @
+                  } else {  // unquoted @: empties vanish only when splitting
+                    bool first = true;
                     for (size_t k = 0; k < pos.size(); k++) {
-                      if (k) { out += FIELD_SEP; mask += MMARK; }
+                      if (splitting_ && pos[k].empty()) continue;
+                      if (!first) { out += FIELD_SEP; mask += MMARK; }
+                      first = false;
                       for (char c : pos[k]) { out += c; mask += '0'; }
                     }
                   }
@@ -1030,11 +1036,13 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
               for (char c : items[k]) { out += c; mask += '0'; }
             }
           } else {
-            // Unquoted ${a[@]}: an empty element produces no word (it splits
-            // away), so skip it rather than emitting an empty field.
+            // Unquoted ${a[@]}: in a splitting context an empty element produces
+            // no word (it splits away); in a no-split/assignment context the
+            // element boundaries are kept (they flatten to IFS[0] separators),
+            // so only drop empties when actually splitting.
             bool first = true;
             for (size_t k = 0; k < items.size(); k++) {
-              if (items[k].empty()) continue;
+              if (splitting_ && items[k].empty()) continue;
               if (!first) { out += FIELD_SEP; mask += MMARK; }
               first = false;
               for (char c : items[k]) { out += c; mask += '0'; }
@@ -1079,8 +1087,11 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
         } else {  // psel == '@'
           char m = dq ? '1' : '0';
           if (dq) absorb_qnull();
+          bool first = true;
           for (size_t k = 0; k < items.size(); k++) {
-            if (k) { out += FIELD_SEP; mask += MMARK; }
+            if (!dq && splitting_ && items[k].empty()) continue;  // vanish when splitting
+            if (!first) { out += FIELD_SEP; mask += MMARK; }
+            first = false;
             if (dq) { out += QNULL; mask += MMARK; }
             for (char c : items[k]) { out += c; mask += m; }
           }
@@ -1167,10 +1178,11 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
           }
         } else {
           // Unquoted ${a[@]OP}: an element the operator makes empty produces no
-          // word (it splits away), so skip it rather than emitting an empty field.
+          // word when splitting; a no-split/assignment context keeps the element
+          // boundaries (flattened to IFS[0] separators).
           bool first = true;
           for (size_t k = 0; k < items.size(); k++) {
-            if (items[k].empty()) continue;
+            if (splitting_ && items[k].empty()) continue;
             if (!first) { out += FIELD_SEP; mask += MMARK; }
             first = false;
             for (char c : items[k]) { out += c; mask += '0'; }
@@ -1223,10 +1235,10 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
               if (k) for (char c : j) { out += c; mask += '0'; }
               for (char c : vals[k]) { out += c; mask += '0'; }
             }
-          } else {
+          } else {  // unquoted ${a[@]:-w}: drop empties only when splitting
             bool first = true;
             for (size_t k = 0; k < vals.size(); k++) {
-              if (vals[k].empty()) continue;
+              if (splitting_ && vals[k].empty()) continue;
               if (!first) { out += FIELD_SEP; mask += MMARK; }
               first = false;
               for (char c : vals[k]) { out += c; mask += '0'; }
@@ -1351,8 +1363,11 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
         } else {  // ssel == '@'
           char m = dq ? '1' : '0';
           if (dq) absorb_qnull();
+          bool first = true;
           for (size_t k = 0; k < slice.size(); k++) {
-            if (k) { out += FIELD_SEP; mask += MMARK; }
+            if (!dq && splitting_ && slice[k].empty()) continue;  // vanish when splitting
+            if (!first) { out += FIELD_SEP; mask += MMARK; }
+            first = false;
             if (dq) { out += QNULL; mask += MMARK; }  // keep empty element
             for (char c : slice[k]) { out += c; mask += m; }
           }
@@ -1423,9 +1438,12 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
         if (k) for (char c : joiner) { out += c; mask += '0'; }
         for (char c : pos[k]) { out += c; mask += '0'; }
       }
-    } else {  // unquoted $@
+    } else {  // unquoted $@: empties vanish only when splitting
+      bool first = true;
       for (size_t k = 0; k < pos.size(); k++) {
-        if (k) { out += FIELD_SEP; mask += MMARK; }
+        if (splitting_ && pos[k].empty()) continue;
+        if (!first) { out += FIELD_SEP; mask += MMARK; }
+        first = false;
         for (char c : pos[k]) { out += c; mask += '0'; }
       }
     }
