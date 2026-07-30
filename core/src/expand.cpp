@@ -989,12 +989,27 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
             if (k) for (char c : j) { out += c; mask += '1'; }
             for (char c : items[k]) { out += c; mask += '1'; }
           }
-        } else {
-          char m = (psel == '@' && dq) ? '1' : '0';
-          if (psel == '@' && dq) absorb_qnull();
+        } else if (psel == '*' && splitting_ && sh_.ifs().empty()) {
+          bool first = true;  // empty IFS: separate fields, empties dropped
+          for (size_t k = 0; k < items.size(); k++) {
+            if (items[k].empty()) continue;
+            if (!first) { out += FIELD_SEP; mask += MMARK; }
+            first = false;
+            for (char c : items[k]) { out += c; mask += '0'; }
+          }
+        } else if (psel == '*') {  // join with IFS[0], splittable
+          std::string is = sh_.ifs();
+          std::string j = is.empty() ? std::string() : std::string(1, is[0]);
+          for (size_t k = 0; k < items.size(); k++) {
+            if (k) for (char c : j) { out += c; mask += '0'; }
+            for (char c : items[k]) { out += c; mask += '0'; }
+          }
+        } else {  // psel == '@'
+          char m = dq ? '1' : '0';
+          if (dq) absorb_qnull();
           for (size_t k = 0; k < items.size(); k++) {
             if (k) { out += FIELD_SEP; mask += MMARK; }
-            if (psel == '@' && dq) { out += QNULL; mask += MMARK; }
+            if (dq) { out += QNULL; mask += MMARK; }
             for (char c : items[k]) { out += c; mask += m; }
           }
         }
@@ -1061,6 +1076,14 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
             if (k) { out += FIELD_SEP; mask += MMARK; }
             out += QNULL; mask += MMARK;  // keep empty element as a field
             for (char c : items[k]) { out += c; mask += '1'; }
+          }
+        } else if (asel == '*' && splitting_ && sh_.ifs().empty()) {
+          bool first = true;  // empty IFS: separate fields, empties dropped
+          for (size_t k = 0; k < items.size(); k++) {
+            if (items[k].empty()) continue;
+            if (!first) { out += FIELD_SEP; mask += MMARK; }
+            first = false;
+            for (char c : items[k]) { out += c; mask += '0'; }
           }
         } else if (asel == '*') {
           // Unquoted ${a[*]OP}: join with the first IFS char, left splittable.
@@ -1228,12 +1251,32 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
             if (k) for (char c : j) { out += c; mask += '1'; }
             for (char c : slice[k]) { out += c; mask += '1'; }
           }
-        } else {
-          char m = (ssel == '@' && dq) ? '1' : '0';
-          if (ssel == '@' && dq) absorb_qnull();
+        } else if (ssel == '*' && splitting_ && sh_.ifs().empty()) {
+          // Unquoted ${a[*]:off} with an EMPTY IFS: separate fields, empties
+          // dropped (see the plain ${a[*]} case).
+          bool first = true;
+          for (size_t k = 0; k < slice.size(); k++) {
+            if (slice[k].empty()) continue;
+            if (!first) { out += FIELD_SEP; mask += MMARK; }
+            first = false;
+            for (char c : slice[k]) { out += c; mask += '0'; }
+          }
+        } else if (ssel == '*') {
+          // Unquoted (non-empty IFS) / assignment ${a[*]:off}: join with IFS[0],
+          // left splittable, so a splitting caller still word-splits on it and an
+          // assignment RHS keeps it as the join character.
+          std::string is = sh_.ifs();
+          std::string j = is.empty() ? std::string() : std::string(1, is[0]);
+          for (size_t k = 0; k < slice.size(); k++) {
+            if (k) for (char c : j) { out += c; mask += '0'; }
+            for (char c : slice[k]) { out += c; mask += '0'; }
+          }
+        } else {  // ssel == '@'
+          char m = dq ? '1' : '0';
+          if (dq) absorb_qnull();
           for (size_t k = 0; k < slice.size(); k++) {
             if (k) { out += FIELD_SEP; mask += MMARK; }
-            if (ssel == '@' && dq) { out += QNULL; mask += MMARK; }  // keep empty element
+            if (dq) { out += QNULL; mask += MMARK; }  // keep empty element
             for (char c : slice[k]) { out += c; mask += m; }
           }
         }
