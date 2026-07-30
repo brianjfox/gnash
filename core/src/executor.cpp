@@ -459,7 +459,10 @@ parse_array_elems(Shell &sh, Expander &ex, const std::string &name, bool integer
       bool plain = rb != std::string::npos && rb + 1 < e.size() && e[rb + 1] == '=';
       if (app || plain) {
         std::string sub = ex.expand_no_split(e.substr(1, rb - 1));
-        std::string val = ex.expand_no_split(e.substr(rb + (app ? 3 : 2)));
+        // The value of a `[sub]=value' element is an assignment RHS, so a `~'
+        // tilde-expands at the start and after each unquoted `:' (bash); a bare
+        // word element, handled below, only gets leading-tilde expansion.
+        std::string val = ex.expand_assignment(e.substr(rb + (app ? 3 : 2)));
         if (!assoc) {
           // bash stops the whole compound assignment at the first bad subscript
           // (the array has already been cleared, so the partial result stands).
