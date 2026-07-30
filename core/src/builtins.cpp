@@ -2252,6 +2252,15 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     // arithmetically evaluated (`declare +i arr=(hello world)').
     if (rm_integer && eq != std::string::npos && !name.empty() && sh.vars.count(name))
       sh.vars[name].integer = false;
+    // The case-fold attributes (`-l'/`-u'/`-c') likewise apply to array literal
+    // elements, so set them before the assignment: array_set reads them from the
+    // variable (`declare -al a=(ONE TWO)' -> [0]=one).  The scalar path folds the
+    // value directly below, so this only matters for the compound-array path.
+    if (eq != std::string::npos && !name.empty() && !nameref) {
+      if (lcase) sh.vars[name].lcase = true;
+      else if (ucase) sh.vars[name].ucase = true;
+      else if (capcase) sh.vars[name].capcase = true;
+    }
     if (eq != std::string::npos) {
       std::string val = a.substr(eq + 1);
       bool arraylit = val.size() >= 2 && val.front() == '(' && val.back() == ')';
