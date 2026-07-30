@@ -715,8 +715,23 @@ void Shell::array_set(const std::string &n_in, const std::string &sub, const std
   Variable &v = vars[n];
   if (v.readonly) return;
   v.invisible = false;  // an assignment makes a declared-but-unset array visible
+  // `declare -u'/`-l'/`-c' fold the case of each element value on assignment,
+  // exactly as Shell::set does for scalars.
+  std::string fv = val;
+  if (v.ucase)
+    for (char &c : fv) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+  else if (v.lcase)
+    for (char &c : fv) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  else if (v.capcase) {
+    bool first = true;
+    for (char &c : fv) {
+      c = static_cast<char>(first ? std::toupper(static_cast<unsigned char>(c))
+                                  : std::tolower(static_cast<unsigned char>(c)));
+      first = false;
+    }
+  }
   if (v.kind == VarKind::Assoc) {
-    assoc_put(v, sub, val);
+    assoc_put(v, sub, fv);
     return;
   }
   // A subscripted assignment to an existing scalar promotes it to an indexed
@@ -738,8 +753,8 @@ void Shell::array_set(const std::string &n_in, const std::string &sub, const std
       return;
     }
   }
-  v.idx[k] = val;
-  if (k == 0) v.value = val;
+  v.idx[k] = fv;
+  if (k == 0) v.value = fv;
 }
 
 bool Shell::array_unset(const std::string &n_in, const std::string &sub) {
