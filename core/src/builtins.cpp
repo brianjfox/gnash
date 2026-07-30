@@ -1653,6 +1653,13 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
                    sh.err_prefix().c_str(), resolved.c_str());
       return 1;
     }
+    // `read -a' fills an indexed array; an existing associative array is rejected.
+    auto av = sh.vars.find(resolved);
+    if (av != sh.vars.end() && av->second.kind == VarKind::Assoc) {
+      std::fprintf(stderr, "%sread: %s: not an indexed array\n",
+                   sh.err_prefix().c_str(), arrayname.c_str());
+      return 1;
+    }
   }
   for (const std::string &nm : names)
     if (!valid_read_name(nm)) {
@@ -2198,15 +2205,31 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     if (mk_array || mk_assoc) {
       auto av = sh.vars.find(name);
       if (av != sh.vars.end()) {
-        if (mk_assoc && av->second.kind == VarKind::Indexed) {
-          std::fprintf(stderr, "%s%s: %s: cannot convert indexed to associative array\n",
-                       sh.err_prefix().c_str(), argv[0].c_str(), name.c_str());
-          ret = 1;
-          continue;
-        }
-        if (mk_array && av->second.kind == VarKind::Assoc) {
-          std::fprintf(stderr, "%s%s: %s: cannot convert associative to indexed array\n",
-                       sh.err_prefix().c_str(), argv[0].c_str(), name.c_str());
+        // The prefix on an array-conversion error follows bash's
+        // this_command_name: at top level it is bare (`NAME: cannot ...'); inside
+        // a function it is the builtin name (`declare: NAME: ...'); and a
+        // `declare -g' inside a function reports it TWICE -- first with the
+        // enclosing function's name, then with the builtin name.
+        std::string funcname;
+        for (auto it = sh.src_frames.rbegin(); it != sh.src_frames.rend(); ++it)
+          if (it->is_func) { funcname = it->name; break; }
+        const char *cvt_dir = (mk_assoc && av->second.kind == VarKind::Indexed)
+                                  ? "indexed to associative"
+                              : (mk_array && av->second.kind == VarKind::Assoc)
+                                  ? "associative to indexed"
+                                  : nullptr;
+        if (cvt_dir) {
+          const std::string &pfx = sh.err_prefix();
+          if (funcname.empty()) {
+            std::fprintf(stderr, "%s%s: cannot convert %s array\n", pfx.c_str(),
+                         name.c_str(), cvt_dir);
+          } else {
+            if (global)
+              std::fprintf(stderr, "%s%s: %s: cannot convert %s array\n", pfx.c_str(),
+                           funcname.c_str(), name.c_str(), cvt_dir);
+            std::fprintf(stderr, "%s%s: %s: cannot convert %s array\n", pfx.c_str(),
+                         argv[0].c_str(), name.c_str(), cvt_dir);
+          }
           ret = 1;
           continue;
         }
