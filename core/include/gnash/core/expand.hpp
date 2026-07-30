@@ -46,6 +46,13 @@ class Expander {
   // no glob.
   std::string expand_assignment(const std::string &text);
 
+  // Expand the substitute word of ${x-word} / ${x+word}.  In a splitting,
+  // unquoted, bash-family context a word with an unquoted $*/$@/[*]/[@] keeps
+  // its field boundaries: it stashes the expanded (out, mask) in op_out_/op_mask_
+  // (with op_fields_ set) for the ${...} caller to splice, and returns "".
+  // Otherwise it returns the flat expand_dq_word / expand_no_split result.
+  std::string expand_op_word(const std::string &w, bool dq, bool top_level);
+
   // Here-document body (unquoted delimiter): parameter/command/arithmetic
   // expansion and `\'-escaping of $ ` \ only.  Quote characters are literal
   // (unlike expand_no_split, which would treat them as quoting).
@@ -62,6 +69,26 @@ class Expander {
 
  private:
   Shell &sh_;
+
+  // True only while expanding a word whose result WILL be field-split (the
+  // expand_args path).  In that context an unquoted $* / ${a[*]} yields separate
+  // fields (like $@) via hard FIELD_SEP markers; everywhere else (assignment
+  // RHS, expand_no_split, patterns, here-docs -- results that get flattened or
+  // IFS[0]-joined) it joins with the first IFS character.  Toggled with save /
+  // restore around each entry point's process() call.
+  bool splitting_ = false;
+
+  // A ${x-word}/${x+word} substitute word that must keep its field structure
+  // stashes its expanded (out, mask) here for expand_dollar to splice, rather
+  // than flattening to a string (which would lose masks and mis-handle data
+  // bytes that happen to equal FIELD_SEP/QNULL).  op_fields_ signals a pending
+  // splice; expand_dollar clears it before, and consumes it after, each body.
+  bool op_fields_ = false;
+  std::string op_out_, op_mask_;
+
+  // Expand W (a substitute word) into op_out_/op_mask_ preserving field markers,
+  // and set op_fields_.  Called only for an unquoted splat in a splitting context.
+  void expand_word_fields(const std::string &w);
 
   // Core: turn one raw word into (result string, per-char quoted mask), with
   // `\x01' field-separator markers inserted for "$@" splitting.

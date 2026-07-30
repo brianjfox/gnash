@@ -378,7 +378,8 @@ std::string Expander::param_value(const std::string &name, bool &set, bool defau
 static std::string expand_brace_body(Expander &, Shell &, const std::string &, bool dq);
 static std::string apply_param_op(Expander &, Shell &, const std::string &name,
                                   std::string val, bool set, const std::string &rest, bool dq,
-                                  bool have_sub = false, const std::string &sub = std::string());
+                                  bool have_sub = false, const std::string &sub = std::string(),
+                                  bool top_level = false);
 // Build the ${a[@]@K} "key value ..." string for array NAME (defined below).
 static std::string kv_build_K(Shell &sh, const std::string &name, bool assoc);
 
@@ -936,10 +937,20 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
               if (k) for (char c : j) { out += c; mask += '1'; }
               for (char c : items[k]) { out += c; mask += '1'; }
             }
+          } else if (sel == '*' && splitting_ && sh_.ifs().empty()) {
+            // Unquoted ${a[*]} with an EMPTY IFS: separate fields (like ${a[@]}),
+            // empties dropped -- the IFS[0]-join form below would otherwise
+            // collapse them into one field.  See the $* case above.
+            bool first = true;
+            for (size_t k = 0; k < items.size(); k++) {
+              if (items[k].empty()) continue;
+              if (!first) { out += FIELD_SEP; mask += MMARK; }
+              first = false;
+              for (char c : items[k]) { out += c; mask += '0'; }
+            }
           } else if (sel == '*') {
-            // Unquoted/assignment ${a[*]}: join with the first IFS char, left
-            // splittable (mask 0) so an unquoted use still word-splits on it and
-            // an assignment RHS keeps it as the join character.
+            // Assignment / no-split ${a[*]}: join with the first IFS char, left
+            // splittable (mask 0) so an assignment RHS keeps it as the joiner.
             std::string is = sh_.ifs();
             std::string j = is.empty() ? std::string() : std::string(1, is[0]);
             for (size_t k = 0; k < items.size(); k++) {
@@ -1229,8 +1240,20 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
         i = end + 1;
         return;
       }
+      op_fields_ = false;  // a pending splice, if any, belongs to THIS body
       std::string val = expand_brace_body(*this, sh_, body, dq);
-      for (char c : val) { out += c; mask += qm; }
+      if (op_fields_) {
+        // A ${x-word}/${x+word} substitute word kept its field structure: splice
+        // its (out, mask) verbatim so hard boundaries and quoting are preserved
+        // (and data bytes equal to FIELD_SEP/QNULL are not mistaken for markers).
+        out += op_out_;
+        mask += op_mask_;
+        op_fields_ = false;
+        op_out_.clear();
+        op_mask_.clear();
+      } else {
+        for (char c : val) { out += c; mask += qm; }
+      }
       i = end + 1;
       return;
     }
@@ -1259,7 +1282,21 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
         if (k) for (char c : joiner) { out += c; mask += '1'; }
         for (char c : pos[k]) { out += c; mask += '1'; }
       }
-    } else if (n1 == '*') {  // unquoted/assignment $*: join with IFS[0] (splittable)
+    } else if (n1 == '*' && splitting_ && sh_.ifs().empty()) {
+      // Unquoted $* with an EMPTY IFS: there is no join character and no field
+      // splitting, yet bash still yields the positional parameters as separate
+      // fields (empty ones dropped, as an unquoted expansion does).  The usual
+      // IFS[0]-join-then-split form below would instead collapse them into one
+      // field.  With a non-empty IFS the join form is correct (the join char is
+      // also a split char), so it is only overridden here.
+      bool first = true;
+      for (size_t k = 0; k < pos.size(); k++) {
+        if (pos[k].empty()) continue;
+        if (!first) { out += FIELD_SEP; mask += MMARK; }
+        first = false;
+        for (char c : pos[k]) { out += c; mask += '0'; }
+      }
+    } else if (n1 == '*') {  // assignment / no-split / non-empty-IFS $*: join IFS[0]
       std::string sep = sh_.ifs();
       std::string joiner = sep.empty() ? std::string() : std::string(1, sep[0]);
       for (size_t k = 0; k < pos.size(); k++) {
@@ -1610,7 +1647,7 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
     val = ex.param_value(name, set, defaulting_op);
   }
   if (length) return std::to_string(val.size());
-  return apply_param_op(ex, sh, name, val, set, rest, dq, have_sub, tsub);
+  return apply_param_op(ex, sh, name, val, set, rest, dq, have_sub, tsub, /*top_level=*/true);
 }
 
 // Apply the operator suffix `rest' (everything after the name/subscript) of a
@@ -1618,7 +1655,8 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
 // array expansions can apply it to each element of ${a[@]} / ${a[*]}.
 static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &name,
                                   std::string val, bool set, const std::string &rest,
-                                  bool dq, bool have_sub, const std::string &sub) {
+                                  bool dq, bool have_sub, const std::string &sub,
+                                  bool top_level) {
   if (rest.empty()) return val;
 
   // In a double-quoted context the alternative word is expanded in double-quote
@@ -1649,8 +1687,10 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
   if (op == '-' || op == '=' || op == '+' || op == '?') {
     std::string word = rest.substr(opos);
     bool empty = !set || (colon && val.empty());
-    if (op == '-') return empty ? expand_word(word) : val;
-    if (op == '+') return empty ? std::string() : expand_word(word);
+    // The substitute word of -/+ keeps $*/$@ field boundaries (expand_op_word);
+    // = assigns and ? errors, which flatten the word, so they use expand_word.
+    if (op == '-') return empty ? ex.expand_op_word(word, dq, top_level) : val;
+    if (op == '+') return empty ? std::string() : ex.expand_op_word(word, dq, top_level);
     if (op == '=') {
       if (empty) {
         std::string w = expand_word(word);
@@ -1944,7 +1984,10 @@ std::string Expander::expand_dq_word(const std::string &w_in) {
   // single quote is literal throughout (bash's DOLBRACE_QUOTE state), even when
   // the word's own double quotes toggle the context (sq_literal).
   std::string out, mask;
+  bool saved_split = splitting_;
+  splitting_ = false;
   process('"' + w, out, mask, false, false, /*sq_literal=*/true);
+  splitting_ = saved_split;
   std::string joined;
   for (size_t k = 0; k < out.size(); k++) {
     if (k < mask.size() && mask[k] == MMARK) {
@@ -2247,7 +2290,10 @@ std::vector<std::string> Expander::expand_args(const std::vector<Word> &words) {
       std::string tilded = expand_leading_tilde(sh_, pre);
       extract_procsubs(tilded);  // <(cmd) / >(cmd) -> /dev/fd/N
       std::string out, mask;
+      bool saved_split = splitting_;
+      splitting_ = true;  // this word's result is field-split
       process(tilded, out, mask, false);
+      splitting_ = saved_split;
       auto fields = split_ifs(out, mask);
       // Strip quoted-null markers; a field that held only a marker survives as
       // an empty field (so "" / "$empty" yield one empty argument).
@@ -2274,7 +2320,10 @@ std::string Expander::expand_pattern(const std::string &text) {
   std::string src = expand_leading_tilde(sh_, text);  // `case ~ in ~)' matches
   extract_procsubs(src);
   std::string out, mask;
+  bool saved_split = splitting_;
+  splitting_ = false;
   process(src, out, mask, false);
+  splitting_ = saved_split;
   std::string r;
   r.reserve(out.size());
   for (size_t i = 0; i < out.size(); i++) {
@@ -2295,7 +2344,10 @@ std::string Expander::expand_no_split(const std::string &text, bool do_glob, boo
   // not a `>(cmd)' process substitution.
   if (do_procsub) extract_procsubs(src);  // e.g. a redirect target: < <(cmd)
   std::string out, mask;
+  bool saved_split = splitting_;
+  splitting_ = false;  // result is flattened, so $* joins with IFS[0]
   process(src, out, mask, false);
+  splitting_ = saved_split;
   // drop internal markers: field separators become spaces, quoted-nulls vanish
   std::string joined;
   joined.reserve(out.size());
@@ -2318,9 +2370,54 @@ std::string Expander::expand_assignment(const std::string &text) {
   return expand_no_split(tilde_assign(sh_, text));
 }
 
+void Expander::expand_word_fields(const std::string &w) {
+  std::string src = expand_leading_tilde(sh_, w);
+  extract_procsubs(src);
+  std::string o, m;
+  bool saved = splitting_;
+  splitting_ = true;  // nested $*/$@ -> separate fields, with proper masks
+  process(src, o, m, false);
+  splitting_ = saved;
+  op_out_ = std::move(o);
+  op_mask_ = std::move(m);
+  op_fields_ = true;  // consumed (and cleared) by the ${...} splice in expand_dollar
+}
+
+// True if W contains an UNQUOTED $*/$@/[@]/[*] -- a splat that expands to
+// multiple fields.  A quoted "$*"/"${a[*]}" joins with IFS[0] instead, so it
+// must NOT take the field-preserving path (its content would wrongly split).
+static bool has_unquoted_splat(const std::string &w) {
+  bool sq = false, dq = false;
+  for (size_t k = 0; k < w.size(); k++) {
+    char c = w[k];
+    if (sq) { if (c == '\'') sq = false; continue; }
+    if (c == '\\' && dq && k + 1 < w.size()) { k++; continue; }
+    if (c == '"') { dq = !dq; continue; }
+    if (c == '\'') { sq = true; continue; }
+    if (dq) continue;
+    if (c == '$' && k + 1 < w.size() && (w[k + 1] == '*' || w[k + 1] == '@')) return true;
+    if (c == '[' && k + 2 < w.size() && (w[k + 1] == '*' || w[k + 1] == '@') && w[k + 2] == ']')
+      return true;
+  }
+  return false;
+}
+
+std::string Expander::expand_op_word(const std::string &w, bool dq, bool top_level) {
+  if (top_level && splitting_ && !dq && !sh_.is_zsh() && has_unquoted_splat(w)) {
+    expand_word_fields(w);
+    return std::string();  // real content is in op_out_/op_mask_ (op_fields_ set)
+  }
+  bool has_at = w.find("$@") != std::string::npos || w.find("$*") != std::string::npos;
+  if (dq && !sh_.is_zsh() && !has_at) return expand_dq_word(w);
+  return expand_no_split(w);
+}
+
 std::string Expander::expand_heredoc(const std::string &text) {
   std::string out, mask;
+  bool saved_split = splitting_;
+  splitting_ = false;
   process(text, out, mask, false, /*heredoc=*/true);  // quotes stay literal
+  splitting_ = saved_split;
   std::string joined;
   for (size_t k = 0; k < out.size(); k++) {
     if (k < mask.size() && mask[k] == MMARK) {
