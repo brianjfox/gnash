@@ -1744,6 +1744,18 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
     std::string esub = ex.expand_no_split(sub);
     if (!sh.array_expand_once_ok(name, esub)) { sh.arith_error = true; return std::string(); }
     tsub = sh.zsh_subscript(name, esub);
+    // An arithmetic (indexed) subscript may have side effects, e.g. ${a[i++]};
+    // evaluate it exactly once here and reuse the canonical index for both the
+    // read and the element-set test below, so array_get/array_elem_set don't
+    // evaluate it (and re-run the side effect) a second time.  Associative keys
+    // are literal, so leave them untouched.
+    auto vit = sh.vars.find(sh.deref(name));
+    bool assoc_sub = vit != sh.vars.end() && vit->second.kind == VarKind::Assoc;
+    if (!assoc_sub && tsub != "@" && tsub != "*") {
+      bool aok = true;
+      long long idx = eval_arith(sh, tsub, &aok);
+      if (aok) tsub = std::to_string(idx);
+    }
     val = sh.array_get(name, tsub);
     // A defaulting/alternative operator on a single element (${a[i]-x}, ${a[i]=x},
     // ${a[i]+x}, ${a[i]?}) keys off whether THAT element is set, not the array.
