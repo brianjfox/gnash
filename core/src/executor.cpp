@@ -423,7 +423,13 @@ parse_array_elems(Shell &sh, Expander &ex, const std::string &name, bool integer
   // right); an associative array takes any string as a key.
   auto tvit = sh.vars.find(sh.deref(name));
   bool assoc = tvit != sh.vars.end() && tvit->second.kind == VarKind::Assoc;
+  // A fresh `name=(...)' has already cleared the array, so negative subscripts
+  // resolve against the running max starting at -1.  An append `name+=(...)'
+  // keeps the existing elements, so a leading `[-1]=v' counts back from the
+  // current highest index (bash).
   long long maxidx = -1;
+  if (whole_append && !assoc && tvit != sh.vars.end() && !tvit->second.idx.empty())
+    maxidx = tvit->second.idx.rbegin()->first;
   // An associative array whose list already used `[key]=value' form is in
   // subscript mode: a later bare word is an error.  An all-bare list is a valid
   // flat key/value list, so only reject a bare word once a subscript was seen.
