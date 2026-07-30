@@ -501,6 +501,12 @@ struct TestEval {
       for (const std::string &k : sh.array_keys(nm)) if (k == sub) return true;
       return false;
     }
+    // A bare array name implicitly references element 0 (bash), which can be
+    // unset even when the array has other elements set.
+    if (sh.is_array(arg)) {
+      for (const std::string &k : sh.array_keys(arg)) if (k == "0") return true;
+      return false;
+    }
     return sh.is_set(arg);
   }
 
@@ -5566,6 +5572,12 @@ struct CondEval {
           if (!sh.array_expand_once_ok(nm, sub)) return false;  // diagnostic printed
           if (sub == "@" || sub == "*") return sh.array_count(nm) > 0;
           for (const std::string &k : sh.array_keys(nm)) if (k == sub) return true;
+          return false;
+        }
+        // A bare array name implicitly references element 0 (bash), which can be
+        // unset even when the array has other elements set.
+        if (sh.is_array(arg)) {
+          for (const std::string &k : sh.array_keys(arg)) if (k == "0") return true;
           return false;
         }
         if (sh.is_set(arg)) return true;
