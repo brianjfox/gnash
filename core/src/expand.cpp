@@ -822,8 +822,21 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
             char op = body[opq];
             bool set = false;
             std::string val = param_value(nm, set, true);
-            bool fire = (op == '-') ? (!set || (colon && val.empty()))
-                                    : (set && !(colon && val.empty()));
+            // For `:', a scalar is null when its value is empty; but $@/$* are
+            // null iff their IFS[0]-joined $* is empty -- every positional empty
+            // AND the join adds nothing (at most one param, or an empty IFS).
+            bool null_val;
+            if (nm == "@" || nm == "*") {
+              const auto &pos = sh_.positional;
+              bool allempty = true;
+              for (const auto &p : pos) if (!p.empty()) { allempty = false; break; }
+              null_val = allempty && (pos.size() <= 1 || sh_.ifs().empty());
+              set = !pos.empty();
+            } else {
+              null_val = val.empty();
+            }
+            bool fire = (op == '-') ? (!set || (colon && null_val))
+                                    : (set && !(colon && null_val));
             if (fire) {
               std::string word = body.substr(opq + 1);
               bool has_at = word.find("$@") != std::string::npos ||
@@ -844,9 +857,53 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
               return;
             }
             if (op == '-' || op == '+') {
-              // Operator does not fire: the parameter's own value (for `-')
-              // or nothing (for `+'); fall through for arrays/subscripts.
-              if (nm != "@" && nm != "*" && body.find('[') == std::string::npos) {
+              // Operator does not fire.  For `@'/`*' the parameter is the
+              // positional list: `-' emits the positionals (1..$#, never $0),
+              // `+' emits nothing.  A plain scalar emits its own value for `-'.
+              // A subscripted name falls through to the array handlers below.
+              if (nm == "@" || nm == "*") {
+                if (op == '-') {
+                  const auto &pos = sh_.positional;
+                  if (nm == "@" && dq) {
+                    absorb_qnull();
+                    for (size_t k = 0; k < pos.size(); k++) {
+                      if (k) { out += FIELD_SEP; mask += MMARK; }
+                      out += QNULL; mask += MMARK;  // keep an empty positional
+                      for (char c : pos[k]) { out += c; mask += '1'; }
+                    }
+                  } else if (nm == "*" && dq) {
+                    std::string is = sh_.ifs();
+                    std::string j = is.empty() ? std::string() : std::string(1, is[0]);
+                    for (size_t k = 0; k < pos.size(); k++) {
+                      if (k) for (char c : j) { out += c; mask += '1'; }
+                      for (char c : pos[k]) { out += c; mask += '1'; }
+                    }
+                  } else if (nm == "*" && splitting_ && sh_.ifs().empty()) {
+                    bool first = true;
+                    for (size_t k = 0; k < pos.size(); k++) {
+                      if (pos[k].empty()) continue;
+                      if (!first) { out += FIELD_SEP; mask += MMARK; }
+                      first = false;
+                      for (char c : pos[k]) { out += c; mask += '0'; }
+                    }
+                  } else if (nm == "*") {
+                    std::string is = sh_.ifs();
+                    std::string j = is.empty() ? std::string() : std::string(1, is[0]);
+                    for (size_t k = 0; k < pos.size(); k++) {
+                      if (k) for (char c : j) { out += c; mask += '0'; }
+                      for (char c : pos[k]) { out += c; mask += '0'; }
+                    }
+                  } else {  // unquoted @
+                    for (size_t k = 0; k < pos.size(); k++) {
+                      if (k) { out += FIELD_SEP; mask += MMARK; }
+                      for (char c : pos[k]) { out += c; mask += '0'; }
+                    }
+                  }
+                }
+                i = end + 1;
+                return;
+              }
+              if (body.find('[') == std::string::npos) {
                 if (op == '-') {
                   char qm2 = dq ? '1' : '0';
                   for (char c : val) { out += c; mask += qm2; }
@@ -1114,14 +1171,19 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
       if (array_default_ref(body, dfname, dfsel, dfrest)) {
         std::vector<std::string> vals = sh_.array_values(dfname);
         bool unset = vals.empty();
-        bool allempty = true;  // null: no set elements, or all elements empty
+        // For `:', an array is "null" iff its IFS[0]-joined ${a[*]} value is
+        // empty -- i.e. every element is empty AND the join produces nothing (at
+        // most one element, or an empty IFS).  Two empty elements with a
+        // non-empty IFS join to a separator string, so they are NOT null (bash).
+        bool allempty = true;
         for (const std::string &v : vals) if (!v.empty()) { allempty = false; break; }
+        bool joined_empty = allempty && (vals.size() <= 1 || sh_.ifs().empty());
         char op = dfrest[0];
         bool colon = false;
         size_t opos = 1;
         if (op == ':') { colon = true; op = dfrest[1]; opos = 2; }
         std::string word = dfrest.substr(opos);
-        bool empty_test = colon ? allempty : unset;
+        bool empty_test = colon ? joined_empty : unset;
 
         // Emit the array values exactly as the bare ${a[@]}/${a[*]} path does.
         auto emit_values = [&]() {
