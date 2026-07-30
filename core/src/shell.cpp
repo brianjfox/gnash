@@ -637,6 +637,35 @@ std::string Shell::array_get(const std::string &n_in, const std::string &sub) co
   return (k == 0) ? v.value : std::string();
 }
 
+bool Shell::array_elem_set(const std::string &n_in, const std::string &sub) const {
+  if (n_in == "BASH_ALIASES" || n_in == "BASH_CMDS") {  // string-keyed live tables
+    const auto &tbl = (n_in == "BASH_ALIASES") ? aliases : hashed;
+    return tbl.count(sub) != 0;
+  }
+  if (n_in == "BASH_ARGC" || n_in == "BASH_ARGV" || n_in == "DIRSTACK") {
+    auto v = (n_in == "BASH_ARGC") ? bash_argc_view()
+             : (n_in == "BASH_ARGV") ? bash_argv_view() : dirstack();
+    bool ok = true;
+    long long k = eval_arith(const_cast<Shell &>(*this), sub, &ok);
+    if (!ok) k = 0;
+    return k >= 0 && k < static_cast<long long>(v.size());
+  }
+  std::string n = deref(n_in);
+  auto it = vars.find(n);
+  if (it == vars.end()) return false;
+  const Variable &v = it->second;
+  if (v.invisible) return false;
+  if (v.kind == VarKind::Assoc) return v.assoc.count(sub) != 0;
+  bool ok = true;
+  long long k = eval_arith(const_cast<Shell &>(*this), sub, &ok);
+  if (!ok) k = 0;
+  if (v.kind == VarKind::Indexed) {
+    if (k < 0 && !is_zsh() && !v.idx.empty()) k += v.idx.rbegin()->first + 1;
+    return v.idx.count(k) != 0;
+  }
+  return k == 0;  // a scalar's only element is itself
+}
+
 void Shell::array_set(const std::string &n_in, const std::string &sub, const std::string &val) {
   std::string n = deref(n_in);
   // GROUPS/FUNCNAME carry bash's att_noassign: an assignment is silently
@@ -686,8 +715,23 @@ void Shell::array_set(const std::string &n_in, const std::string &sub, const std
   Variable &v = vars[n];
   if (v.readonly) return;
   v.invisible = false;  // an assignment makes a declared-but-unset array visible
+  // `declare -u'/`-l'/`-c' fold the case of each element value on assignment,
+  // exactly as Shell::set does for scalars.
+  std::string fv = val;
+  if (v.ucase)
+    for (char &c : fv) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+  else if (v.lcase)
+    for (char &c : fv) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  else if (v.capcase) {
+    bool first = true;
+    for (char &c : fv) {
+      c = static_cast<char>(first ? std::toupper(static_cast<unsigned char>(c))
+                                  : std::tolower(static_cast<unsigned char>(c)));
+      first = false;
+    }
+  }
   if (v.kind == VarKind::Assoc) {
-    assoc_put(v, sub, val);
+    assoc_put(v, sub, fv);
     return;
   }
   // A subscripted assignment to an existing scalar promotes it to an indexed
@@ -709,8 +753,8 @@ void Shell::array_set(const std::string &n_in, const std::string &sub, const std
       return;
     }
   }
-  v.idx[k] = val;
-  if (k == 0) v.value = val;
+  v.idx[k] = fv;
+  if (k == 0) v.value = fv;
 }
 
 bool Shell::array_unset(const std::string &n_in, const std::string &sub) {

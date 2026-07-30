@@ -98,6 +98,10 @@ class Shell {
   // byte.  Public so `declare -p' can print in the same order.
   static std::vector<std::string> assoc_order(const Variable &v);
   std::string array_get(const std::string &n, const std::string &sub) const;
+  // True when the array element NAME[sub] currently exists (is set), as opposed
+  // to array_get returning "" for both an unset element and one set to "".  Used
+  // by ${a[i]-x}/${a[i]=x}/`test -v a[i]' to decide whether the element is set.
+  bool array_elem_set(const std::string &n, const std::string &sub) const;
   // $BASH_ARGC / $BASH_ARGV views (only non-empty inside a function under
   // `shopt -s extdebug'); see bash_argc_view/bash_argv_view in shell.cpp.
   std::vector<std::string> bash_argc_view() const;
