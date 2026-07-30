@@ -1256,11 +1256,24 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
 
         std::string dispname = dfname + "[" + std::string(1, dfsel) + "]";
         if (op == '=') {
-          // bash rejects assignment to a whole array via [@]/[*].
-          std::fprintf(stderr, "%s%s: bad array subscript\n", sh_.err_prefix().c_str(),
-                       dispname.c_str());
-          sh_.exiting = true;
-          sh_.exit_status = 1;
+          // For an ASSOCIATIVE array, `@'/`*' are ordinary literal keys, so
+          // `${A[@]:=w}' assigns w to the key `@' when the array is null and then
+          // expands the value(s).  For an INDEXED array, bash rejects assignment
+          // to the whole array via [@]/[*].
+          auto vit = sh_.vars.find(sh_.deref(dfname));
+          bool assoc = vit != sh_.vars.end() && vit->second.kind == VarKind::Assoc;
+          if (assoc) {
+            if (empty_test) {
+              sh_.array_set(dfname, std::string(1, dfsel), expand_no_split(word));
+              vals = sh_.array_values(dfname);
+            }
+            emit_values();
+          } else {
+            std::fprintf(stderr, "%s%s: bad array subscript\n", sh_.err_prefix().c_str(),
+                         dispname.c_str());
+            sh_.exiting = true;
+            sh_.exit_status = 1;
+          }
         } else if (op == '-') {
           if (empty_test) emit_word(); else emit_values();
         } else if (op == '+') {
