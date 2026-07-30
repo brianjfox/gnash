@@ -1383,6 +1383,12 @@ int Executor::run_simple(const SimpleCommand *c) {
     }
     if (persist) restore.clear();
     undo_temp();
+    // A builtin that performs an internal assignment (e.g. `declare -i a[$bad]=x'
+    // under array_expand_once) can raise the arithmetic-error flag from deep in
+    // the assignment path -- past the pre-dispatch check above.  The builtin has
+    // already printed the diagnostic and set its own status, so clear the flag
+    // here; otherwise it would spuriously abort the *next* command.
+    sh_.arith_error = false;
   } else {
     undo_temp();  // not a builtin after all: the external path sets its own env
     // A command name without `/' that has been hashed (`hash -p', BASH_CMDS)
