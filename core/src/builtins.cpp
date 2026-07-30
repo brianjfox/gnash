@@ -2224,6 +2224,11 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     // scalar path already honors the -i flag directly).
     if (integer && eq != std::string::npos && !name.empty() && !nameref)
       sh.vars[name].integer = true;
+    // `declare +i NAME=value' removes the integer attribute BEFORE the
+    // assignment, so an array/scalar value is stored verbatim rather than
+    // arithmetically evaluated (`declare +i arr=(hello world)').
+    if (rm_integer && eq != std::string::npos && !name.empty() && sh.vars.count(name))
+      sh.vars[name].integer = false;
     if (eq != std::string::npos) {
       std::string val = a.substr(eq + 1);
       bool arraylit = val.size() >= 2 && val.front() == '(' && val.back() == ')';
