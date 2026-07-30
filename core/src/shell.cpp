@@ -763,9 +763,11 @@ bool Shell::array_unset(const std::string &n_in, const std::string &sub) {
   if (it == vars.end()) return true;  // element of a missing array: no-op
   Variable &v = it->second;
   if (v.readonly) return true;
-  // `unset a[@]' / `unset a[*]' clears every element but leaves the (now empty)
-  // array in place -- bash still reports `declare -a a=()' afterward.
-  if (sub == "@" || sub == "*") {
+  // For an INDEXED array, `unset a[@]' / `unset a[*]' clears every element but
+  // leaves the (now empty) array in place.  For an ASSOCIATIVE array, `@'/`*'
+  // are ordinary literal keys (bash does not treat them as "all elements"), so
+  // fall through and erase just that key.
+  if ((sub == "@" || sub == "*") && v.kind != VarKind::Assoc) {
     v.idx.clear();
     v.assoc.clear();
     v.assoc_seq.clear();
