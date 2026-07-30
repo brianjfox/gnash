@@ -894,6 +894,23 @@ void Shell::array_assign(
     v.nameref = false;
   }
   v.invisible = false;  // even `b=()' makes a declared-but-unset array visible
+  // `declare -l'/`-u'/`-c' fold the case of each ELEMENT VALUE (never a key),
+  // exactly as Shell::set / array_set do for scalar and single-element writes.
+  auto fold_val = [&v](std::string s) {
+    if (v.ucase)
+      for (char &c : s) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    else if (v.lcase)
+      for (char &c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    else if (v.capcase) {
+      bool first = true;
+      for (char &c : s) {
+        c = static_cast<char>(first ? std::toupper(static_cast<unsigned char>(c))
+                                    : std::tolower(static_cast<unsigned char>(c)));
+        first = false;
+      }
+    }
+    return s;
+  };
   if (!append) {
     v.idx.clear();
     v.assoc.clear();
@@ -908,24 +925,25 @@ void Shell::array_assign(
   // to explicit `([k]=v)' pairs (which keep their subscript below).
   if (v.kind == VarKind::Assoc) {
     for (size_t x = 0; x < elems.size(); x++) {
-      if (elems[x].first) { assoc_put(v, *elems[x].first, elems[x].second); continue; }
+      if (elems[x].first) { assoc_put(v, *elems[x].first, fold_val(elems[x].second)); continue; }
       const std::string &key = elems[x].second;
-      assoc_put(v, key, (x + 1 < elems.size()) ? elems[x + 1].second : std::string());
+      assoc_put(v, key,
+                fold_val((x + 1 < elems.size()) ? elems[x + 1].second : std::string()));
       x++;  // consumed the paired value
     }
     return;
   }
   for (const auto &e : elems) {
     if (v.kind == VarKind::Assoc) {
-      if (e.first) assoc_put(v, *e.first, e.second);
+      if (e.first) assoc_put(v, *e.first, fold_val(e.second));
     } else if (e.first) {
       bool ok = true;
       long long k = eval_arith(*this, *e.first, &ok);
       if (!ok) k = 0;
-      v.idx[k] = e.second;
+      v.idx[k] = fold_val(e.second);
       next = k + 1;
     } else {
-      v.idx[next++] = e.second;
+      v.idx[next++] = fold_val(e.second);
     }
   }
   if (v.kind == VarKind::Indexed && v.idx.count(0)) v.value = v.idx[0];
