@@ -5430,11 +5430,42 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
       st = 1;
     }
   } else if (cmd == "disown") {
-    Shell::Job *j = sh.job_by_spec(argv.size() > 1 ? argv[1] : "");
-    if (j) {
-      int id = j->id;
+    // disown [-h] [-ar] [jobspec ... | pid ...]: -a all jobs, -r running jobs
+    // only, -h keep the job but mark it to skip SIGHUP.  With no jobspec (and no
+    // -a/-r) it acts on the current job.  We drop disowned jobs from the table
+    // (the -h "keep but no HUP" nuance is not modelled -- we have no HUP-on-exit).
+    bool all = false, running_only = false, hold = false;
+    std::vector<std::string> specs;
+    for (size_t k = 1; k < argv.size(); k++) {
+      const std::string &o = argv[k];
+      if (o.size() >= 2 && o[0] == '-' && o != "--") {
+        for (size_t c = 1; c < o.size(); c++) {
+          if (o[c] == 'a') all = true;
+          else if (o[c] == 'r') running_only = true;
+          else if (o[c] == 'h') hold = true;
+        }
+      } else if (o == "--") {
+        continue;
+      } else {
+        specs.push_back(o);
+      }
+    }
+    std::vector<int> drop;
+    if (all || running_only) {
+      for (const auto &x : sh.jobs)
+        if (!running_only || (x.running && !x.done)) drop.push_back(x.id);
+    } else if (!specs.empty()) {
+      for (const auto &s : specs)
+        if (Shell::Job *j = sh.job_by_spec(s)) drop.push_back(j->id);
+    } else if (Shell::Job *j = sh.job_by_spec("")) {
+      drop.push_back(j->id);
+    }
+    if (!hold) {
       sh.jobs.erase(std::remove_if(sh.jobs.begin(), sh.jobs.end(),
-                                   [id](const Shell::Job &x) { return x.id == id; }),
+                                   [&](const Shell::Job &x) {
+                                     return std::find(drop.begin(), drop.end(), x.id) !=
+                                            drop.end();
+                                   }),
                     sh.jobs.end());
     }
     st = 0;
