@@ -167,6 +167,71 @@ int Shell::wait_for_pid(long pid) {
   return rc;
 }
 
+int Shell::wait_next(const std::vector<int> &ids, long *finished_pid, bool *found) {
+  *found = false;
+  if (finished_pid) *finished_pid = -1;
+  auto is_target = [&](const Job &j) {
+    return ids.empty() || std::find(ids.begin(), ids.end(), j.id) != ids.end();
+  };
+  // No matching job at all: bash's `wait -n' returns 127 ("no such job").
+  bool any = false;
+  for (const auto &j : jobs)
+    if (is_target(j)) { any = true; break; }
+  if (!any) return 127;
+
+  // Consume an already-finished target immediately (it terminated before this
+  // `wait -n', e.g. reaped by a prior non-blocking check).
+  for (size_t k = 0; k < jobs.size(); k++) {
+    if (is_target(jobs[k]) && jobs[k].done) {
+      int rc = jobs[k].status;
+      if (finished_pid && !jobs[k].pids.empty()) *finished_pid = jobs[k].pids.back();
+      *found = true;
+      jobs.erase(jobs.begin() + k);
+      return rc;
+    }
+  }
+
+  // Otherwise block for children to change state, updating the job table, until
+  // a target job has fully terminated.  A job's status is its last member's
+  // (pipeline semantics); intermediate members are reaped as they exit.
+  for (;;) {
+    int wst = 0;
+    pid_t pid = waitpid(-1, &wst, WUNTRACED);
+    if (pid <= 0) {
+      if (errno == EINTR) continue;
+      return 127;  // no more children to wait for
+    }
+    Job *owner = nullptr;
+    for (auto &j : jobs) {
+      for (long p : j.pids)
+        if (p == pid) { owner = &j; break; }
+      if (owner) break;
+    }
+    if (WIFSTOPPED(wst)) {
+      if (owner) { owner->stopped = true; owner->running = false; }
+      continue;
+    }
+    note_child_reaped();  // a background child terminated -> pending SIGCHLD trap
+    if (!owner) continue;  // an untracked child (e.g. a command-substitution straggler)
+    int rc = WIFEXITED(wst) ? WEXITSTATUS(wst)
+                            : 128 + (WIFSIGNALED(wst) ? WTERMSIG(wst) : 0);
+    // The job is done once its final member exits; that member's status is the
+    // job's exit status.
+    if (pid == owner->pids.back()) {
+      owner->done = true;
+      owner->running = false;
+      owner->status = rc;
+      if (is_target(*owner)) {
+        if (finished_pid) *finished_pid = owner->pids.back();
+        *found = true;
+        int r = owner->status;
+        jobs.erase(jobs.begin() + (owner - &jobs[0]));
+        return r;
+      }
+    }
+  }
+}
+
 int Shell::wait_all() {
   int st = 0;
   for (auto &j : jobs) {
