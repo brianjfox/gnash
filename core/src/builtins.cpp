@@ -5347,53 +5347,81 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
       std::fprintf(stderr, "wait: usage: wait [-fn] [-p var] [id ...]\n");
       st = 2;
     } else {
-      // Wait for the requested ids (bash waits for all of them; `-n' stops after
-      // the first), or for every job when none were named.  Capture a pid for -p.
       long finished_pid = -1;
-      if (ai < argv.size()) {
+      bool found = false;
+      if (nflag) {
+        // `-n': return after the NEXT of the named jobs finishes (or any job
+        // when none are named).  Resolve each id to a job; an unknown `%spec'
+        // reports "no such job" but the wait proceeds with the rest.
+        std::vector<int> ids;
+        for (size_t k = ai; k < argv.size(); k++) {
+          Shell::Job *j = sh.job_by_spec(argv[k]);
+          if (j) ids.push_back(j->id);
+          else {
+            std::fprintf(stderr, "%swait: %s: no such job\n", sh.err_prefix().c_str(),
+                         argv[k].c_str());
+            st = 127;
+          }
+        }
+        // With ids named but none resolvable, there is nothing to wait for.
+        if (ai < argv.size() && ids.empty()) st = 127;
+        else st = sh.wait_next(ids, &finished_pid, &found);
+      } else if (ai < argv.size()) {
+        // Wait for every named id (bash waits for all of them).  The last one's
+        // pid is the -p result.
         for (size_t k = ai; k < argv.size(); k++) {
           Shell::Job *j = sh.job_by_spec(argv[k]);
           if (j) {
             for (long p : j->pids) st = sh.wait_for_pid(p);
-            if (!j->pids.empty()) finished_pid = j->pids.front();
+            if (!j->pids.empty()) { finished_pid = j->pids.front(); found = true; }
           } else {
             long pp = std::atol(argv[k].c_str());
             st = sh.wait_for_pid(pp);
             finished_pid = pp;
+            found = true;
           }
-          if (nflag) break;  // -n: return after the first id completes
         }
-      } else if (!nflag && !have_p) {
+      } else if (!have_p) {
         st = sh.wait_all();
       } else {
-        // Options but no ids and nothing to select: reap without blocking.  bash
-        // returns 127 ("no such job") when -n/-p find no job to wait for.
+        // `-p var' with no ids and no `-n': reap without blocking; the var is
+        // left unset (bash) when no job supplied a pid.
         sh.reap_jobs(false);
-        st = 127;
+        st = 0;
       }
-      // -p VAR: store the finished pid.  The name is validated like other
-      // builtins, and an array element subscript is arithmetic -- a bad one
-      // (e.g. under array_expand_once) raises bash's arithmetic diagnostic.
+      // -p VAR: store the finished pid, or unset VAR when no job was waited for.
+      // The name is validated like other builtins, and an array-element
+      // subscript is arithmetic (a bad one raises bash's arithmetic diagnostic).
       if (have_p) {
         auto lb = pvar.find('[');
-        if (lb != std::string::npos && !pvar.empty() && pvar.back() == ']') {
-          std::string base = pvar.substr(0, lb);
-          std::string psub = pvar.substr(lb + 1, pvar.size() - lb - 2);
-          if (!valid_identifier(base)) {
-            std::fprintf(stderr, "%swait: `%s': not a valid identifier\n",
-                         sh.err_prefix().c_str(), pvar.c_str());
-            st = 1;
-          } else if (!sh.array_expand_once_ok(base, psub)) {
-            st = 1;  // array_expand_once_ok already printed the arithmetic error
-          } else if (finished_pid >= 0) {
-            sh.array_set(base, psub, std::to_string(finished_pid));
-          }
-        } else if (!valid_identifier(pvar)) {
+        std::string base = pvar, psub;
+        bool subscripted = lb != std::string::npos && !pvar.empty() && pvar.back() == ']';
+        if (subscripted) {
+          base = pvar.substr(0, lb);
+          psub = pvar.substr(lb + 1, pvar.size() - lb - 2);
+        }
+        if (!valid_identifier(base)) {
           std::fprintf(stderr, "%swait: `%s': not a valid identifier\n",
                        sh.err_prefix().c_str(), pvar.c_str());
           st = 1;
-        } else if (finished_pid >= 0) {
-          sh.set(pvar, std::to_string(finished_pid));
+        } else if (found && finished_pid >= 0) {
+          if (subscripted) {
+            if (!sh.array_expand_once_ok(base, psub)) st = 1;  // arith error printed
+            else sh.array_set(base, psub, std::to_string(finished_pid));
+          } else {
+            sh.set(pvar, std::to_string(finished_pid));
+          }
+        } else if (!subscripted) {
+          // No job finished: bash unsets the -p variable.  A readonly target
+          // cannot be unset and is reported as such.
+          auto it = sh.vars.find(sh.deref(base));
+          if (it != sh.vars.end() && it->second.readonly) {
+            std::fprintf(stderr, "%swait: %s: cannot unset: readonly variable\n",
+                         sh.err_prefix().c_str(), base.c_str());
+            st = 1;
+          } else {
+            sh.unset(pvar);
+          }
         }
       }
     }
@@ -5430,11 +5458,42 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
       st = 1;
     }
   } else if (cmd == "disown") {
-    Shell::Job *j = sh.job_by_spec(argv.size() > 1 ? argv[1] : "");
-    if (j) {
-      int id = j->id;
+    // disown [-h] [-ar] [jobspec ... | pid ...]: -a all jobs, -r running jobs
+    // only, -h keep the job but mark it to skip SIGHUP.  With no jobspec (and no
+    // -a/-r) it acts on the current job.  We drop disowned jobs from the table
+    // (the -h "keep but no HUP" nuance is not modelled -- we have no HUP-on-exit).
+    bool all = false, running_only = false, hold = false;
+    std::vector<std::string> specs;
+    for (size_t k = 1; k < argv.size(); k++) {
+      const std::string &o = argv[k];
+      if (o.size() >= 2 && o[0] == '-' && o != "--") {
+        for (size_t c = 1; c < o.size(); c++) {
+          if (o[c] == 'a') all = true;
+          else if (o[c] == 'r') running_only = true;
+          else if (o[c] == 'h') hold = true;
+        }
+      } else if (o == "--") {
+        continue;
+      } else {
+        specs.push_back(o);
+      }
+    }
+    std::vector<int> drop;
+    if (all || running_only) {
+      for (const auto &x : sh.jobs)
+        if (!running_only || (x.running && !x.done)) drop.push_back(x.id);
+    } else if (!specs.empty()) {
+      for (const auto &s : specs)
+        if (Shell::Job *j = sh.job_by_spec(s)) drop.push_back(j->id);
+    } else if (Shell::Job *j = sh.job_by_spec("")) {
+      drop.push_back(j->id);
+    }
+    if (!hold) {
       sh.jobs.erase(std::remove_if(sh.jobs.begin(), sh.jobs.end(),
-                                   [id](const Shell::Job &x) { return x.id == id; }),
+                                   [&](const Shell::Job &x) {
+                                     return std::find(drop.begin(), drop.end(), x.id) !=
+                                            drop.end();
+                                   }),
                     sh.jobs.end());
     }
     st = 0;

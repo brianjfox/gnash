@@ -243,6 +243,11 @@ class Shell {
   Job *job_by_spec(const std::string &spec);  // %n / %% / %+ / %- / pid
   int wait_for_pid(long pid);                  // block, return exit status
   int wait_all();                              // wait for all jobs
+  // `wait -n': block until the next of the given jobs (by id; empty = any job)
+  // terminates.  Returns its status; sets *finished_pid to a member pid and
+  // *found.  With no matching job, sets *found=false and returns 127.  The
+  // completed job is consumed (removed from the table).
+  int wait_next(const std::vector<int> &ids, long *finished_pid, bool *found);
   void reap_jobs(bool notify);                 // non-blocking reap (+ optional report)
   bool check_job_events();                     // reap; true if unreported job events exist
   void emit_job_notices();                     // print "[n]+ Done/Stopped"; mark; drop finished
