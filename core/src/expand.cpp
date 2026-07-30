@@ -787,7 +787,22 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
             if (k) for (char c : joiner) { out += c; mask += '1'; }
             for (char c : pos[k]) { out += c; mask += '1'; }
           }
-        } else {
+        } else if (body[0] == '*' && splitting_ && sh_.ifs().empty()) {
+          bool first = true;  // empty IFS: separate fields, empties dropped
+          for (size_t k = 0; k < pos.size(); k++) {
+            if (pos[k].empty()) continue;
+            if (!first) { out += FIELD_SEP; mask += MMARK; }
+            first = false;
+            for (char c : pos[k]) { out += c; mask += '0'; }
+          }
+        } else if (body[0] == '*') {  // unquoted (non-empty IFS) / assignment: join IFS[0]
+          std::string sep = sh_.ifs();
+          std::string joiner = sep.empty() ? std::string() : std::string(1, sep[0]);
+          for (size_t k = 0; k < pos.size(); k++) {
+            if (k) for (char c : joiner) { out += c; mask += '0'; }
+            for (char c : pos[k]) { out += c; mask += '0'; }
+          }
+        } else {  // unquoted ${@}
           for (size_t k = 0; k < pos.size(); k++) {
             if (k) { out += FIELD_SEP; mask += MMARK; }
             for (char c : pos[k]) { out += c; mask += '0'; }

@@ -501,6 +501,12 @@ struct TestEval {
       for (const std::string &k : sh.array_keys(nm)) if (k == sub) return true;
       return false;
     }
+    // A bare array name implicitly references element 0 (bash), which can be
+    // unset even when the array has other elements set.
+    if (sh.is_array(arg)) {
+      for (const std::string &k : sh.array_keys(arg)) if (k == "0") return true;
+      return false;
+    }
     return sh.is_set(arg);
   }
 
@@ -2120,9 +2126,9 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     // is the one exception: for `local' a bare `-' is the special save-options
     // operand (bash), not an identifier, so it is not rejected here.
     if (!valid_identifier(name) && !(local && a == "-")) {
-      std::string tgt = (eq == std::string::npos) ? a : a.substr(0, eq);
+      // bash reports the whole offending word, including any `=value'.
       std::fprintf(stderr, "%s%s: `%s': not a valid identifier\n",
-                   sh.err_prefix().c_str(), argv[0].c_str(), tgt.c_str());
+                   sh.err_prefix().c_str(), argv[0].c_str(), a.c_str());
       ret = 1;
       continue;
     }
@@ -5566,6 +5572,12 @@ struct CondEval {
           if (!sh.array_expand_once_ok(nm, sub)) return false;  // diagnostic printed
           if (sub == "@" || sub == "*") return sh.array_count(nm) > 0;
           for (const std::string &k : sh.array_keys(nm)) if (k == sub) return true;
+          return false;
+        }
+        // A bare array name implicitly references element 0 (bash), which can be
+        // unset even when the array has other elements set.
+        if (sh.is_array(arg)) {
+          for (const std::string &k : sh.array_keys(arg)) if (k == "0") return true;
           return false;
         }
         if (sh.is_set(arg)) return true;
