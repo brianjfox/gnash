@@ -236,6 +236,10 @@ class Shell {
   int job_terminal = -1;        // controlling-terminal fd, or -1
   bool job_control = false;     // interactive + tty
   bool interactive = false;
+  // A command-substitution subshell inherits the job table (so `jobs' still
+  // lists them) but bash resets the notion of the current job -- `fg %%'/`bg'
+  // with no explicit spec report "no current jobs" there.
+  bool no_current_job = false;
   char invocation_char = 0;     // $- invocation letter: 'c' (-c), 's' (stdin), else 0
 
   void init_job_control(bool interactive_shell);
@@ -251,7 +255,8 @@ class Shell {
   void reap_jobs(bool notify);                 // non-blocking reap (+ optional report)
   bool check_job_events();                     // reap; true if unreported job events exist
   void emit_job_notices();                     // print "[n]+ Done/Stopped"; mark; drop finished
-  void print_jobs();
+  void print_jobs(const std::string &spec = "", bool lflag = false, bool pflag = false,
+                  bool rflag = false, bool sflag = false);
   int foreground_job(Job &j, bool cont);       // bring to foreground, wait
   void background_job(Job &j, bool cont);       // continue in background
 

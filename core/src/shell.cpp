@@ -1953,6 +1953,7 @@ std::string Shell::run_and_capture(const std::string &script, int *status) {
     dup2(fds[1], STDOUT_FILENO);
     close(fds[1]);
     job_control = false;  // command substitution: no nested tty control
+    no_current_job = true;  // bash resets the current job in the subshell
     subshell_level++;  // $BASH_SUBSHELL
     traps.erase("CHLD");  // the parent fires CHLD for the substitution as a whole
     pending_sigchld = 0;
