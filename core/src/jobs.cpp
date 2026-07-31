@@ -296,19 +296,40 @@ void Shell::reap_jobs(bool notify) {
   }
 }
 
-void Shell::print_jobs() {
+void Shell::print_jobs(const std::string &spec, bool lflag, bool pflag, bool rflag,
+                       bool sflag) {
   reap_jobs(false);
+  // A jobspec restricts the listing to that one job.
+  int only = -1;
+  if (!spec.empty()) {
+    Job *j = job_by_spec(spec);
+    if (!j) {
+      std::fprintf(stderr, "%sjobs: %s: no such job\n", err_prefix().c_str(), spec.c_str());
+      return;
+    }
+    only = j->id;
+  }
   // bash marks the current job `+' and the previous job `-' (others a space);
   // approximate with the two most recently started jobs (the last two entries).
   int cur = jobs.empty() ? -1 : jobs.back().id;
   int prev = jobs.size() >= 2 ? jobs[jobs.size() - 2].id : -1;
   for (const Job &j : jobs) {
+    if (only != -1 && j.id != only) continue;
+    if (rflag && (j.done || j.stopped)) continue;  // -r: running jobs only
+    if (sflag && !j.stopped) continue;             // -s: stopped jobs only
+    if (pflag) {  // -p: process-group id only (the job's leader pid)
+      std::printf("%ld\n", j.pgid);
+      continue;
+    }
     const char *state = j.done ? "Done" : (j.stopped ? "Stopped" : "Running");
     char mark = j.id == cur ? '+' : j.id == prev ? '-' : ' ';
     // A running background job is shown with a trailing ` &' (bash: RUNNING &&
     // not foreground); the status field is padded to LONGEST_SIGNAL_DESC (27).
     const char *amp = (j.background && !j.done && !j.stopped) ? " &" : "";
-    std::printf("[%d]%c  %-27s%s%s\n", j.id, mark, state, j.command.c_str(), amp);
+    if (lflag)  // -l: include the process-group id before the state
+      std::printf("[%d]%c %ld %-27s%s%s\n", j.id, mark, j.pgid, state, j.command.c_str(), amp);
+    else
+      std::printf("[%d]%c  %-27s%s%s\n", j.id, mark, state, j.command.c_str(), amp);
   }
 }
 

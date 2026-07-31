@@ -3285,7 +3285,25 @@ int bi_kill(Shell &sh, const std::vector<std::string> &argv) {
         st = 1;
         continue;
       }
-      target = static_cast<pid_t>(-j->pgid);
+      // With job control the job runs in its own process group, so signal the
+      // whole group (`-pgid').  Without it (a non-interactive script), the job's
+      // members share the shell's process group -- there is no separate group to
+      // signal, so signal each member pid directly.
+      if (sh.job_control && j->pgid > 0) {
+        if (kill(static_cast<pid_t>(-j->pgid), sig) != 0) {
+          std::fprintf(stderr, "%skill: (%ld) - %s\n", sh.err_prefix().c_str(),
+                       static_cast<long>(-j->pgid), std::strerror(errno));
+          st = 1;
+        }
+      } else {
+        for (long p : j->pids)
+          if (kill(static_cast<pid_t>(p), sig) != 0) {
+            std::fprintf(stderr, "%skill: (%ld) - %s\n", sh.err_prefix().c_str(), p,
+                         std::strerror(errno));
+            st = 1;
+          }
+      }
+      continue;
     } else {
       // A pid must be a (possibly signed) decimal integer; anything else (an
       // empty word, `@12', `abc') is rejected WITHOUT signaling -- crucially,
@@ -5426,17 +5444,58 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
       }
     }
   } else if (cmd == "jobs") {
-    sh.print_jobs();
-    st = 0;
+    // jobs [-lnprs] [jobspec]: -l long (with pgid), -p pids only, -r running
+    // only, -s stopped only, -n changed-only (we have no async change tracking).
+    bool jl = false, jp = false, jr = false, js = false;
+    std::string jspec;
+    bool jbad = false;
+    for (size_t k = 1; k < argv.size(); k++) {
+      const std::string &o = argv[k];
+      if (o == "--") continue;
+      if (o.size() >= 2 && o[0] == '-' && o[1] != '%') {
+        for (size_t c = 1; c < o.size(); c++) {
+          switch (o[c]) {
+            case 'l': jl = true; break;
+            case 'p': jp = true; break;
+            case 'r': jr = true; break;
+            case 's': js = true; break;
+            case 'n': break;  // no async change tracking: nothing extra to show
+            default: jbad = true; break;
+          }
+        }
+      } else {
+        jspec = o;
+      }
+    }
+    if (jbad) {
+      std::fprintf(stderr, "jobs: usage: jobs [-lnprs] [jobspec ...] or jobs -x command [args]\n");
+      st = 1;
+    } else {
+      sh.print_jobs(jspec, jl, jp, jr, js);
+      st = 0;
+    }
   } else if (cmd == "fg") {
     std::string spec = argv.size() > 1 ? argv[1] : "";
-    if (!sh.job_control) {
+    bool cur_spec = spec.empty() || spec == "%" || spec == "%%" || spec == "%+" || spec == "%-";
+    if (!sh.job_control && !sh.opt_monitor) {
       std::fprintf(stderr, "%sfg: no job control\n", sh.err_prefix().c_str());
       st = 1;
+    } else if (sh.no_current_job && cur_spec) {
+      // A command-substitution subshell has no current job to bring forward.
+      std::fprintf(stderr, "%sfg: no current jobs\n", sh.err_prefix().c_str());
+      st = 1;
     } else if (Shell::Job *j = sh.job_by_spec(spec)) {
-      std::printf("%s\n", j->command.c_str());  // bash echoes the command
-      std::fflush(stdout);
-      st = sh.foreground_job(*j, true);
+      if (!sh.job_control) {
+        // Monitor mode is on but there is no controlling terminal, so the job was
+        // not started under job control and cannot be brought to the foreground.
+        std::fprintf(stderr, "%sfg: job %d started without job control\n",
+                     sh.err_prefix().c_str(), j->id);
+        st = 1;
+      } else {
+        std::printf("%s\n", j->command.c_str());  // bash echoes the command
+        std::fflush(stdout);
+        st = sh.foreground_job(*j, true);
+      }
     } else {
       std::fprintf(stderr, "%sfg: %s: no such job\n", sh.err_prefix().c_str(),
                    spec.empty() ? "current" : spec.c_str());

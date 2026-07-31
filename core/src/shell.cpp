@@ -23,6 +23,7 @@
 
 #include "gnash/core/csh.hpp"
 #include "gnash/core/executor.hpp"
+#include "gnash/core/expand.hpp"
 #include "gnash/core/parser.hpp"
 
 extern "C" char **environ;
@@ -1883,6 +1884,63 @@ std::string Shell::run_and_capture_inproc(const std::string &script, int *status
 }
 
 std::string Shell::run_and_capture(const std::string &script, int *status) {
+  // bash optimization: when the entire command-substitution body is a lone input
+  // redirection (`$(< file)'), the substitution expands to the contents of the
+  // file -- no `cat' is forked.  It applies only to this exact shape: a single
+  // `<' with just a filename after it and nothing else (`$(echo x; < f)' and
+  // `$(< f cmd)' are ordinary commands).
+  {
+    size_t a = script.find_first_not_of(" \t\n");
+    if (a != std::string::npos && script[a] == '<' &&
+        (a + 1 >= script.size() ||
+         (script[a + 1] != '<' && script[a + 1] != '(' && script[a + 1] != '>'))) {
+      size_t p = a + 1;
+      while (p < script.size() && (script[p] == ' ' || script[p] == '\t')) p++;
+      size_t start = p;
+      bool simple = true;
+      for (; p < script.size(); p++) {
+        char c = script[p];
+        if (c == '\'') {
+          size_t e = script.find('\'', p + 1);
+          if (e == std::string::npos) { simple = false; break; }
+          p = e;
+        } else if (c == '"') {
+          size_t e = script.find('"', p + 1);
+          if (e == std::string::npos) { simple = false; break; }
+          p = e;
+        } else if (c == '\\') {
+          p++;
+        } else if (c == ' ' || c == '\t' || c == '\n') {
+          break;
+        } else if (std::strchr("|&;<>()`", c)) {
+          simple = false;  // another command/redirection follows: not the `< f' form
+          break;
+        }
+      }
+      std::string raw = script.substr(start, p - start);
+      // Everything after the filename word must be blank for the optimization.
+      bool only = script.find_first_not_of(" \t\n", p) == std::string::npos;
+      if (simple && only && !raw.empty()) {
+        Expander ex(*this);
+        std::string path = ex.expand_no_split(raw);
+        FILE *f = std::fopen(path.c_str(), "r");
+        if (!f) {
+          std::fprintf(stderr, "%s%s: %s\n", err_prefix().c_str(), path.c_str(),
+                       std::strerror(errno));
+          if (status) *status = 1;
+          return std::string();
+        }
+        std::string out;
+        char buf[4096];
+        size_t n;
+        while ((n = std::fread(buf, 1, sizeof buf, f)) > 0) out.append(buf, n);
+        std::fclose(f);
+        if (status) *status = 0;
+        while (!out.empty() && out.back() == '\n') out.pop_back();
+        return out;
+      }
+    }
+  }
   int fds[2];
   if (pipe(fds) != 0) {
     if (status) *status = 1;
@@ -1895,6 +1953,7 @@ std::string Shell::run_and_capture(const std::string &script, int *status) {
     dup2(fds[1], STDOUT_FILENO);
     close(fds[1]);
     job_control = false;  // command substitution: no nested tty control
+    no_current_job = true;  // bash resets the current job in the subshell
     subshell_level++;  // $BASH_SUBSHELL
     traps.erase("CHLD");  // the parent fires CHLD for the substitution as a whole
     pending_sigchld = 0;
