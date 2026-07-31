@@ -208,6 +208,12 @@ class Shell {
   bool in_trap = false;                       // guard against trap recursion
   void set_signal_trap(int signo, bool active);  // (de)install the shared handler
   void run_pending_traps();                   // run traps for signals received
+  // Around a blocking `wait', re-install trapped-signal handlers WITHOUT
+  // SA_RESTART so a trapped signal interrupts the wait (EINTR) rather than
+  // resuming it; end_ restores the normal (restarting) handlers.
+  void begin_interruptible_wait();
+  void end_interruptible_wait();
+  int pending_trapped_signal();               // a pending signal that has a trap, or 0
   void note_child_reaped();                   // count a reaped child for the SIGCHLD trap
   int pending_sigchld = 0;                     // children reaped, awaiting the CHLD trap
   // Run the DEBUG trap (if set) before a command, with $BASH_COMMAND set to

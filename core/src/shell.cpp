@@ -256,6 +256,40 @@ void Shell::set_signal_trap(int signo, bool active) {
   sigaction(signo, &sa, nullptr);
 }
 
+// Re-arm the handlers for every currently-trapped signal so a blocking wait is
+// interrupted (EINTR) instead of resumed.  `restart' selects the normal
+// SA_RESTART disposition (used to restore after the wait) vs. no-restart.
+static void rearm_trap_handlers(const std::map<std::string, std::string> &traps,
+                                bool restart) {
+  for (int sig = 1; sig < NSIG; sig++) {
+    if (sig == SIGCHLD) continue;                  // reaped synchronously, no async handler
+    const char *nm = signum_to_trapname(sig);      // skip EXIT/DEBUG/ERR/RETURN pseudo-traps
+    if (!nm) continue;
+    auto it = traps.find(nm);
+    if (it == traps.end() || it->second.empty()) continue;  // untrapped / reset
+    struct sigaction sa;
+    std::memset(&sa, 0, sizeof sa);
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = restart ? SA_RESTART : 0;
+    sa.sa_handler = trap_signal_handler;
+    sigaction(sig, &sa, nullptr);
+  }
+}
+
+void Shell::begin_interruptible_wait() { rearm_trap_handlers(traps, false); }
+void Shell::end_interruptible_wait() { rearm_trap_handlers(traps, true); }
+
+int Shell::pending_trapped_signal() {
+  for (int s = 1; s < NSIG; s++) {
+    if (!g_trap_pending[s]) continue;
+    const char *nm = signum_to_trapname(s);
+    if (!nm) continue;
+    auto it = traps.find(nm);
+    if (it != traps.end() && !it->second.empty()) return s;
+  }
+  return 0;
+}
+
 int Shell::run_debug_trap(const std::string &cmd_text) {
   auto it = traps.find("DEBUG");
   if (it == traps.end() || in_debug_trap) return 0;

@@ -234,11 +234,52 @@ int Shell::wait_next(const std::vector<int> &ids, long *finished_pid, bool *foun
 
 int Shell::wait_all() {
   int st = 0;
-  for (auto &j : jobs) {
-    if (!j.done) { st = wait_job(j); if (j.done) for (size_t k = 0; k < j.pids.size(); k++) note_child_reaped(); }
+  // Block until every background job has terminated, reaping whichever child
+  // changes state first (not job-by-job in order, so one job finishing early
+  // is observed immediately).  A trapped signal interrupts the wait: bash's
+  // `wait' returns 128+signum, then the trap runs (jobs9).
+  begin_interruptible_wait();
+  for (;;) {
+    bool running = false;
+    for (const auto &j : jobs)
+      if (!j.done && !j.stopped) { running = true; break; }
+    if (!running) break;
+
+    int wst = 0;
+    pid_t pid = waitpid(-1, &wst, WUNTRACED);
+    if (pid < 0) {
+      if (errno == EINTR) {
+        if (int s = pending_trapped_signal()) { end_interruptible_wait(); return 128 + s; }
+        continue;
+      }
+      break;  // ECHILD: no children left despite a job marked running (already reaped)
+    }
+    if (pid == 0) continue;
+
+    Job *owner = nullptr;
+    for (auto &j : jobs)
+      if (std::find(j.pids.begin(), j.pids.end(), static_cast<long>(pid)) != j.pids.end()) {
+        owner = &j;
+        break;
+      }
+    if (WIFSTOPPED(wst)) {
+      if (owner) { owner->stopped = true; owner->running = false; }
+      continue;
+    }
+    note_child_reaped();
+    if (!owner) continue;  // an untracked child (command-substitution straggler)
+    int rc = WIFEXITED(wst) ? WEXITSTATUS(wst)
+                            : 128 + (WIFSIGNALED(wst) ? WTERMSIG(wst) : 0);
+    if (static_cast<long>(pid) == owner->pids.back()) {
+      owner->done = true;
+      owner->running = false;
+      owner->status = rc;
+      st = rc;
+    }
   }
   int wst;
-  while (waitpid(-1, &wst, 0) > 0) note_child_reaped();  // reap any stragglers
+  while (waitpid(-1, &wst, WNOHANG) > 0) note_child_reaped();  // reap exited stragglers
+  end_interruptible_wait();
   return st;
 }
 
