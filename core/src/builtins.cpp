@@ -3203,6 +3203,7 @@ int bi_kill(Shell &sh, const std::vector<std::string> &argv) {
       char *end = nullptr;
       long n = std::strtol(spec.c_str(), &end, 10);
       if (*end != '\0') return -1;
+      if (n == 0) return 0;  // signal 0: no name, but valid (existence check)
       return trapname_from_num(static_cast<int>(n)) ? static_cast<int>(n) : -1;
     }
     std::string n = spec;
@@ -3244,20 +3245,27 @@ int bi_kill(Shell &sh, const std::vector<std::string> &argv) {
   size_t i = 1;
   if (argv.size() > 1 && argv[1].size() > 1 && argv[1][0] == '-' && argv[1] != "--") {
     std::string opt = argv[1];
-    if (opt == "-s" || opt == "-n") {
-      // The signal is the next word: `-s TERM' / `-n 15'.
-      if (argv.size() < 3) {
+    if (opt[1] == 's' || opt[1] == 'n') {
+      // `-s sigspec' / `-n signum': the argument is either attached to the
+      // option (`-sHUP', `-n9') or the following word (`-s HUP', `-n 9').
+      std::string arg;
+      if (opt.size() > 2) {
+        arg = opt.substr(2);
+        i = 2;
+      } else if (argv.size() > 2) {
+        arg = argv[2];
+        i = 3;
+      } else {
         std::fprintf(stderr, "%skill: %s: option requires an argument\n",
                      sh.err_prefix().c_str(), opt.c_str());
         return 1;
       }
-      sig = resolve_sig(argv[2]);
+      sig = resolve_sig(arg);
       if (sig < 0) {
         std::fprintf(stderr, "%skill: %s: invalid signal specification\n",
-                     sh.err_prefix().c_str(), argv[2].c_str());
+                     sh.err_prefix().c_str(), arg.c_str());
         return 1;
       }
-      i = 3;
     } else {
       // `-INT' / `-9' / `-SIGHUP': the spec is the option itself.
       sig = resolve_sig(opt.substr(1));
