@@ -3285,7 +3285,25 @@ int bi_kill(Shell &sh, const std::vector<std::string> &argv) {
         st = 1;
         continue;
       }
-      target = static_cast<pid_t>(-j->pgid);
+      // With job control the job runs in its own process group, so signal the
+      // whole group (`-pgid').  Without it (a non-interactive script), the job's
+      // members share the shell's process group -- there is no separate group to
+      // signal, so signal each member pid directly.
+      if (sh.job_control && j->pgid > 0) {
+        if (kill(static_cast<pid_t>(-j->pgid), sig) != 0) {
+          std::fprintf(stderr, "%skill: (%ld) - %s\n", sh.err_prefix().c_str(),
+                       static_cast<long>(-j->pgid), std::strerror(errno));
+          st = 1;
+        }
+      } else {
+        for (long p : j->pids)
+          if (kill(static_cast<pid_t>(p), sig) != 0) {
+            std::fprintf(stderr, "%skill: (%ld) - %s\n", sh.err_prefix().c_str(), p,
+                         std::strerror(errno));
+            st = 1;
+          }
+      }
+      continue;
     } else {
       // A pid must be a (possibly signed) decimal integer; anything else (an
       // empty word, `@12', `abc') is rejected WITHOUT signaling -- crucially,
