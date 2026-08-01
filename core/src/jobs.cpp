@@ -72,6 +72,10 @@ Shell::Job *Shell::add_job(long pgid, const std::vector<long> &pids, const std::
   j.command = cmd;
   j.background = background;
   j.running = true;
+  // Record whether job control was active when the job started: bash's
+  // J_JOBCONTROL.  `fg'/`bg' only operate on such jobs; one started with
+  // monitor off reports "started without job control" even after `set -m'.
+  j.monitored = job_control || opt_monitor;
   jobs.push_back(j);
   // A newly-created background job becomes the current job (bash: reset_current
   // after stop_pipeline for an async job).
@@ -197,7 +201,11 @@ int wait_job(Shell::Job &j) {
 int Shell::foreground_job(Job &j, bool cont) {
   if (job_control) tcsetpgrp(job_terminal, static_cast<pid_t>(j.pgid));
   if (cont) {
-    kill(static_cast<pid_t>(-j.pgid), SIGCONT);
+    // With a job-control terminal the job has its own process group; without
+    // one (set -m in a script) its members share the shell's group, so signal
+    // the member pids directly rather than the group.
+    if (job_control) kill(static_cast<pid_t>(-j.pgid), SIGCONT);
+    else for (long p : j.pids) kill(static_cast<pid_t>(p), SIGCONT);
     j.stopped = false;
     j.running = true;
   }
@@ -211,7 +219,8 @@ int Shell::foreground_job(Job &j, bool cont) {
 
 void Shell::background_job(Job &j, bool cont) {
   if (cont) {
-    kill(static_cast<pid_t>(-j.pgid), SIGCONT);
+    if (job_control) kill(static_cast<pid_t>(-j.pgid), SIGCONT);
+    else for (long p : j.pids) kill(static_cast<pid_t>(p), SIGCONT);
     j.stopped = false;
     j.running = true;
   }

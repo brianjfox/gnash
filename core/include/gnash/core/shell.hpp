@@ -236,6 +236,7 @@ class Shell {
     int status = 0;             // exit status when done
     bool notified = false;
     bool background = false;
+    bool monitored = false;     // job control (set -m / interactive) was on at start
   };
   std::vector<Job> jobs;
   // Current (`+') and previous (`-') job ids, maintained incrementally the way

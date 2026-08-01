@@ -5493,9 +5493,10 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
       std::fprintf(stderr, "%sfg: no current jobs\n", sh.err_prefix().c_str());
       st = 1;
     } else if (Shell::Job *j = sh.job_by_spec(spec)) {
-      if (!sh.job_control) {
-        // Monitor mode is on but there is no controlling terminal, so the job was
-        // not started under job control and cannot be brought to the foreground.
+      if (!j->monitored) {
+        // The job was started when job control was inactive (bash's
+        // IS_JOBCONTROL(job) == 0), so it cannot be brought to the foreground
+        // even though monitor mode is on now.
         std::fprintf(stderr, "%sfg: job %d started without job control\n",
                      sh.err_prefix().c_str(), j->id);
         st = 1;
