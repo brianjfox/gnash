@@ -5396,15 +5396,49 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
         // Wait for every named id (bash waits for all of them).  The last one's
         // pid is the -p result.
         for (size_t k = ai; k < argv.size(); k++) {
-          Shell::Job *j = sh.job_by_spec(argv[k]);
-          if (j) {
-            for (long p : j->pids) st = sh.wait_for_pid(p);
+          const std::string &spec = argv[k];
+          if (!spec.empty() && spec[0] == '%') {
+            // A `%jobspec' that names no job: bash reports it and returns 127.
+            Shell::Job *j = sh.job_by_spec(spec);
+            if (!j) {
+              std::fprintf(stderr, "%swait: %s: no such job\n",
+                           sh.err_prefix().c_str(), spec.c_str());
+              st = 127;
+              continue;
+            }
+            int wid = j->id;
             if (!j->pids.empty()) { finished_pid = j->pids.front(); found = true; }
+            for (long p : j->pids) st = sh.wait_for_pid(p);
+            // A waited-for job is consumed: bash removes it so its number frees
+            // up for reuse by the next async job.
+            sh.remove_jobs_if([wid](const Shell::Job &x) { return x.id == wid; });
           } else {
-            long pp = std::atol(argv[k].c_str());
+            // Anything not a `%jobspec' must be a decimal pid.
+            bool numeric = !spec.empty();
+            for (char c : spec)
+              if (!std::isdigit(static_cast<unsigned char>(c))) { numeric = false; break; }
+            if (!numeric) {
+              std::fprintf(stderr, "%swait: `%s': not a pid or valid job spec\n",
+                           sh.err_prefix().c_str(), spec.c_str());
+              st = 1;
+              continue;
+            }
+            long pp = std::atol(spec.c_str());
+            Shell::Job *pj = sh.job_by_spec(spec);
+            if (!pj) {
+              std::fprintf(stderr, "%swait: pid %ld is not a child of this shell\n",
+                           sh.err_prefix().c_str(), pp);
+              st = 127;
+              continue;
+            }
+            int wid = pj->id;
             st = sh.wait_for_pid(pp);
             finished_pid = pp;
             found = true;
+            // The waited-for job is consumed once it is fully done, so its
+            // number frees up for reuse (bash removes it after `wait pid').
+            sh.remove_jobs_if(
+                [wid](const Shell::Job &x) { return x.id == wid && x.done; });
           }
         }
       } else if (!have_p) {

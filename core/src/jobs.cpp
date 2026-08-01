@@ -354,6 +354,8 @@ int Shell::wait_all() {
   int wst;
   while (waitpid(-1, &wst, WNOHANG) > 0) note_child_reaped();  // reap exited stragglers
   end_interruptible_wait();
+  // bash's `wait' with no operands removes every terminated job it reaped.
+  remove_jobs_if([](const Job &j) { return j.done; });
   return st;
 }
 
