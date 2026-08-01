@@ -166,7 +166,13 @@ Shell::Job *Shell::job_by_spec(const std::string &spec) {
         if (j.id == id) return &j;
       return nullptr;
     }
-    for (auto &j : jobs)  // prefix match on command
+    if (s[0] == '?') {  // %?str: the job whose command CONTAINS str
+      std::string sub = s.substr(1);
+      for (auto &j : jobs)
+        if (!j.done && j.command.find(sub) != std::string::npos) return &j;
+      return nullptr;
+    }
+    for (auto &j : jobs)  // %str: the job whose command STARTS with str
       if (!j.done && j.command.rfind(s, 0) == 0) return &j;
     return nullptr;
   }
