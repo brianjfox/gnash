@@ -238,6 +238,14 @@ class Shell {
     bool background = false;
   };
   std::vector<Job> jobs;
+  // Current (`+') and previous (`-') job ids, maintained incrementally the way
+  // bash does (0 == none).  A job that stops or is newly backgrounded becomes
+  // current; the old current becomes previous.
+  int j_current = 0;
+  int j_previous = 0;
+  void set_current_job(int id);   // make ID the current job, pick a useful previous
+  void reset_current();           // recompute current/previous after a change
+  void remove_jobs_if(const std::function<bool(const Job &)> &pred);  // erase + reset_current
   long shell_pgid = 0;
   int job_terminal = -1;        // controlling-terminal fd, or -1
   bool job_control = false;     // interactive + tty

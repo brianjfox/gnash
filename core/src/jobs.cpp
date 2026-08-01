@@ -73,7 +73,72 @@ Shell::Job *Shell::add_job(long pgid, const std::vector<long> &pids, const std::
   j.background = background;
   j.running = true;
   jobs.push_back(j);
+  // A newly-created background job becomes the current job (bash: reset_current
+  // after stop_pipeline for an async job).
+  if (background) reset_current();
   return &jobs.back();
+}
+
+namespace {
+// The most recent (highest-id) live job in the wanted run state whose id is
+// below `below' (0 = no bound), mirroring bash's most_recent_job_in_state.
+int most_recent_in_state(const std::vector<Shell::Job> &jobs, int below,
+                         bool want_stopped) {
+  int best = 0;
+  for (const auto &j : jobs) {
+    if (j.done) continue;
+    if (below > 0 && j.id >= below) continue;
+    if (j.stopped == want_stopped && j.id > best) best = j.id;
+  }
+  return best;
+}
+}  // namespace
+
+// Make ID the current job and choose a useful previous job (bash set_current_job).
+void Shell::set_current_job(int id) {
+  auto find = [&](int i) -> Job * {
+    for (auto &j : jobs) if (j.id == i && !j.done) return &j;
+    return nullptr;
+  };
+  if (j_current != id) { j_previous = j_current; j_current = id; }
+  // First choice for previous: the old current job, if it is stopped.
+  Job *p = find(j_previous);
+  if (j_previous != j_current && p && p->stopped) return;
+  // Second choice: newest stopped job older than the current one.
+  Job *c = find(j_current);
+  if (c && c->stopped) {
+    int cand = most_recent_in_state(jobs, j_current, true);
+    if (cand) { j_previous = cand; return; }
+  }
+  // Otherwise the newest running job (older than current if current is running).
+  int cand = (c && !c->stopped) ? most_recent_in_state(jobs, j_current, false)
+                                : most_recent_in_state(jobs, 0, false);
+  j_previous = cand ? cand : j_current;
+}
+
+// Recompute current/previous after jobs change (bash reset_current).
+void Shell::reset_current() {
+  auto find = [&](int i) -> Job * {
+    for (auto &j : jobs) if (j.id == i && !j.done) return &j;
+    return nullptr;
+  };
+  int cand = 0;
+  Job *cur = find(j_current);
+  if (cur && cur->stopped) {
+    cand = j_current;  // a stopped current job stays current
+  } else {
+    Job *prev = find(j_previous);
+    if (prev && prev->stopped) cand = j_previous;               // first: previous, if stopped
+    if (!cand) cand = most_recent_in_state(jobs, 0, true);      // second: newest stopped
+    if (!cand) cand = most_recent_in_state(jobs, 0, false);     // third: newest running
+  }
+  if (cand) set_current_job(cand);
+  else { j_current = j_previous = 0; }
+}
+
+void Shell::remove_jobs_if(const std::function<bool(const Job &)> &pred) {
+  jobs.erase(std::remove_if(jobs.begin(), jobs.end(), pred), jobs.end());
+  reset_current();
 }
 
 Shell::Job *Shell::job_by_spec(const std::string &spec) {
@@ -85,13 +150,11 @@ Shell::Job *Shell::job_by_spec(const std::string &spec) {
   if (spec[0] == '%') {
     std::string s = spec.substr(1);
     if (s.empty() || s == "%" || s == "+" || s == "-") {
-      // current (or previous for `-')
-      std::vector<Job *> live;
+      int want = (s == "-") ? j_previous : j_current;  // current (or previous for `-')
+      if (want == 0) return nullptr;
       for (auto &j : jobs)
-        if (!j.done) live.push_back(&j);
-      if (live.empty()) return nullptr;
-      if (s == "-") return live.size() >= 2 ? live[live.size() - 2] : live.back();
-      return live.back();
+        if (j.id == want && !j.done) return &j;
+      return nullptr;
     }
     if (std::isdigit(static_cast<unsigned char>(s[0]))) {
       int id = std::atoi(s.c_str());
@@ -187,6 +250,7 @@ int Shell::wait_next(const std::vector<int> &ids, long *finished_pid, bool *foun
       if (finished_pid && !jobs[k].pids.empty()) *finished_pid = jobs[k].pids.back();
       *found = true;
       jobs.erase(jobs.begin() + k);
+      reset_current();
       return rc;
     }
   }
@@ -226,6 +290,7 @@ int Shell::wait_next(const std::vector<int> &ids, long *finished_pid, bool *foun
         *found = true;
         int r = owner->status;
         jobs.erase(jobs.begin() + (owner - &jobs[0]));
+        reset_current();
         return r;
       }
     }
@@ -288,11 +353,12 @@ int Shell::wait_all() {
 bool Shell::check_job_events() {
   int wst = 0;
   pid_t pid;
+  int last_stopped = 0;
   while ((pid = waitpid(-1, &wst, WNOHANG | WUNTRACED)) > 0) {
     for (auto &j : jobs) {
       for (long p : j.pids) {
         if (p != pid) continue;
-        if (WIFSTOPPED(wst)) { j.stopped = true; j.running = false; }
+        if (WIFSTOPPED(wst)) { j.stopped = true; j.running = false; last_stopped = j.id; }
         else {
           j.done = true;
           j.running = false;
@@ -302,6 +368,11 @@ bool Shell::check_job_events() {
     }
     if (!WIFSTOPPED(wst)) note_child_reaped();  // a background child terminated
   }
+  // A job that stopped becomes the current job.  A job that merely terminated
+  // does NOT recompute current/previous: bash's set_job_status_and_cleanup only
+  // bumps call_set_current on a stop, so current keeps pointing at a dead job
+  // (still marked `+') until the job is actually removed from the table.
+  if (last_stopped) set_current_job(last_stopped);
   for (const Job &j : jobs)
     if ((j.done || j.stopped) && !j.notified) return true;
   return false;
@@ -350,10 +421,9 @@ void Shell::print_jobs(const std::string &spec, bool lflag, bool pflag, bool rfl
     }
     only = j->id;
   }
-  // bash marks the current job `+' and the previous job `-' (others a space);
-  // approximate with the two most recently started jobs (the last two entries).
-  int cur = jobs.empty() ? -1 : jobs.back().id;
-  int prev = jobs.size() >= 2 ? jobs[jobs.size() - 2].id : -1;
+  // bash marks the current job `+' and the previous job `-' (others a space).
+  int cur = j_current;
+  int prev = j_previous;
   for (const Job &j : jobs) {
     if (only != -1 && j.id != only) continue;
     if (rflag && (j.done || j.stopped)) continue;  // -r: running jobs only
@@ -372,6 +442,10 @@ void Shell::print_jobs(const std::string &spec, bool lflag, bool pflag, bool rfl
     else
       std::printf("[%d]%c  %-27s%s%s\n", j.id, mark, state, j.command.c_str(), amp);
   }
+  // Reporting a terminated job consumes it (bash removes DEADJOB entries once
+  // listed).  Only when listing the whole table, not a single -r/-s filter view.
+  if (only == -1 && !rflag && !sflag && !pflag)
+    remove_jobs_if([](const Job &j) { return j.done; });
 }
 
 }  // namespace gnash::core
