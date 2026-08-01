@@ -3203,6 +3203,7 @@ int bi_kill(Shell &sh, const std::vector<std::string> &argv) {
       char *end = nullptr;
       long n = std::strtol(spec.c_str(), &end, 10);
       if (*end != '\0') return -1;
+      if (n == 0) return 0;  // signal 0: no name, but valid (existence check)
       return trapname_from_num(static_cast<int>(n)) ? static_cast<int>(n) : -1;
     }
     std::string n = spec;
@@ -3244,20 +3245,27 @@ int bi_kill(Shell &sh, const std::vector<std::string> &argv) {
   size_t i = 1;
   if (argv.size() > 1 && argv[1].size() > 1 && argv[1][0] == '-' && argv[1] != "--") {
     std::string opt = argv[1];
-    if (opt == "-s" || opt == "-n") {
-      // The signal is the next word: `-s TERM' / `-n 15'.
-      if (argv.size() < 3) {
+    if (opt[1] == 's' || opt[1] == 'n') {
+      // `-s sigspec' / `-n signum': the argument is either attached to the
+      // option (`-sHUP', `-n9') or the following word (`-s HUP', `-n 9').
+      std::string arg;
+      if (opt.size() > 2) {
+        arg = opt.substr(2);
+        i = 2;
+      } else if (argv.size() > 2) {
+        arg = argv[2];
+        i = 3;
+      } else {
         std::fprintf(stderr, "%skill: %s: option requires an argument\n",
                      sh.err_prefix().c_str(), opt.c_str());
         return 1;
       }
-      sig = resolve_sig(argv[2]);
+      sig = resolve_sig(arg);
       if (sig < 0) {
         std::fprintf(stderr, "%skill: %s: invalid signal specification\n",
-                     sh.err_prefix().c_str(), argv[2].c_str());
+                     sh.err_prefix().c_str(), arg.c_str());
         return 1;
       }
-      i = 3;
     } else {
       // `-INT' / `-9' / `-SIGHUP': the spec is the option itself.
       sig = resolve_sig(opt.substr(1));
@@ -5388,15 +5396,49 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
         // Wait for every named id (bash waits for all of them).  The last one's
         // pid is the -p result.
         for (size_t k = ai; k < argv.size(); k++) {
-          Shell::Job *j = sh.job_by_spec(argv[k]);
-          if (j) {
-            for (long p : j->pids) st = sh.wait_for_pid(p);
+          const std::string &spec = argv[k];
+          if (!spec.empty() && spec[0] == '%') {
+            // A `%jobspec' that names no job: bash reports it and returns 127.
+            Shell::Job *j = sh.job_by_spec(spec);
+            if (!j) {
+              std::fprintf(stderr, "%swait: %s: no such job\n",
+                           sh.err_prefix().c_str(), spec.c_str());
+              st = 127;
+              continue;
+            }
+            int wid = j->id;
             if (!j->pids.empty()) { finished_pid = j->pids.front(); found = true; }
+            for (long p : j->pids) st = sh.wait_for_pid(p);
+            // A waited-for job is consumed: bash removes it so its number frees
+            // up for reuse by the next async job.
+            sh.remove_jobs_if([wid](const Shell::Job &x) { return x.id == wid; });
           } else {
-            long pp = std::atol(argv[k].c_str());
+            // Anything not a `%jobspec' must be a decimal pid.
+            bool numeric = !spec.empty();
+            for (char c : spec)
+              if (!std::isdigit(static_cast<unsigned char>(c))) { numeric = false; break; }
+            if (!numeric) {
+              std::fprintf(stderr, "%swait: `%s': not a pid or valid job spec\n",
+                           sh.err_prefix().c_str(), spec.c_str());
+              st = 1;
+              continue;
+            }
+            long pp = std::atol(spec.c_str());
+            Shell::Job *pj = sh.job_by_spec(spec);
+            if (!pj) {
+              std::fprintf(stderr, "%swait: pid %ld is not a child of this shell\n",
+                           sh.err_prefix().c_str(), pp);
+              st = 127;
+              continue;
+            }
+            int wid = pj->id;
             st = sh.wait_for_pid(pp);
             finished_pid = pp;
             found = true;
+            // The waited-for job is consumed once it is fully done, so its
+            // number frees up for reuse (bash removes it after `wait pid').
+            sh.remove_jobs_if(
+                [wid](const Shell::Job &x) { return x.id == wid && x.done; });
           }
         }
       } else if (!have_p) {
@@ -5485,9 +5527,10 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
       std::fprintf(stderr, "%sfg: no current jobs\n", sh.err_prefix().c_str());
       st = 1;
     } else if (Shell::Job *j = sh.job_by_spec(spec)) {
-      if (!sh.job_control) {
-        // Monitor mode is on but there is no controlling terminal, so the job was
-        // not started under job control and cannot be brought to the foreground.
+      if (!j->monitored) {
+        // The job was started when job control was inactive (bash's
+        // IS_JOBCONTROL(job) == 0), so it cannot be brought to the foreground
+        // even though monitor mode is on now.
         std::fprintf(stderr, "%sfg: job %d started without job control\n",
                      sh.err_prefix().c_str(), j->id);
         st = 1;

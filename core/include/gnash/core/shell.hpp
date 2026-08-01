@@ -208,6 +208,12 @@ class Shell {
   bool in_trap = false;                       // guard against trap recursion
   void set_signal_trap(int signo, bool active);  // (de)install the shared handler
   void run_pending_traps();                   // run traps for signals received
+  // Around a blocking `wait', re-install trapped-signal handlers WITHOUT
+  // SA_RESTART so a trapped signal interrupts the wait (EINTR) rather than
+  // resuming it; end_ restores the normal (restarting) handlers.
+  void begin_interruptible_wait();
+  void end_interruptible_wait();
+  int pending_trapped_signal();               // a pending signal that has a trap, or 0
   void note_child_reaped();                   // count a reaped child for the SIGCHLD trap
   int pending_sigchld = 0;                     // children reaped, awaiting the CHLD trap
   // Run the DEBUG trap (if set) before a command, with $BASH_COMMAND set to
@@ -230,8 +236,17 @@ class Shell {
     int status = 0;             // exit status when done
     bool notified = false;
     bool background = false;
+    bool monitored = false;     // job control (set -m / interactive) was on at start
   };
   std::vector<Job> jobs;
+  // Current (`+') and previous (`-') job ids, maintained incrementally the way
+  // bash does (0 == none).  A job that stops or is newly backgrounded becomes
+  // current; the old current becomes previous.
+  int j_current = 0;
+  int j_previous = 0;
+  void set_current_job(int id);   // make ID the current job, pick a useful previous
+  void reset_current();           // recompute current/previous after a change
+  void remove_jobs_if(const std::function<bool(const Job &)> &pred);  // erase + reset_current
   long shell_pgid = 0;
   int job_terminal = -1;        // controlling-terminal fd, or -1
   bool job_control = false;     // interactive + tty
