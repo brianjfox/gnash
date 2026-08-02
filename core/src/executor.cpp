@@ -1043,7 +1043,12 @@ int Executor::run_simple(const SimpleCommand *c) {
         apply_array_assign(sh_, ex, a);  // array element / literal: applied now
       } else {
         auto vit = sh_.vars.find(a.name);
-        bool integer = vit != sh_.vars.end() && vit->second.integer;
+        // A value assigned to a targetless nameref becomes its referent NAME,
+        // not a number, so it must not be arithmetic-evaluated even when the
+        // nameref carries -i: bash keeps `7*6' raw so the invalid-identifier
+        // diagnostic (Shell::set) quotes it verbatim rather than `42'.
+        bool integer = vit != sh_.vars.end() && vit->second.integer &&
+                       !(vit->second.nameref && vit->second.value.empty());
         // A plain `name=value' / `name+=value' where name is already an array
         // targets element 0 (bash), so read/write that element rather than the
         // scalar field.

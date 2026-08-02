@@ -2364,7 +2364,15 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
         // Honor a pre-existing integer attribute too (e.g. `readonly x+=7' on a
         // variable already declared `-i'), not just an `-i' on this command.
         auto exv = sh.vars.find(name);
-        bool eff_integer = integer || (exv != sh.vars.end() && exv->second.integer);
+        // A value assigned to a targetless nameref becomes its referent NAME,
+        // not a number: skip the integer arithmetic eval even under -i so the
+        // raw target (`7*6') reaches the nameref-target check below and is
+        // quoted verbatim, matching bash (`declare -i foo=7*6' on `declare -n
+        // foo').
+        bool targetless_nameref = exv != sh.vars.end() && exv->second.nameref &&
+                                  exv->second.value.empty();
+        bool eff_integer = !targetless_nameref &&
+                           (integer || (exv != sh.vars.end() && exv->second.integer));
         if (eff_integer) {
           bool ok = true;
           long long rhs = eval_arith(sh, val, &ok);
