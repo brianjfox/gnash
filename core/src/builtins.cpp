@@ -1114,6 +1114,8 @@ int bi_export(Shell &sh, const std::vector<std::string> &argv) {
   return st;
 }
 
+static bool valid_identifier(const std::string &s);
+
 int bi_unset(Shell &sh, const std::vector<std::string> &argv) {
   bool fflag = false;  // `-f': functions
   bool vflag = false;  // `-v' given explicitly: variables only, no function fallback
@@ -1131,6 +1133,7 @@ int bi_unset(Shell &sh, const std::vector<std::string> &argv) {
       else {
         std::fprintf(stderr, "%sunset: -%c: invalid option\n", sh.err_prefix().c_str(), a[k]);
         std::fprintf(stderr, "unset: usage: unset [-f] [-v] [-n] [name ...]\n");
+        sh.posix_special_builtin_error(2);
         return 2;
       }
     }
@@ -1138,6 +1141,7 @@ int bi_unset(Shell &sh, const std::vector<std::string> &argv) {
   if (fflag && vflag) {
     std::fprintf(stderr, "%sunset: cannot simultaneously unset a function and a variable\n",
                  sh.err_prefix().c_str());
+    sh.posix_special_builtin_error(2);
     return 2;
   }
   bool funcs = fflag;
@@ -1192,6 +1196,14 @@ int bi_unset(Shell &sh, const std::vector<std::string> &argv) {
       }
       continue;
     }
+    // A plain operand (no `[subscript]', handled above) must be a valid
+    // identifier: `unset -v a-b' -> `a-b': not a valid identifier (bash).
+    if (!valid_identifier(argv[i])) {
+      std::fprintf(stderr, "%sunset: `%s': not a valid identifier\n",
+                   sh.err_prefix().c_str(), argv[i].c_str());
+      ret = 1;
+      continue;
+    }
     // A readonly variable cannot be unset.  Resolve through a nameref (unless
     // -n) so the target that is actually readonly is the one reported.
     std::string tgt = noref ? argv[i] : sh.deref(argv[i]);
@@ -1207,6 +1219,9 @@ int bi_unset(Shell &sh, const std::vector<std::string> &argv) {
     if (!vflag && it == sh.vars.end() && sh.functions.count(tgt)) sh.functions.erase(tgt);
     else sh.unset(argv[i], false, noref);
   }
+  // POSIX: unset is a special builtin, so any error above exits a
+  // non-interactive posix shell (`readonly a=a; unset a' aborts).
+  if (ret != 0) sh.posix_special_builtin_error(ret);
   return ret;
 }
 
@@ -5125,6 +5140,7 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
       std::fprintf(stderr, "%sreturn: can only `return' from a function or sourced script\n",
                    sh.err_prefix().c_str());
       st = 1;
+      sh.posix_special_builtin_error(st);  // special builtin: fatal in posix
     } else {
       sh.returning = true;
       sh.exit_status = argv.size() > 1 ? (std::atoi(argv[1].c_str()) & 0xff) : sh.last_status;
@@ -5249,6 +5265,7 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
                      cmd.c_str(), fname.c_str());
         st = 1;
         giveup = true;
+        sh.posix_special_builtin_error(st);  // `.'/source: fatal in posix
       }
     } else if (sh.shopt_opts["sourcepath"] && access(fname.c_str(), R_OK) != 0) {
       const char *penv = std::getenv("PATH");
@@ -5289,6 +5306,7 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
         std::fprintf(stderr, "%s%s: %s\n", sh.err_prefix().c_str(),
                      fname.c_str(), std::strerror(errno));
         st = 1;
+        sh.posix_special_builtin_error(st);  // `.'/source: fatal in posix
       }
     }
   } else if (cmd == "local") {

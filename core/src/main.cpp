@@ -228,7 +228,8 @@ void apply_set_o(Shell &sh, const std::string &name, bool set) {
   else if (name == "noglob") sh.opt_noglob = set;
   else if (name == "verbose") sh.opt_verbose = set;
   else if (name == "noexec") sh.opt_noexec = set;
-  // Other -o names (pipefail, posix, vi, emacs, ...) are accepted and ignored.
+  else if (name == "posix") sh.opt_posix = set;
+  // Other -o names (pipefail, vi, emacs, ...) are accepted and ignored.
 }
 
 // Configure the shell's personality (which other shell it behaves as) and the
@@ -327,7 +328,8 @@ int main(int argc, char **argv) {
       if (lo == "login") login = true;
       else if (lo == "norc") sopts.norc = true;
       else if (lo == "noprofile") sopts.noprofile = true;
-      else if (lo == "posix" || lo == "noediting" || lo == "pretty-print" ||
+      else if (lo == "posix") sh.opt_posix = true;
+      else if (lo == "noediting" || lo == "pretty-print" ||
                lo == "dump-strings" || lo == "dump-po-strings" || lo == "verbose" ||
                lo == "debug" || lo == "debugger" || lo == "restricted") {
         /* accepted (some not yet acted on), but recognized so they do not fall

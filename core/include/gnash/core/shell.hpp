@@ -450,6 +450,16 @@ class Shell {
   bool exiting = false;
   int exit_status = 0;
 
+  // POSIX 2.8.1: an error in a special built-in makes a non-interactive shell
+  // exit.  A special builtin's OWN-error path calls this (with the failure
+  // status) so the shell unwinds like errexit does.  It is NOT called for a
+  // status merely propagated from a command the builtin ran (`eval false'), and
+  // bash exempts a few error kinds (`trap' bad signal, `shift', `break'/
+  // `continue'), whose paths deliberately do not call it.
+  void posix_special_builtin_error(int status = 1) {
+    if (opt_posix && !interactive) { exiting = true; exit_status = status; }
+  }
+
   // --- helpers -----------------------------------------------------------
   std::string ifs() const;  // IFS value, or default " \t\n"
   std::vector<std::string> environ_block() const;  // NAME=value for exported
