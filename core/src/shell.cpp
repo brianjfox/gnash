@@ -1174,7 +1174,8 @@ bool Shell::get_if_set(const std::string &n_in, std::string &out) const {
   return true;
 }
 
-bool Shell::set(const std::string &n_in, const std::string &v) {
+bool Shell::set(const std::string &n_in, const std::string &v,
+                const char *nameref_ctx) {
   // A nameref whose target is an array element (`declare -n r=a[2]'): write
   // through to that element.  array_set enforces the target's readonly flag.
   {
@@ -1225,10 +1226,14 @@ bool Shell::set(const std::string &n_in, const std::string &v) {
   // on such a nameref, so n still names it.  bash rejects a non-identifier here.
   {
     auto it = vars.find(n);
+    // An empty value is rejected too: setting a targetless nameref's target to
+    // "" (`declare -n r; r=""') is an invalid identifier in bash, unlike a plain
+    // scalar `x=""'.
     if (it != vars.end() && it->second.nameref && it->second.value.empty() &&
-        !v.empty() && !valid_nameref_target(v)) {
-      std::fprintf(stderr, "%s`%s': not a valid identifier\n", err_prefix().c_str(),
-                   v.c_str());
+        !valid_nameref_target(v)) {
+      bool has_ctx = nameref_ctx && nameref_ctx[0];
+      std::fprintf(stderr, "%s%s%s`%s': not a valid identifier\n", err_prefix().c_str(),
+                   has_ctx ? nameref_ctx : "", has_ctx ? ": " : "", v.c_str());
       return false;
     }
   }

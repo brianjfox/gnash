@@ -81,7 +81,12 @@ class Shell {
   std::string get_quiet(const std::string &n) const;
   bool get_if_set(const std::string &n, std::string &out) const;
   // Assign N=V; false if N is readonly (an error is printed).
-  bool set(const std::string &n, const std::string &v);
+  // nameref_ctx, when non-null, prefixes the invalid-nameref-target diagnostic
+  // with a builtin name (`printf'/`getopts'/`exec'/`((') -- bash reports e.g.
+  // `printf: `X': not a valid identifier' when the assignment flows through that
+  // builtin, versus the bare form for a plain `r=X' assignment.
+  bool set(const std::string &n, const std::string &v,
+           const char *nameref_ctx = nullptr);
   void set_exported(const std::string &n, const std::string &v);
   void export_name(const std::string &n);
   // Remove N.  A readonly variable is left in place unless FORCE is set
