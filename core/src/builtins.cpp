@@ -12,6 +12,7 @@
 #include <optional>
 #include <cstdlib>
 #include <clocale>
+#include <cwchar>
 #include <cstring>
 #include <ctime>
 #include <fstream>
@@ -1743,6 +1744,23 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
   // are not IFS delimiters and are not stripped as trailing whitespace.
   std::string line;
   std::string quoted;
+  // Character count of s under the current locale (byte count in C locale); a
+  // trailing incomplete sequence is not counted, so `read -n N' keeps reading
+  // until the Nth character completes rather than stopping mid-character.
+  auto mb_count = [](const std::string &s) -> long {
+    if (MB_CUR_MAX <= 1) return static_cast<long>(s.size());
+    long cnt = 0;
+    size_t i = 0;
+    std::mbstate_t st{};
+    while (i < s.size()) {
+      size_t r = std::mbrtowc(nullptr, s.data() + i, s.size() - i, &st);
+      if (r == static_cast<size_t>(-2)) break;
+      if (r == static_cast<size_t>(-1) || r == 0) { r = 1; st = std::mbstate_t{}; }
+      i += r;
+      cnt++;
+    }
+    return cnt;
+  };
   if (!(have_n && nchars == 0)) {
     for (;;) {
       char ch;
@@ -1756,21 +1774,40 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
         if (nx == '\n') continue;                // line continuation: drop both
         line += nx;
         quoted += '\1';
-        if (have_n && static_cast<long>(line.size()) >= nchars) break;
+        if (have_n && mb_count(line) >= nchars) break;
         continue;
       }
       if (!exact && static_cast<unsigned char>(ch) == static_cast<unsigned char>(delim)) break;
       line += ch;
       quoted += '\0';
-      if (have_n && static_cast<long>(line.size()) >= nchars) break;
+      if (have_n && mb_count(line) >= nchars) break;
     }
   }
 
   const std::string ifs = sh.ifs();
   size_t p = 0;
   const size_t n = line.size();
+  // Byte width of the character at s[idx] under the current locale (1 in C).
+  auto clen = [&](const std::string &s, size_t idx) -> size_t {
+    if (MB_CUR_MAX <= 1 || idx >= s.size()) return 1;
+    std::mbstate_t st{};
+    size_t r = std::mbrtowc(nullptr, s.data() + idx, s.size() - idx, &st);
+    return (r == 0 || r == static_cast<size_t>(-1) || r == static_cast<size_t>(-2)) ? 1 : r;
+  };
+  // IFS as (possibly multibyte) characters, so a multibyte separator splits on
+  // the whole character rather than on each of its bytes.
+  std::vector<std::string> ifs_chars;
+  for (size_t k = 0; k < ifs.size();) {
+    size_t len = clen(ifs, k);
+    ifs_chars.push_back(ifs.substr(k, len));
+    k += len;
+  }
   auto is_ifs = [&](size_t idx) {
-    return quoted[idx] == '\0' && ifs.find(line[idx]) != std::string::npos;
+    if (quoted[idx] != '\0') return false;
+    std::string ch = line.substr(idx, clen(line, idx));
+    for (const std::string &c : ifs_chars)
+      if (c == ch) return true;
+    return false;
   };
   auto is_ifs_ws = [&](size_t idx) {
     return is_ifs(idx) && std::isspace(static_cast<unsigned char>(line[idx]));
@@ -1783,7 +1820,7 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
     while (p < n && !is_ifs(p)) w += line[p++];
     while (p < n && is_ifs_ws(p)) p++;
     if (p < n && is_ifs(p) && !is_ifs_ws(p)) {
-      p++;
+      p += clen(line, p);  // a non-whitespace IFS delimiter may be multibyte
       while (p < n && is_ifs_ws(p)) p++;
     }
     return w;
