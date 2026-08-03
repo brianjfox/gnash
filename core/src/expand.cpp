@@ -2421,6 +2421,21 @@ std::vector<std::pair<std::string, std::string>> Expander::split_ifs(const std::
   return fields;
 }
 
+// Whether an unquoted `[' at position i opens a valid bracket expression: there
+// must be a later unquoted `]' to close it.  A `]' immediately after `[' (or
+// after a leading `!'/`^' negation) is a literal member, not the close.  With no
+// closing `]' the `[' is an ordinary character -- bash does not treat such a
+// word as a glob, so it needs no directory scan (important for the very common
+// `[ ... ]' test command, whose `[' would otherwise trigger a scan per call).
+static bool opens_bracket(const std::string &field, const std::string &mask, size_t i) {
+  size_t j = i + 1;
+  if (j < field.size() && mask[j] != '1' && (field[j] == '!' || field[j] == '^')) j++;
+  if (j < field.size() && mask[j] != '1' && field[j] == ']') j++;  // literal first `]'
+  for (; j < field.size(); j++)
+    if (mask[j] != '1' && field[j] == ']') return true;
+  return false;
+}
+
 std::vector<std::string> Expander::glob_field(const std::string &field, const std::string &mask) {
   // Build a glob pattern: unquoted metacharacters stay special, quoted ones are
   // backslash-escaped; also produce the literal (quotes already removed).
@@ -2433,7 +2448,9 @@ std::vector<std::string> Expander::glob_field(const std::string &field, const st
   for (size_t i = 0; i < field.size(); i++) {
     char c = field[i];
     bool q = mask[i] == '1';
-    if (!q && (c == '*' || c == '?' || c == '[')) magic = true;
+    if (!q && (c == '*' || c == '?' ||
+               (c == '[' && opens_bracket(field, mask, i))))
+      magic = true;
     if (!q && extglob && (c == '+' || c == '!' || c == '@' || c == '*' || c == '?') &&
         i + 1 < field.size() && field[i + 1] == '(')
       magic = true;
