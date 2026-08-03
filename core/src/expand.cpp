@@ -16,6 +16,7 @@
 #include <climits>
 #include <cstdio>
 #include <cstdlib>
+#include <cwchar>
 #include <pwd.h>
 #include <unistd.h>
 #include <sys/wait.h>
@@ -140,6 +141,45 @@ size_t scan_balanced(const std::string &t, size_t i, char open, char close,
     wasdol = (c == '$');
   }
   return std::string::npos;
+}
+
+// --- multibyte helpers ------------------------------------------------------
+// Character (code point) length of s under the current LC_CTYPE.  In a unibyte
+// or C locale (MB_CUR_MAX==1) this is the byte count, exactly as bash falls
+// back.  A malformed or truncated sequence counts as one character (and resets
+// the shift state), matching bash's tolerance for invalid input.
+size_t mb_charlen(const std::string &s) {
+  if (MB_CUR_MAX <= 1) return s.size();
+  size_t n = 0, i = 0;
+  std::mbstate_t st{};
+  while (i < s.size()) {
+    size_t r = std::mbrtowc(nullptr, s.data() + i, s.size() - i, &st);
+    if (r == static_cast<size_t>(-1) || r == static_cast<size_t>(-2) || r == 0) {
+      r = 1;
+      st = std::mbstate_t{};
+    }
+    i += r;
+    n++;
+  }
+  return n;
+}
+
+// Byte offset of character index c within s (clamped to s.size()), the inverse
+// of mb_charlen used to turn a character offset/length into a byte slice.
+size_t mb_byteoff(const std::string &s, size_t c) {
+  if (MB_CUR_MAX <= 1) return c < s.size() ? c : s.size();
+  size_t i = 0, k = 0;
+  std::mbstate_t st{};
+  while (i < s.size() && k < c) {
+    size_t r = std::mbrtowc(nullptr, s.data() + i, s.size() - i, &st);
+    if (r == static_cast<size_t>(-1) || r == static_cast<size_t>(-2) || r == 0) {
+      r = 1;
+      st = std::mbstate_t{};
+    }
+    i += r;
+    k++;
+  }
+  return i;
 }
 
 // Encode a Unicode code point as UTF-8 (for \u / \U), matching bash's u32cconv.
@@ -1714,7 +1754,7 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
       auto nit = sh.vars.find(iname);
       if (q == b.size() && nit != sh.vars.end() && nit->second.nameref) {
         std::string tname = sh.deref(iname);
-        return length ? std::to_string(tname.size()) : tname;
+        return length ? std::to_string(mb_charlen(tname)) : tname;
       }
       // The value of INAME is the parameter to expand; any operator that
       // follows applies to the indirected parameter.  A `#'/digit name is a
@@ -1727,7 +1767,7 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
       } else {
         target = sh.get(iname);
       }
-      if (length) return std::to_string(expand_brace_body(ex, sh, target + b.substr(q), dq).size());
+      if (length) return std::to_string(mb_charlen(expand_brace_body(ex, sh, target + b.substr(q), dq)));
       return expand_brace_body(ex, sh, target + b.substr(q), dq);
     }
   }
@@ -1816,7 +1856,7 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
   } else {
     val = ex.param_value(name, set, defaulting_op);
   }
-  if (length) return std::to_string(val.size());
+  if (length) return std::to_string(mb_charlen(val));
   return apply_param_op(ex, sh, name, val, set, rest, dq, have_sub, tsub, /*top_level=*/true);
 }
 
@@ -2078,13 +2118,15 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
     long long off = eval_arith(sh, colon2 == std::string::npos ? args : args.substr(0, colon2), &ok);
     long long len = -1;
     if (colon2 != std::string::npos) len = eval_arith(sh, args.substr(colon2 + 1), &ok);
-    long long n = static_cast<long long>(val.size());
+    // Offset and length are counted in characters (bash), not bytes: map them
+    // through mb_byteoff so a UTF-8 value slices on code-point boundaries.
+    long long n = static_cast<long long>(mb_charlen(val));
     if (off < 0) off += n;
     if (off < 0) off = 0;
     if (off > n) off = n;
-    std::string res = val.substr(static_cast<size_t>(off));
-    if (len >= 0 && len < static_cast<long long>(res.size()))
-      res = res.substr(0, static_cast<size_t>(len));
+    std::string res = val.substr(mb_byteoff(val, static_cast<size_t>(off)));
+    if (len >= 0 && len < static_cast<long long>(mb_charlen(res)))
+      res = res.substr(0, mb_byteoff(res, static_cast<size_t>(len)));
     return res;
   }
 
