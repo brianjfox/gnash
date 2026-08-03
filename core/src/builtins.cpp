@@ -2582,7 +2582,17 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     }
     if (rm_exported) v.exported = false;
     if (rm_integer) v.integer = false;
-    if (rm_nameref) v.nameref = false;
+    // Removing the nameref attribute from a readonly nameref is rejected, like
+    // adding one: modifying a readonly variable's type is an error, so `declare
+    // +n' on a readonly `declare -n' reports `readonly variable' (bash).  A `+n'
+    // on a readonly NON-nameref is a harmless no-op and does not error.
+    if (rm_nameref && v.readonly && v.nameref) {
+      std::fprintf(stderr, "%s%s: %s: readonly variable\n",
+                   sh.err_prefix().c_str(), argv[0].c_str(), aname.c_str());
+      ret = 1;
+    } else if (rm_nameref) {
+      v.nameref = false;
+    }
     if (rm_ucase) v.ucase = false;
     if (rm_lcase) v.lcase = false;
     if (rm_capcase) v.capcase = false;
