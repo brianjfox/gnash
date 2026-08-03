@@ -1689,13 +1689,27 @@ static OpenCtx open_context(const std::string &t) {
 // top level) keeps the backslash literal; only backticks force the splice.
 static bool squote_backslash_literal(const std::string &t) {
   bool squote = false, dquote = false, btick = false;
+  char prev = '\n';  // start of input behaves like just after a newline
   for (size_t i = 0; i < t.size(); i++) {
     char c = t[i];
-    if (squote) { if (c == '\'') squote = false; continue; }
-    if (c == '\\') { if (i + 1 < t.size()) i++; continue; }
+    if (squote) { if (c == '\'') squote = false; prev = c; continue; }
+    // Outside quotes, an unquoted `#' that begins a word starts a comment
+    // running to end of line; a `'' (or `"') inside it is a literal comment
+    // character, NOT a quote (else `# it's x' would look like an open quote and
+    // suppress a genuine line continuation further down -- e.g. config.guess).
+    // Only a `#' after a blank or at the start of a line begins a comment; one
+    // stuck to a preceding word (`)#x', `$(cmd)#x') is part of that word.
+    if (!dquote && !btick && c == '#' &&
+        (prev == ' ' || prev == '\t' || prev == '\n')) {
+      while (i < t.size() && t[i] != '\n') i++;
+      prev = '\n';
+      continue;  // the for-loop's ++i steps past the newline
+    }
+    if (c == '\\') { if (i + 1 < t.size()) i++; prev = 'x'; continue; }
     if (c == '\'' && !dquote) squote = true;
     else if (c == '"') dquote = !dquote;
     else if (c == '`') btick = !btick;
+    prev = c;
   }
   return squote && !btick;
 }
