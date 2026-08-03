@@ -20,3 +20,4 @@ tests/bash-tests/
 
 # Agent tooling run state (machine-specific, not part of the sources)
 .agent-state/
+/corpus/
