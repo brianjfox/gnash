@@ -14,6 +14,8 @@
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
+#include <cwchar>
+#include <cwctype>
 
 #include "strmatch.h"
 
@@ -28,6 +30,34 @@ extern "C" void strmatch_set_interrupt(int state) { interrupt_state = state ? 1 
 namespace {
 
 using UC = unsigned char;
+
+// Byte width of the character at s (s < se) under the current locale; 1 in a
+// unibyte/C locale or on an invalid/truncated sequence, so scanning never
+// stalls.
+inline size_t mb_clen(const UC *s, const UC *se) {
+  if (MB_CUR_MAX <= 1 || s >= se) return 1;
+  std::mbstate_t st{};
+  size_t r = std::mbrtowc(nullptr, reinterpret_cast<const char *>(s),
+                          static_cast<size_t>(se - s), &st);
+  if (r == 0 || r == static_cast<size_t>(-1) || r == static_cast<size_t>(-2)) return 1;
+  return r;
+}
+
+// Decode the character at s (s < se) to a wide code point, setting len to its
+// byte width (>=1); falls back to the raw byte in a unibyte locale / on error.
+inline std::wint_t mb_cp(const UC *s, const UC *se, size_t &len) {
+  if (MB_CUR_MAX <= 1 || s >= se) { len = 1; return s < se ? *s : 0; }
+  wchar_t wc = 0;
+  std::mbstate_t st{};
+  size_t r = std::mbrtowc(&wc, reinterpret_cast<const char *>(s),
+                          static_cast<size_t>(se - s), &st);
+  if (r == 0 || r == static_cast<size_t>(-1) || r == static_cast<size_t>(-2)) {
+    len = 1;
+    return *s;
+  }
+  len = r;
+  return static_cast<std::wint_t>(wc);
+}
 
 struct SmEnds {
   UC *pattern;
@@ -70,22 +100,24 @@ int collsym(const UC *p, int len) {
 }
 
 // POSIX [:class:] test.  Returns 1/0, or -1 for an unknown class.
-int is_cclass(int c, const char *name) {
+// c is a wide code point so a bracket class ([[:alpha:]]) matches a multibyte
+// character; the wide iswctype functions honor the locale for the whole range.
+int is_cclass(std::wint_t c, const char *name) {
   struct {
     const char *name;
-    int (*fn)(int);
-  } tbl[] = {{"alpha", std::isalpha}, {"digit", std::isdigit},
-             {"alnum", std::isalnum}, {"space", std::isspace},
-             {"upper", std::isupper}, {"lower", std::islower},
-             {"punct", std::ispunct}, {"cntrl", std::iscntrl},
-             {"print", std::isprint}, {"graph", std::isgraph},
-             {"blank", std::isblank}, {"xdigit", std::isxdigit},
-             {"ascii", [](int ch) { return static_cast<int>(ch >= 0 && ch <= 0x7f); }},
-             {"word", [](int ch) { return static_cast<int>(std::isalnum(ch) || ch == '_'); }},
+    int (*fn)(std::wint_t);
+  } tbl[] = {{"alpha", std::iswalpha}, {"digit", std::iswdigit},
+             {"alnum", std::iswalnum}, {"space", std::iswspace},
+             {"upper", std::iswupper}, {"lower", std::iswlower},
+             {"punct", std::iswpunct}, {"cntrl", std::iswcntrl},
+             {"print", std::iswprint}, {"graph", std::iswgraph},
+             {"blank", std::iswblank}, {"xdigit", std::iswxdigit},
+             {"ascii", [](std::wint_t ch) { return static_cast<int>(ch <= 0x7f); }},
+             {"word", [](std::wint_t ch) { return static_cast<int>(std::iswalnum(ch) || ch == L'_'); }},
              {nullptr, nullptr}};
   for (int i = 0; tbl[i].name; i++)
     if (std::strcmp(tbl[i].name, name) == 0)
-      return tbl[i].fn(static_cast<unsigned char>(c)) ? 1 : 0;
+      return tbl[i].fn(c) ? 1 : 0;
   return -1;
 }
 
@@ -115,7 +147,7 @@ int extmatch(int xc, UC *s, UC *se, UC *p, UC *pe, int flags);
 
 // Match a bracket expression at P (P points just past `[`); returns the
 // position after the expression on success, or NULL.
-UC *brackmatch(UC *p, UC test_in, int flags) {
+UC *brackmatch(UC *p, UC test_in, std::wint_t test_cp, int flags) {
   UC cstart, cend, c;
   int is_not, forcecoll, isrange;
   int pc;
@@ -157,7 +189,7 @@ UC *brackmatch(UC *p, UC test_in, int flags) {
         std::memcpy(ccname, p + 1, static_cast<size_t>(len));
         ccname[len] = '\0';
         dequote_pathname(reinterpret_cast<UC *>(ccname));
-        pc = is_cclass(orig_test, ccname);
+        pc = is_cclass(test_cp, ccname);
         if (pc == -1) pc = 0;
         std::free(ccname);
       }
@@ -365,6 +397,7 @@ int extmatch(int xc, UC *s, UC *se, UC *p, UC *pe, int flags) {
 int gmatch(UC *string, UC *se, UC *pattern, UC *pe, SmEnds *ends, int flags) {
   UC *p, *n;
   int c, sc;
+  size_t nadv;  // bytes to advance over the matched string character
 
   if (string == nullptr || pattern == nullptr) return FNM_NOMATCH;
   p = pattern;
@@ -374,6 +407,7 @@ int gmatch(UC *string, UC *se, UC *pattern, UC *pe, SmEnds *ends, int flags) {
     c = *p++;
     c = fold(c, flags);
     sc = n < se ? *n : '\0';
+    nadv = 1;  // a `?'/`['/multibyte literal steps over a whole character below
 
     if (interrupt_state || terminating_signal) return FNM_NOMATCH;
 
@@ -394,6 +428,7 @@ int gmatch(UC *string, UC *se, UC *pattern, UC *pe, SmEnds *ends, int flags) {
             ((n == string && sdot_or_dotdot(n)) ||
              ((flags & FNM_PATHNAME) && n > string && n[-1] == '/' && sdot_or_dotdot(n))))
           return FNM_NOMATCH;
+        nadv = mb_clen(n, se);  // `?' matches one whole character
         break;
 
       case '\\':
@@ -431,7 +466,7 @@ int gmatch(UC *string, UC *se, UC *pattern, UC *pe, SmEnds *ends, int flags) {
             p = newn ? newn : pe;
           } else if (c == '?') {
             if (sc == '\0') return FNM_NOMATCH;
-            n++;
+            n += mb_clen(n, se);  // `?' consumes one whole character
             sc = n < se ? *n : '\0';
           }
           if ((flags & FNM_EXTMATCH) && c == '*' && *p == '(') {
@@ -511,15 +546,20 @@ int gmatch(UC *string, UC *se, UC *pattern, UC *pe, SmEnds *ends, int flags) {
             ((n == string && sdot_or_dotdot(n)) ||
              ((flags & FNM_PATHNAME) && n > string && n[-1] == '/' && sdot_or_dotdot(n))))
           return FNM_NOMATCH;
-        p = brackmatch(p, static_cast<UC>(sc), flags);
-        if (p == nullptr) return FNM_NOMATCH;
+        {
+          size_t clen = 1;
+          std::wint_t cp = mb_cp(n, se, clen);
+          p = brackmatch(p, static_cast<UC>(sc), cp, flags);
+          if (p == nullptr) return FNM_NOMATCH;
+          nadv = clen;  // the bracket matched one whole character
+        }
         break;
       }
 
       default:
         if (static_cast<UC>(c) != fold(sc, flags)) return FNM_NOMATCH;
     }
-    ++n;
+    n += nadv;
   }
 
   if (n == se) return 0;
