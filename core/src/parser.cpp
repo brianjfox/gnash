@@ -886,10 +886,27 @@ struct Parser {
           fail("expected operand after operator");
           return;
         }
+        // Whitespace normally ends the regex, but not while inside an unclosed
+        // `(...)' group: bash keeps `(a b)' (and nested `(a (b c))') as one
+        // pattern, and a blank or the closing `]]' only ends the regex at paren
+        // depth 0.  Track `('/`)' across tokens; `[a b]' (depth 0 at the blank)
+        // still ends, matching bash.
+        int pd = 0;
+        auto count_parens = [&pd](const std::string &s) {
+          for (char c : s) {
+            if (c == '(') pd++;
+            else if (c == ')') pd--;
+          }
+        };
         std::string rx = tok_source(cur());
+        count_parens(rx);
         advance();
-        while (!err && !at_cond_end() && !is(Tok::Eof) && !cur().preceded_by_blank) {
-          rx += tok_source(cur());
+        while (!err && !is(Tok::Eof)) {
+          if (pd == 0 && (at_cond_end() || cur().preceded_by_blank)) break;
+          if (cur().preceded_by_blank) rx += ' ';  // blank inside (...) is regex
+          std::string src = tok_source(cur());
+          rx += src;
+          count_parens(src);
           advance();
         }
         e += " =~ ";
