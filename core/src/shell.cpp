@@ -84,6 +84,14 @@ Shell::Shell() {
 
 // Advance bash's RANDOM generator (Park-Miller minimal-standard PRNG) and
 // return a value in 0..32767, matching bash 5.3 exactly for a given seed.
+// Apply a `declare -u'/`-l'/`-c' case attribute to a value (character-aware).
+static std::string fold_case(std::string s, bool up, bool lo, bool cap) {
+  if (up) return mb_upper(s);
+  if (lo) return mb_lower(s);
+  if (cap) return mb_capitalize(s);
+  return s;
+}
+
 int Shell::next_random() {
   if (!rand_seeded) {
     struct timeval tv;
@@ -753,19 +761,7 @@ void Shell::array_set(const std::string &n_in, const std::string &sub, const std
   v.invisible = false;  // an assignment makes a declared-but-unset array visible
   // `declare -u'/`-l'/`-c' fold the case of each element value on assignment,
   // exactly as Shell::set does for scalars.
-  std::string fv = val;
-  if (v.ucase)
-    for (char &c : fv) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-  else if (v.lcase)
-    for (char &c : fv) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-  else if (v.capcase) {
-    bool first = true;
-    for (char &c : fv) {
-      c = static_cast<char>(first ? std::toupper(static_cast<unsigned char>(c))
-                                  : std::tolower(static_cast<unsigned char>(c)));
-      first = false;
-    }
-  }
+  std::string fv = fold_case(val, v.ucase, v.lcase, v.capcase);
   if (v.kind == VarKind::Assoc) {
     assoc_put(v, sub, fv);
     return;
@@ -933,19 +929,7 @@ void Shell::array_assign(
   // `declare -l'/`-u'/`-c' fold the case of each ELEMENT VALUE (never a key),
   // exactly as Shell::set / array_set do for scalar and single-element writes.
   auto fold_val = [&v](std::string s) {
-    if (v.ucase)
-      for (char &c : s) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    else if (v.lcase)
-      for (char &c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    else if (v.capcase) {
-      bool first = true;
-      for (char &c : s) {
-        c = static_cast<char>(first ? std::toupper(static_cast<unsigned char>(c))
-                                    : std::tolower(static_cast<unsigned char>(c)));
-        first = false;
-      }
-    }
-    return s;
+    return fold_case(std::move(s), v.ucase, v.lcase, v.capcase);
   };
   if (!append) {
     v.idx.clear();
@@ -1292,18 +1276,7 @@ bool Shell::set(const std::string &n_in, const std::string &v,
   // A locale assignment re-applies LC_CTYPE so multibyte handling follows it.
   if (is_locale_var(n)) apply_ctype_locale(*this);
   // `declare -u' / `-l' / `-c' fold the value's case on every assignment.
-  if (var.ucase)
-    for (char &c : var.value) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-  else if (var.lcase)
-    for (char &c : var.value) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-  else if (var.capcase) {  // capitalize first character, lowercase the rest
-    bool first = true;
-    for (char &c : var.value) {
-      c = static_cast<char>(first ? std::toupper(static_cast<unsigned char>(c))
-                                  : std::tolower(static_cast<unsigned char>(c)));
-      first = false;
-    }
-  }
+  var.value = fold_case(var.value, var.ucase, var.lcase, var.capcase);
   // Assigning HISTSIZE re-stifles the loaded history list, as bash does; a
   // non-numeric or empty value leaves the list unbounded.
   if (n == "HISTSIZE" && history_loaded) {

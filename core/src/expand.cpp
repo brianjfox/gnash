@@ -17,6 +17,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cwchar>
+#include <cwctype>
+#include <functional>
 #include <pwd.h>
 #include <unistd.h>
 #include <sys/wait.h>
@@ -182,6 +184,68 @@ size_t mb_byteoff(const std::string &s, size_t c) {
   return i;
 }
 
+// Decode the character starting at s[i]: returns its wide value and sets len to
+// its byte length (>=1).  On an invalid/truncated sequence (or a unibyte
+// locale) it yields the raw byte with len 1, so callers step forward safely.
+static wchar_t mb_decode(const std::string &s, size_t i, size_t &len) {
+  if (MB_CUR_MAX <= 1) { len = 1; return static_cast<unsigned char>(s[i]); }
+  wchar_t wc = 0;
+  std::mbstate_t st{};
+  size_t r = std::mbrtowc(&wc, s.data() + i, s.size() - i, &st);
+  if (r == static_cast<size_t>(-1) || r == static_cast<size_t>(-2) || r == 0) {
+    len = 1;
+    return static_cast<unsigned char>(s[i]);
+  }
+  len = r;
+  return wc;
+}
+
+// Append the character wc to out in the current locale's encoding (a single
+// byte in a unibyte locale; wcrtomb otherwise).  `orig' is the source bytes,
+// appended verbatim if wc is unencodable so the character is never lost.
+static void mb_append_char(std::string &out, wchar_t wc, const std::string &orig) {
+  if (MB_CUR_MAX <= 1) { out += static_cast<char>(wc); return; }
+  char buf[MB_LEN_MAX];
+  std::mbstate_t st{};
+  size_t r = std::wcrtomb(buf, wc, &st);
+  if (r == static_cast<size_t>(-1)) out += orig;
+  else out.append(buf, r);
+}
+
+// Case-fold each character of val that matches pat (an empty pat matches all);
+// `all' folds every match, otherwise only the first.  `mode': 'U' upper, 'L'
+// lower, 'T' toggle.  Character-aware under a multibyte locale (towupper/
+// towlower), byte-wise in the C locale.  `match' tests one character (as its
+// source bytes) against pat.
+static std::string mb_case_fold(const std::string &val, const std::string &pat,
+                                bool all, char mode,
+                                const std::function<bool(const std::string &)> &match) {
+  std::string out;
+  bool first = true;
+  size_t i = 0;
+  while (i < val.size()) {
+    size_t len = 1;
+    wchar_t wc = mb_decode(val, i, len);
+    std::string cs = val.substr(i, len);
+    bool m = pat.empty() ? true : match(cs);
+    if (m && (all || first)) {
+      wint_t w = static_cast<wint_t>(wc);
+      wchar_t nw = wc;
+      if (mode == 'U') nw = static_cast<wchar_t>(std::towupper(w));
+      else if (mode == 'L') nw = static_cast<wchar_t>(std::towlower(w));
+      else if (std::iswupper(w)) nw = static_cast<wchar_t>(std::towlower(w));
+      else if (std::iswlower(w)) nw = static_cast<wchar_t>(std::towupper(w));
+      if (nw != wc) mb_append_char(out, nw, cs);
+      else out += cs;
+    } else {
+      out += cs;
+    }
+    if (!all && first) first = false;
+    i += len;
+  }
+  return out;
+}
+
 // Encode a Unicode code point as UTF-8 (for \u / \U), matching bash's u32cconv.
 void append_utf8(std::string &out, unsigned long v) {
   if (v <= 0x7f) {
@@ -287,6 +351,20 @@ std::string ansi_c(const std::string &s) {
 }
 
 }  // namespace
+
+// Character-aware whole-string case folding (exported for `declare -u/-l/-c').
+// mb_capitalize upper-cases the first character and lower-cases the rest, as in
+// bash's att_capcase.  mb_case_fold above (anonymous namespace) is visible here.
+std::string mb_upper(const std::string &s) {
+  return mb_case_fold(s, "", true, 'U', [](const std::string &) { return true; });
+}
+std::string mb_lower(const std::string &s) {
+  return mb_case_fold(s, "", true, 'L', [](const std::string &) { return true; });
+}
+std::string mb_capitalize(const std::string &s) {
+  return mb_case_fold(mb_lower(s), "", false, 'U',
+                      [](const std::string &) { return true; });
+}
 
 // Expand a leading ~ / ~user / ~+ / ~- in WORD (the unquoted case).
 static std::string expand_leading_tilde(Shell &sh, const std::string &w) {
@@ -2026,40 +2104,16 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
     bool all = rest.size() > 1 && rest[1] == rest[0];
     std::string pat = ex.expand_pattern(rest.substr(all ? 2 : 1));
     bool up = rest[0] == '^';
-    std::string out;
-    bool first = true;
-    for (char c : val) {
-      std::string cs(1, c);
-      bool m = pat.empty() ? true : pat_match(pat, cs);
-      char nc = c;
-      if (m && (all || first))
-        nc = up ? static_cast<char>(std::toupper(static_cast<unsigned char>(c)))
-                : static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-      if (!all && first) first = false;
-      out += nc;
-    }
-    return out;
+    return mb_case_fold(val, pat, all, up ? 'U' : 'L',
+                        [&](const std::string &cs) { return pat_match(pat, cs); });
   }
 
   // ${name~} ${name~~}  (case toggle: ~ the first matching char, ~~ all)
   if (rest[0] == '~') {
     bool all = rest.size() > 1 && rest[1] == '~';
     std::string pat = ex.expand_pattern(rest.substr(all ? 2 : 1));
-    std::string out;
-    bool first = true;
-    for (char c : val) {
-      std::string cs(1, c);
-      bool m = pat.empty() ? true : pat_match(pat, cs);
-      char nc = c;
-      if (m && (all || first)) {
-        unsigned char uc = static_cast<unsigned char>(c);
-        if (std::isupper(uc)) nc = static_cast<char>(std::tolower(uc));
-        else if (std::islower(uc)) nc = static_cast<char>(std::toupper(uc));
-      }
-      if (!all && first) first = false;
-      out += nc;
-    }
-    return out;
+    return mb_case_fold(val, pat, all, 'T',
+                        [&](const std::string &cs) { return pat_match(pat, cs); });
   }
 
   // ${name@op} -- parameter transformations.
@@ -2076,16 +2130,10 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
     if (t == 'E') return ansic_expand(val);
     if (t == 'P') return expand_prompt(sh, val);
     if (t == 'U' || t == 'L' || t == 'u') {
-      std::string out;
-      bool first = true;
-      for (char c : val) {
-        unsigned char uc = static_cast<unsigned char>(c);
-        if (t == 'U') out += static_cast<char>(std::toupper(uc));
-        else if (t == 'L') out += static_cast<char>(std::tolower(uc));
-        else { out += first ? static_cast<char>(std::toupper(uc)) : c; }
-        first = false;
-      }
-      return out;
+      // @U upper-case all, @L lower-case all, @u upper-case only the first
+      // character -- all character-aware.  No pattern (every character matches).
+      auto yes = [](const std::string &) { return true; };
+      return mb_case_fold(val, "", /*all=*/t != 'u', t == 'L' ? 'L' : 'U', yes);
     }
     if (t == 'a' || t == 'A') {
       auto it = sh.vars.find(name);
