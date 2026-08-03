@@ -126,6 +126,12 @@ class Expander {
 // Brace expansion on a single word (textual, pre-expansion).
 std::vector<std::string> brace_expand(const std::string &text);
 
+// Character-aware whole-string case folding (for `declare -u/-l/-c'): upper,
+// lower, or capitalize-first-lowercase-rest, honoring the multibyte locale.
+std::string mb_upper(const std::string &s);
+std::string mb_lower(const std::string &s);
+std::string mb_capitalize(const std::string &s);
+
 // Apply a NAME=VALUE / NAME[i]=VALUE / NAME=(...) assignment word to the shell
 // (used by declare/local/readonly for array and scalar values).
 void apply_assignment_word(Shell &sh, const std::string &word);
