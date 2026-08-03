@@ -120,20 +120,30 @@ run_parse() {  # run_parse <bin> <script> -> writes rc + normalized stderr
 }
 
 run_exec() {  # run_exec <bin> <script> -> rc + normalized stdout+stderr
-  # Isolated CWD, scrubbed env, and a perl-based timeout (macOS has no
-  # timeout(1)) that kills the whole process group after $TIMEOUT seconds.
-  local bin=$1 f=$2 work
+  # Isolated CWD, scrubbed env, stdin from /dev/null (so a script that reads
+  # input does not hang or steal the terminal), and a perl-based timeout (macOS
+  # has no timeout(1)) that kills the whole process group after $TIMEOUT secs.
+  local bin=$1 f=$2 work abs base
+  # Absolute script path: exec runs inside the throwaway CWD, so a relative path
+  # would no longer resolve.
+  abs=$(cd "$(dirname "$f")" 2>/dev/null && pwd)/$(basename "$f")
+  base=$(basename "$bin")
   work=$(mktemp -d "$OUT/.run.XXXXXX")
-  ( cd "$work" && env -i PATH="/usr/bin:/bin" HOME="$work" TERM=dumb \
+  ( cd "$work" && env -i PATH="/usr/bin:/bin" HOME="$work" TERM=dumb LC_ALL=C \
       perl -e '
         use POSIX qw(setsid); my $secs = shift; my $pid = fork();
         if ($pid == 0) { setsid(); exec @ARGV or exit 127; }
         $SIG{ALRM} = sub { kill(-9, $pid); exit 124; };
         alarm $secs; waitpid($pid, 0); alarm 0; exit($? >> 8);' \
-      "$TIMEOUT" "$bin" --norc "$f" ) >"$work/.o" 2>"$work/.e"
+      "$TIMEOUT" "$bin" --norc "$abs" ) >"$work/.o" 2>"$work/.e" </dev/null
   local rc=$?
   printf 'rc=%s\n' "$rc"
-  { norm "$bin" < "$work/.o"; echo '--8<--stderr--'; norm "$bin" < "$work/.e"; }
+  # Normalize runtime nondeterminism so only real behavioural differences show:
+  # the shell's own path AND its basename-colon error prefix (bash uses the full
+  # argv0, gnash the basename), the script path, the throwaway CWD, and PIDs.
+  local nrm="s#$bin#SHELL#g; s#^${base}: #SHELL: #; s#$abs#SCRIPT#g; s#$work#CWD#g; s#[0-9]{5,}#NUM#g"
+  { LC_ALL=C sed -E "$nrm" < "$work/.o"; echo '--8<--stderr--';
+    LC_ALL=C sed -E "$nrm" < "$work/.e"; }
   rm -rf "$work"
 }
 
