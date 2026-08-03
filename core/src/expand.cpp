@@ -2017,25 +2017,32 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
   if (rest[0] == '#' || rest[0] == '%') {
     bool longest = rest.size() > 1 && rest[1] == rest[0];
     std::string pat = ex.expand_pattern(rest.substr(longest ? 2 : 1));
-    if (rest[0] == '#') {  // prefix removal
+    // Try only CHARACTER-boundary split points, so `${x%?}' removes one whole
+    // multibyte character rather than a single trailing byte (which would leave
+    // a broken sequence).  cb lists the byte offsets of every boundary, 0..size.
+    std::vector<size_t> cb;
+    for (size_t i = 0;; ) {
+      cb.push_back(i);
+      if (i >= val.size()) break;
+      size_t len = 1;
+      mb_decode(val, i, len);
+      i += len;
+    }
+    if (rest[0] == '#') {  // prefix removal (shortest = first, longest = last)
       if (longest) {
-        for (size_t k = val.size(); k + 1 > 0; k--) {
-          if (pat_match(pat, val.substr(0, k))) return val.substr(k);
-          if (k == 0) break;
-        }
+        for (size_t j = cb.size(); j-- > 0; )
+          if (pat_match(pat, val.substr(0, cb[j]))) return val.substr(cb[j]);
       } else {
-        for (size_t k = 0; k <= val.size(); k++)
+        for (size_t k : cb)
           if (pat_match(pat, val.substr(0, k))) return val.substr(k);
       }
-    } else {  // suffix removal
+    } else {  // suffix removal (longest = first split, shortest = last split)
       if (longest) {
-        for (size_t k = 0; k <= val.size(); k++)
+        for (size_t k : cb)
           if (pat_match(pat, val.substr(k))) return val.substr(0, k);
       } else {
-        for (size_t k = val.size(); k + 1 > 0; k--) {
-          if (pat_match(pat, val.substr(k))) return val.substr(0, k);
-          if (k == 0) break;
-        }
+        for (size_t j = cb.size(); j-- > 0; )
+          if (pat_match(pat, val.substr(cb[j]))) return val.substr(0, cb[j]);
       }
     }
     return val;

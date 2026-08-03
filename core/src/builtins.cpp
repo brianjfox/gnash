@@ -2396,16 +2396,10 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
         } else if (append) {
           val = sh.get(name) + val;
         }
-        if (lcase) for (char &c : val) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        else if (ucase) for (char &c : val) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-        else if (capcase) {
-          bool cfirst = true;
-          for (char &c : val) {
-            c = static_cast<char>(cfirst ? std::toupper(static_cast<unsigned char>(c))
-                                         : std::tolower(static_cast<unsigned char>(c)));
-            cfirst = false;
-          }
-        }
+        // Character-aware fold (multibyte-safe), matching Shell::set's attribute.
+        if (lcase) val = mb_lower(val);
+        else if (ucase) val = mb_upper(val);
+        else if (capcase) val = mb_capitalize(val);
         // Retargeting an existing empty nameref via `declare r=val' validates
         // the value like a plain assignment, but the diagnostic carries the
         // builtin name (Shell::set would print it bare).
