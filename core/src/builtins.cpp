@@ -2485,6 +2485,11 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     // its current value/visibility.
     bool fresh_var = fresh_local || sh.vars.find(aname) == sh.vars.end();
     Variable &v = sh.vars[aname];
+    // Whether v was already readonly BEFORE this command applied its attributes
+    // (`-r' below sets v.readonly): a pre-existing readonly plain variable
+    // cannot be converted to a nameref, but `declare -rn foo=bar' on a fresh
+    // var, or re-declaring an existing nameref, is fine.
+    bool was_readonly = v.readonly;
     // A localvar_inherit'd local already holds the enclosing value, so it stays
     // visible; only a genuinely empty fresh scalar is marked declared-but-unset.
     if (fresh_var && !inherited_local && eq == std::string::npos && v.kind == VarKind::Scalar)
@@ -2501,7 +2506,14 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     // (`r=/; declare -n r') -- or which names itself -- is rejected; bash leaves
     // the variable unchanged without the attribute.  (The `=val' form validated
     // its value above.)
-    if (nameref && (v.kind == VarKind::Indexed || v.kind == VarKind::Assoc)) {
+    if (nameref && was_readonly && !v.nameref) {
+      // Converting a pre-existing readonly plain variable to a nameref is
+      // rejected (`declare -r RO=x; declare -n RO' -> `declare: RO: readonly
+      // variable'); bash permits `-x' on a readonly var, but not `-n'.
+      std::fprintf(stderr, "%s%s: %s: readonly variable\n", sh.err_prefix().c_str(),
+                   argv[0].c_str(), name.c_str());
+      ret = 1;
+    } else if (nameref && (v.kind == VarKind::Indexed || v.kind == VarKind::Assoc)) {
       // An existing array/associative variable cannot be turned into a nameref;
       // bash rejects the `-n' and leaves the array (and any assignment made by
       // this same command) intact.
