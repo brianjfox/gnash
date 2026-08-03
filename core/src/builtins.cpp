@@ -438,8 +438,8 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
       std::string sub = vname.substr(lb + 1, vname.size() - lb - 2);
       if (!sh.array_expand_once_ok(base, sub)) return 1;
       sh.array_set(base, sub, out);
-    } else {
-      sh.set(vname, out);
+    } else if (!sh.set(vname, out, "printf")) {
+      return 1;  // invalid nameref target: `printf: `X': not a valid identifier'
     }
   } else {
     std::fwrite(out.data(), 1, out.size(), stdout);
@@ -3121,26 +3121,31 @@ int bi_getopts(Shell &sh, const std::vector<std::string> &argv) {
   // readonly OPTARG (dropping the readonly attribute), so `${OPTARG-unset}'
   // reports it unset and a later re-declaration is not blocked.
   auto clear_optarg = [&]() { sh.unset("OPTARG", true); };
+  // Writes to the result variable carry the `getopts' name so an invalid
+  // nameref target reports `getopts: `?': not a valid identifier' (bash).  The
+  // diagnostic is printed BEFORE the store so it precedes that error, matching
+  // bash's `illegal option -- X' / `getopts: ...' ordering.
+  auto set_name = [&](const std::string &val) { return sh.set(name, val, "getopts"); };
   auto badopt = [&](char c) {
-    if (silent) { sh.set(name, "?"); sh.set("OPTARG", std::string(1, c)); }
+    if (silent) { set_name("?"); sh.set("OPTARG", std::string(1, c)); }
     else {
       clear_optarg();
-      sh.set(name, "?");
       std::fprintf(stderr, "%s: illegal option -- %c\n", sh.arg0.c_str(), c);
+      set_name("?");
     }
   };
   auto needarg = [&](char c) {
-    if (silent) { sh.set(name, ":"); sh.set("OPTARG", std::string(1, c)); }
+    if (silent) { set_name(":"); sh.set("OPTARG", std::string(1, c)); }
     else {
       clear_optarg();
-      sh.set(name, "?");
       std::fprintf(stderr, "%s: option requires an argument -- %c\n", sh.arg0.c_str(), c);
+      set_name("?");
     }
   };
 
   for (;;) {
     int ai = optind - 1;  // 0-based index into args
-    if (ai >= static_cast<int>(args.size())) { clear_optarg(); sh.set(name, "?"); return 1; }
+    if (ai >= static_cast<int>(args.size())) { clear_optarg(); set_name("?"); return 1; }
     const std::string &arg = args[static_cast<size_t>(ai)];
 
     // Start of a fresh argument.
@@ -3151,10 +3156,10 @@ int bi_getopts(Shell &sh, const std::vector<std::string> &argv) {
         s_charidx = 1;
         sh.set("OPTIND", std::to_string(optind));
         clear_optarg();
-        sh.set(name, "?");
+        set_name("?");
         return 1;
       }
-      if (arg.empty() || arg[0] != '-' || arg == "-") { clear_optarg(); sh.set(name, "?"); return 1; }
+      if (arg.empty() || arg[0] != '-' || arg == "-") { clear_optarg(); set_name("?"); return 1; }
       s_charidx = 1;
       s_curarg = arg;
     }
@@ -3187,7 +3192,7 @@ int bi_getopts(Shell &sh, const std::vector<std::string> &argv) {
         return 0;
       }
     }
-    sh.set(name, std::string(1, c));
+    set_name(std::string(1, c));
     s_optind = optind;
     sh.set("OPTIND", std::to_string(optind));
     return 0;
