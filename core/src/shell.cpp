@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <set>
+#include <clocale>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
@@ -1174,6 +1175,25 @@ bool Shell::get_if_set(const std::string &n_in, std::string &out) const {
   return true;
 }
 
+static bool is_locale_var(const std::string &n) {
+  return n == "LC_ALL" || n == "LC_CTYPE" || n == "LANG";
+}
+
+// Re-apply the LC_CTYPE locale from the shell's own LC_ALL/LC_CTYPE/LANG
+// variables, in POSIX precedence order, so a runtime `export LC_ALL=en_US.UTF-8'
+// makes subsequent ${#var}/substring operations count characters.  Only the
+// LC_CTYPE category (which governs MB_CUR_MAX / mbrtowc) is changed.
+static void apply_ctype_locale(Shell &sh) {
+  auto val = [&](const char *k) -> std::string {
+    auto it = sh.vars.find(k);
+    return it != sh.vars.end() ? it->second.value : std::string();
+  };
+  std::string loc = val("LC_ALL");
+  if (loc.empty()) loc = val("LC_CTYPE");
+  if (loc.empty()) loc = val("LANG");
+  if (!loc.empty()) std::setlocale(LC_CTYPE, loc.c_str());
+}
+
 bool Shell::set(const std::string &n_in, const std::string &v,
                 const char *nameref_ctx) {
   // A nameref whose target is an array element (`declare -n r=a[2]'): write
@@ -1269,6 +1289,8 @@ bool Shell::set(const std::string &n_in, const std::string &v,
   var.invisible = false;  // an assignment makes a declared-but-unset scalar visible
   // Setting POSIXLY_CORRECT (to any value) enables POSIX mode, as in bash.
   if (n == "POSIXLY_CORRECT") opt_posix = true;
+  // A locale assignment re-applies LC_CTYPE so multibyte handling follows it.
+  if (is_locale_var(n)) apply_ctype_locale(*this);
   // `declare -u' / `-l' / `-c' fold the value's case on every assignment.
   if (var.ucase)
     for (char &c : var.value) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
@@ -1301,6 +1323,7 @@ void Shell::set_exported(const std::string &n_in, const std::string &v) {
   var.exported = true;
   var.invisible = false;  // an assignment makes a declared-but-unset scalar visible
   if (n == "POSIXLY_CORRECT") opt_posix = true;
+  if (is_locale_var(n)) apply_ctype_locale(*this);
 }
 
 void Shell::export_name(const std::string &n) {

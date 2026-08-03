@@ -16,6 +16,7 @@
 // are absent, so gnash works out of the box for users with only ~/.bash* files.
 #include <cctype>
 #include <cerrno>
+#include <clocale>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -275,6 +276,10 @@ void show_shell_usage(const std::string &name) {
 }  // namespace
 
 int main(int argc, char **argv) {
+  // Adopt the environment's locale (LC_ALL/LC_CTYPE/LANG) so MB_CUR_MAX and the
+  // libc ctype/mbrtowc facilities reflect it -- bash does this at startup, and
+  // it is what makes ${#var}, substrings, etc. count characters not bytes.
+  std::setlocale(LC_ALL, "");
   Shell sh;
   shopt_seed(sh);  // seed default shopt states so $BASHOPTS is populated
   sh.import_env_functions();  // pull in any BASH_FUNC_*%% exported functions
