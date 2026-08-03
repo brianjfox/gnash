@@ -538,6 +538,19 @@ void apply_array_assign(Shell &sh, Expander &ex, const Assign &a) {
       return;
     }
   }
+  // A nameref whose target is itself an array element (`declare -n ref=a[0]')
+  // cannot be subscripted further -- `ref[foo]=x' would mean `a[0][foo]'.  bash
+  // rejects the resolved target as an invalid identifier rather than creating a
+  // variable literally named `a[0]'.
+  if (a.sub) {
+    std::string dn = sh.deref(a.name);
+    if (dn.find('[') != std::string::npos) {
+      std::fprintf(stderr, "%s`%s': not a valid identifier\n", sh.err_prefix().c_str(),
+                   dn.c_str());
+      sh.last_status = 1;
+      return;
+    }
+  }
   // An empty subscript (`b[]=x') is always a bad array subscript.  The special
   // `*'/`@' selectors are bad for an indexed array but are ordinary literal keys
   // for an associative one (`a[@]=x' stores under the key "@").
