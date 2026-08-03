@@ -9,3 +9,7 @@ echo "strip=${x%?} head=${x#?} ext=${x%.*}"
 [[ é == [[:alpha:]] ]] && echo "class ok"
 case résumé in r?sum?) echo "case ok" ;; *) echo "case BAD" ;; esac
 declare -u U=münchen; declare -l L=BJÖRK; echo "$U $L"
+# IFS splitting / joining and read on a multibyte separator
+IFS=é read -ra parts <<< "xéyéz"; echo "split=${#parts[@]} join=${parts[*]}"
+set -- 1 2 3; IFS=€; echo "star=$*"
+printf 'café' | { read -n 4 c4; echo "readn=$c4"; }

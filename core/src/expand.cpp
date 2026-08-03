@@ -201,6 +201,16 @@ static wchar_t mb_decode(const std::string &s, size_t i, size_t &len) {
 }
 
 // Append the character wc to out in the current locale's encoding (a single
+// First character of s (its whole multibyte sequence), or "" if s is empty --
+// used as the `$*'/`${a[*]}' join separator (bash joins with IFS's first
+// CHARACTER, not its first byte).
+std::string mb_first_char(const std::string &s) {
+  if (s.empty()) return std::string();
+  size_t len = 1;
+  mb_decode(s, 0, len);
+  return s.substr(0, len);
+}
+
 // byte in a unibyte locale; wcrtomb otherwise).  `orig' is the source bytes,
 // appended verbatim if wc is unencodable so the character is never lost.
 static void mb_append_char(std::string &out, wchar_t wc, const std::string &orig) {
@@ -465,7 +475,7 @@ std::string Expander::param_value(const std::string &name, bool &set, bool defau
     // defaults only for $# == 0); the value joins with the first IFS char.
     set = !sh_.positional.empty();
     std::string ifs = sh_.ifs();
-    char sep = ifs.empty() ? ' ' : ifs[0];
+    std::string sep = ifs.empty() ? std::string(" ") : mb_first_char(ifs);
     std::string r;
     for (size_t k = 0; k < sh_.positional.size(); k++) {
       if (k) r += sep;
@@ -722,7 +732,7 @@ bool Expander::emit_zsh_flags(const std::string &body, bool dq, std::string &out
   // Emit the list: one word per element (unquoted) or IFS-joined (double-quoted).
   if (dq) {
     std::string is = sh_.ifs();
-    std::string joiner = is.empty() ? std::string() : std::string(1, is[0]);
+    std::string joiner = mb_first_char(is);
     for (size_t x = 0; x < items.size(); x++) {
       if (x) for (char c : joiner) { out += c; mask += '1'; }
       for (char c : items[x]) { out += c; mask += '1'; }
@@ -779,7 +789,7 @@ void Expander::emit_zsh_subscript(const std::string &name, const std::string &su
       if (k >= 1 && k <= n) items.push_back(all[static_cast<size_t>(k - 1)]);
     if (dq) {
       std::string is = sh_.ifs();
-      std::string joiner = is.empty() ? std::string() : std::string(1, is[0]);
+      std::string joiner = mb_first_char(is);
       for (size_t k = 0; k < items.size(); k++) {
         if (k) for (char c : joiner) { out += c; mask += '1'; }
         for (char c : items[k]) { out += c; mask += '1'; }
@@ -900,7 +910,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
           }
         } else if (body[0] == '*' && dq) {
           std::string sep = sh_.ifs();
-          std::string joiner = sep.empty() ? std::string() : std::string(1, sep[0]);
+          std::string joiner = mb_first_char(sep);
           for (size_t k = 0; k < pos.size(); k++) {
             if (k) for (char c : joiner) { out += c; mask += '1'; }
             for (char c : pos[k]) { out += c; mask += '1'; }
@@ -915,7 +925,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
           }
         } else if (body[0] == '*') {  // unquoted (non-empty IFS) / assignment: join IFS[0]
           std::string sep = sh_.ifs();
-          std::string joiner = sep.empty() ? std::string() : std::string(1, sep[0]);
+          std::string joiner = mb_first_char(sep);
           for (size_t k = 0; k < pos.size(); k++) {
             if (k) for (char c : joiner) { out += c; mask += '0'; }
             for (char c : pos[k]) { out += c; mask += '0'; }
@@ -1009,7 +1019,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
                     }
                   } else if (nm == "*" && dq) {
                     std::string is = sh_.ifs();
-                    std::string j = is.empty() ? std::string() : std::string(1, is[0]);
+                    std::string j = mb_first_char(is);
                     for (size_t k = 0; k < pos.size(); k++) {
                       if (k) for (char c : j) { out += c; mask += '1'; }
                       for (char c : pos[k]) { out += c; mask += '1'; }
@@ -1024,7 +1034,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
                     }
                   } else if (nm == "*") {
                     std::string is = sh_.ifs();
-                    std::string j = is.empty() ? std::string() : std::string(1, is[0]);
+                    std::string j = mb_first_char(is);
                     for (size_t k = 0; k < pos.size(); k++) {
                       if (k) for (char c : j) { out += c; mask += '0'; }
                       for (char c : pos[k]) { out += c; mask += '0'; }
@@ -1128,7 +1138,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
             }
           } else if (sel == '*' && dq) {
             std::string is = sh_.ifs();
-            std::string j = is.empty() ? std::string() : std::string(1, is[0]);
+            std::string j = mb_first_char(is);
             for (size_t k = 0; k < items.size(); k++) {
               if (k) for (char c : j) { out += c; mask += '1'; }
               for (char c : items[k]) { out += c; mask += '1'; }
@@ -1148,7 +1158,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
             // Assignment / no-split ${a[*]}: join with the first IFS char, left
             // splittable (mask 0) so an assignment RHS keeps it as the joiner.
             std::string is = sh_.ifs();
-            std::string j = is.empty() ? std::string() : std::string(1, is[0]);
+            std::string j = mb_first_char(is);
             for (size_t k = 0; k < items.size(); k++) {
               if (k) for (char c : j) { out += c; mask += '0'; }
               for (char c : items[k]) { out += c; mask += '0'; }
@@ -1182,7 +1192,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
           it = apply_param_op(*this, sh_, std::string(1, psel), it, true, prest, dq);
         if (psel == '*' && dq) {
           std::string is = sh_.ifs();
-          std::string j = is.empty() ? std::string() : std::string(1, is[0]);
+          std::string j = mb_first_char(is);
           for (size_t k = 0; k < items.size(); k++) {
             if (k) for (char c : j) { out += c; mask += '1'; }
             for (char c : items[k]) { out += c; mask += '1'; }
@@ -1197,7 +1207,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
           }
         } else if (psel == '*') {  // join with IFS[0], splittable
           std::string is = sh_.ifs();
-          std::string j = is.empty() ? std::string() : std::string(1, is[0]);
+          std::string j = mb_first_char(is);
           for (size_t k = 0; k < items.size(); k++) {
             if (k) for (char c : j) { out += c; mask += '0'; }
             for (char c : items[k]) { out += c; mask += '0'; }
@@ -1266,7 +1276,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
         }
         if (asel == '*' && dq) {
           std::string is = sh_.ifs();
-          std::string j = is.empty() ? std::string() : std::string(1, is[0]);
+          std::string j = mb_first_char(is);
           for (size_t k = 0; k < items.size(); k++) {
             if (k) for (char c : j) { out += c; mask += '1'; }
             for (char c : items[k]) { out += c; mask += '1'; }
@@ -1289,7 +1299,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
         } else if (asel == '*') {
           // Unquoted ${a[*]OP}: join with the first IFS char, left splittable.
           std::string is = sh_.ifs();
-          std::string j = is.empty() ? std::string() : std::string(1, is[0]);
+          std::string j = mb_first_char(is);
           for (size_t k = 0; k < items.size(); k++) {
             if (k) for (char c : j) { out += c; mask += '0'; }
             for (char c : items[k]) { out += c; mask += '0'; }
@@ -1341,14 +1351,14 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
             }
           } else if (dfsel == '*' && dq) {
             std::string is = sh_.ifs();
-            std::string j = is.empty() ? std::string() : std::string(1, is[0]);
+            std::string j = mb_first_char(is);
             for (size_t k = 0; k < vals.size(); k++) {
               if (k) for (char c : j) { out += c; mask += '1'; }
               for (char c : vals[k]) { out += c; mask += '1'; }
             }
           } else if (dfsel == '*') {
             std::string is = sh_.ifs();
-            std::string j = is.empty() ? std::string() : std::string(1, is[0]);
+            std::string j = mb_first_char(is);
             for (size_t k = 0; k < vals.size(); k++) {
               if (k) for (char c : j) { out += c; mask += '0'; }
               for (char c : vals[k]) { out += c; mask += '0'; }
@@ -1465,7 +1475,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
         }
         if (ssel == '*' && dq) {
           std::string is = sh_.ifs();
-          std::string j = is.empty() ? std::string() : std::string(1, is[0]);
+          std::string j = mb_first_char(is);
           if (!slice.empty()) { out += QNULL; mask += MMARK; }  // "" stays a field
           for (size_t k = 0; k < slice.size(); k++) {
             if (k) for (char c : j) { out += c; mask += '1'; }
@@ -1486,7 +1496,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
           // left splittable, so a splitting caller still word-splits on it and an
           // assignment RHS keeps it as the join character.
           std::string is = sh_.ifs();
-          std::string j = is.empty() ? std::string() : std::string(1, is[0]);
+          std::string j = mb_first_char(is);
           for (size_t k = 0; k < slice.size(); k++) {
             if (k) for (char c : j) { out += c; mask += '0'; }
             for (char c : slice[k]) { out += c; mask += '0'; }
@@ -1543,7 +1553,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
       }
     } else if (n1 == '*' && dq) {
       std::string sep = sh_.ifs();
-      std::string joiner = sep.empty() ? std::string() : std::string(1, sep[0]);
+      std::string joiner = mb_first_char(sep);
       for (size_t k = 0; k < pos.size(); k++) {
         if (k) for (char c : joiner) { out += c; mask += '1'; }
         for (char c : pos[k]) { out += c; mask += '1'; }
@@ -1564,7 +1574,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
       }
     } else if (n1 == '*') {  // assignment / no-split / non-empty-IFS $*: join IFS[0]
       std::string sep = sh_.ifs();
-      std::string joiner = sep.empty() ? std::string() : std::string(1, sep[0]);
+      std::string joiner = mb_first_char(sep);
       for (size_t k = 0; k < pos.size(); k++) {
         if (k) for (char c : joiner) { out += c; mask += '0'; }
         for (char c : pos[k]) { out += c; mask += '0'; }
@@ -1624,7 +1634,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
     std::vector<std::string> items = sh_.array_values(name);
     if (dq) {
       std::string is = sh_.ifs();
-      std::string joiner = is.empty() ? std::string() : std::string(1, is[0]);
+      std::string joiner = mb_first_char(is);
       for (size_t k = 0; k < items.size(); k++) {
         if (k) for (char c : joiner) { out += c; mask += '1'; }
         for (char c : items[k]) { out += c; mask += '1'; }
@@ -2357,9 +2367,24 @@ std::vector<std::pair<std::string, std::string>> Expander::split_ifs(const std::
   bool zsh = sh_.is_zsh();
   auto splittable = [&](char m) { return m == '4' || (m == '0' && !zsh); };
   std::vector<std::pair<std::string, std::string>> fields;
-  auto is_ifs = [&](char c) { return ifs.find(c) != std::string::npos; };
+  // IFS as a list of (possibly multibyte) characters, so a multibyte separator
+  // like `€' splits on the whole character rather than on each of its bytes.
+  std::vector<std::string> ifs_chars;
+  for (size_t k = 0; k < ifs.size();) {
+    size_t len = 1;
+    mb_decode(ifs, k, len);
+    ifs_chars.push_back(ifs.substr(k, len));
+    k += len;
+  }
+  auto clen = [&](size_t i) { size_t len = 1; mb_decode(s, i, len); return len; };
+  auto is_ifs = [&](size_t i) {
+    std::string ch = s.substr(i, clen(i));
+    for (const std::string &c : ifs_chars)
+      if (c == ch) return true;
+    return false;
+  };
   auto is_ws = [&](char c) { return c == ' ' || c == '\t' || c == '\n'; };
-  auto soft_ifs = [&](size_t i) { return splittable(mask[i]) && is_ifs(s[i]); };
+  auto soft_ifs = [&](size_t i) { return splittable(mask[i]) && is_ifs(i); };
   auto soft_ws = [&](size_t i) { return soft_ifs(i) && is_ws(s[i]); };
   // bash's list_string algorithm (lib/sh/split.c): leading IFS whitespace is
   // skipped, then each iteration extracts one field and consumes a single
@@ -2385,10 +2410,11 @@ std::vector<std::pair<std::string, std::string>> Expander::split_ifs(const std::
       while (i < n && soft_ws(i)) i++;
       continue;
     }
-    // Soft IFS delimiter: [ws]* [one non-ws]? [ws]*.
+    // Soft IFS delimiter: [ws]* [one non-ws]? [ws]*.  A non-whitespace IFS
+    // delimiter may be multibyte, so consume the whole character.
     while (i < n && soft_ws(i)) i++;
     if (i < n && soft_ifs(i) && !is_ws(s[i])) {
-      i++;
+      i += clen(i);
       while (i < n && soft_ws(i)) i++;
     }
   }
