@@ -1775,7 +1775,14 @@ int Executor::run_for(const ForCommand *c) {
       if (vit->second.readonly)
         std::fprintf(stderr, "%s%s: readonly variable\n", sh_.err_prefix().c_str(),
                      c->var.c_str());
-      else
+      else if (!Shell::valid_nameref_target(item)) {
+        // Retargeting a nameref to a non-identifier (`for r in /') is an error,
+        // like `declare -n r=/'; bash aborts the loop rather than continuing.
+        std::fprintf(stderr, "%s`%s': not a valid identifier\n", sh_.err_prefix().c_str(),
+                     item.c_str());
+        st = 1;
+        break;
+      } else
         vit->second.value = item;
     } else {
       sh_.set(c->var, item);
