@@ -902,7 +902,12 @@ struct Parser {
         count_parens(rx);
         advance();
         while (!err && !is(Tok::Eof)) {
-          if (pd == 0 && (at_cond_end() || cur().preceded_by_blank)) break;
+          // At paren depth 0 the regex ends at a blank, the closing `]]', or a
+          // `)' -- the last being a conditional group close (`[[ ( X =~ RE ) ]]'),
+          // not regex content, exactly as bash treats a bare `)' there.
+          if (pd == 0 && (at_cond_end() || cur().preceded_by_blank ||
+                          cur().type == Tok::Rparen))
+            break;
           if (cur().preceded_by_blank) rx += ' ';  // blank inside (...) is regex
           std::string src = tok_source(cur());
           rx += src;
