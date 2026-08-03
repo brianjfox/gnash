@@ -477,6 +477,7 @@ struct Ctx {
   int depth = 0;
   size_t err_pos = std::string::npos;  // offset of the error token (see Parser)
   std::string err_msg;
+  const char *cmd_name = nullptr;  // "(("/"let" -- prefixes a nameref-target error
   void note(const std::string &m, size_t p) {
     if (err_pos == std::string::npos) { err_pos = p; err_msg = m; }
     ok = false;
@@ -524,8 +525,8 @@ void ref_set(const Node *n, long long val, Ctx &ctx) {
     std::string sub = n->sub;
     if (!ctx.sh.array_expand_once_ok(n->name, sub)) { ctx.ok = false; return; }
     ctx.sh.array_set(n->name, ctx.sh.zsh_subscript(n->name, sub), std::to_string(val));
-  } else if (!ctx.sh.set(n->name, std::to_string(val)))
-    ctx.ok = false;  // assignment to a readonly variable: the expansion fails
+  } else if (!ctx.sh.set(n->name, std::to_string(val), ctx.cmd_name))
+    ctx.ok = false;  // readonly, or an invalid nameref target (`((: `0': ...')
 }
 
 long long eval_node(const Node *n, Ctx &ctx) {
@@ -613,7 +614,7 @@ long long eval_arith_msg(Shell &sh, const std::string &expr, const char *cmd_nam
   if (blank_expr(expr)) { if (ok) *ok = true; return 0; }
   if (try_int(expr, iv)) { if (ok) *ok = true; return iv; }
   Parsed p = parse_cached(expr);
-  Ctx ctx{sh, p.ok, 0, p.err_pos, p.err_msg};
+  Ctx ctx{sh, p.ok, 0, p.err_pos, p.err_msg, cmd_name};
   long long v = eval_node(p.root.get(), ctx);
   if (ok) *ok = ctx.ok;
   if (!ctx.ok && ctx.err_pos != std::string::npos && ctx.err_pos <= expr.size()) {
