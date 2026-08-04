@@ -543,6 +543,15 @@ void apply_array_assign(Shell &sh, Expander &ex, const Assign &a) {
   // rejects the resolved target as an invalid identifier rather than creating a
   // variable literally named `a[0]'.
   if (a.sub) {
+    // A targetless nameref (`declare -n ref') resolves to the empty name, so
+    // `ref[0]=x' has nothing to subscript: bash rejects it as `': not a valid
+    // identifier' and leaves ref an unset reference.
+    auto nit = sh.vars.find(a.name);
+    if (nit != sh.vars.end() && nit->second.nameref && nit->second.value.empty()) {
+      std::fprintf(stderr, "%s`': not a valid identifier\n", sh.err_prefix().c_str());
+      sh.last_status = 1;
+      return;
+    }
     std::string dn = sh.deref(a.name);
     if (dn.find('[') != std::string::npos) {
       std::fprintf(stderr, "%s`%s': not a valid identifier\n", sh.err_prefix().c_str(),
@@ -565,8 +574,12 @@ void apply_array_assign(Shell &sh, Expander &ex, const Assign &a) {
     }
   }
   // An integer-attributed array (`declare -i') evaluates each element value as
-  // an arithmetic expression, and `+=' adds rather than string-appends.
-  auto vit = sh.vars.find(a.name);
+  // an arithmetic expression, and `+=' adds rather than string-appends.  The
+  // attribute lives on the target the assignment lands on, so resolve through a
+  // nameref (`declare -ai var; declare -n ref=var; ref[1]=' evaluates on var).
+  std::string dtgt = sh.deref(a.name);
+  size_t dlb = dtgt.find('[');
+  auto vit = sh.vars.find(dlb == std::string::npos ? dtgt : dtgt.substr(0, dlb));
   bool integer = vit != sh.vars.end() && vit->second.integer;
   if (a.sub) {
     // A compound value `(...)' cannot be assigned to a single element in bash

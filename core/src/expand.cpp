@@ -1955,6 +1955,17 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
       } else {
         target = sh.get(iname);
       }
+      // The indirection variable's value is the name to expand; if it is empty
+      // (INAME unset or set to the empty string) there is no name to reference,
+      // so bash reports `INAME: invalid indirect expansion' and aborts the
+      // command.  This fires even with a defaulting operator (`${!x-word}'): the
+      // operator applies to the INDIRECTED parameter, not to the missing name.
+      if (target.empty()) {
+        std::fprintf(stderr, "%s%s: invalid indirect expansion\n", sh.err_prefix().c_str(),
+                     iname.c_str());
+        sh.arith_error = true;
+        return std::string();
+      }
       if (length) return std::to_string(mb_charlen(expand_brace_body(ex, sh, target + b.substr(q), dq)));
       return expand_brace_body(ex, sh, target + b.substr(q), dq);
     }

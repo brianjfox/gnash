@@ -2320,26 +2320,40 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     // A subscripted name implies an indexed array even without `-a'
     // (`declare -r c[100]' creates an empty readonly array c).
     else if (subscript0) sh.make_array(name, false);
+    // Pre-assignment attributes (-i and the case folds, applied so a compound
+    // array literal's elements honor them) attach to the variable that actually
+    // receives the value.  For an existing nameref name that is the reference's
+    // TARGET (`local -n ref=var; local -i ref=(...)') -- bash applies -i to var
+    // and leaves ref a plain `-n' reference -- so resolve through the nameref.
+    std::string attr_name = name;
+    {
+      auto nv2 = sh.vars.find(name);
+      if (nv2 != sh.vars.end() && nv2->second.nameref && !nv2->second.value.empty()) {
+        std::string d = sh.deref(name);
+        size_t lb = d.find('[');
+        attr_name = (lb == std::string::npos) ? d : d.substr(0, lb);
+      }
+    }
     // bash applies declared attributes before the assignment, so a `declare -i'
     // array/associative literal (`declare -ai a=(1+1 2*3)') evaluates each
     // element arithmetically.  apply_array_assign reads the integer attribute
     // from the variable, so set it now rather than after the assignment (the
     // scalar path already honors the -i flag directly).
     if (integer && eq != std::string::npos && !name.empty() && !nameref)
-      sh.vars[name].integer = true;
+      sh.vars[attr_name].integer = true;
     // `declare +i NAME=value' removes the integer attribute BEFORE the
     // assignment, so an array/scalar value is stored verbatim rather than
     // arithmetically evaluated (`declare +i arr=(hello world)').
-    if (rm_integer && eq != std::string::npos && !name.empty() && sh.vars.count(name))
-      sh.vars[name].integer = false;
+    if (rm_integer && eq != std::string::npos && !name.empty() && sh.vars.count(attr_name))
+      sh.vars[attr_name].integer = false;
     // The case-fold attributes (`-l'/`-u'/`-c') likewise apply to array literal
     // elements, so set them before the assignment: array_set reads them from the
     // variable (`declare -al a=(ONE TWO)' -> [0]=one).  The scalar path folds the
     // value directly below, so this only matters for the compound-array path.
     if (eq != std::string::npos && !name.empty() && !nameref) {
-      if (lcase) sh.vars[name].lcase = true;
-      else if (ucase) sh.vars[name].ucase = true;
-      else if (capcase) sh.vars[name].capcase = true;
+      if (lcase) sh.vars[attr_name].lcase = true;
+      else if (ucase) sh.vars[attr_name].ucase = true;
+      else if (capcase) sh.vars[attr_name].capcase = true;
     }
     if (eq != std::string::npos) {
       std::string val = a.substr(eq + 1);
@@ -2444,9 +2458,15 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
                        name.c_str());
           return 1;
         }
-        rv.value = tgt;
-        rv.invisible = false;  // a nameref given a target is now visible
-                               // (`typeset -n r; typeset -n r=P' -> `-n r="P"')
+        // A `declare -n' naming an existing array is rejected below ("reference
+        // variable cannot be an array"); leave the array untouched -- don't store
+        // the target or clear its invisible flag -- so a rejected retarget of a
+        // declared-but-empty array still prints `declare -a array', not `=()'.
+        if (rv.kind != VarKind::Indexed && rv.kind != VarKind::Assoc) {
+          rv.value = tgt;
+          rv.invisible = false;  // a nameref given a target is now visible
+                                 // (`typeset -n r; typeset -n r=P' -> `-n r="P"')
+        }
       } else {
         val = pre_val;  // expanded above, in the enclosing scope, before localizing
         // Honor a pre-existing integer attribute too (e.g. `readonly x+=7' on a
@@ -2588,6 +2608,11 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     // cannot be converted to a nameref, but `declare -rn foo=bar' on a fresh
     // var, or re-declaring an existing nameref, is fine.
     bool was_readonly = v.readonly;
+    // Whether v was already a nameref BEFORE this command: adding `-n' to a
+    // variable that was not one strips its integer/case attributes, but
+    // re-declaring an existing nameref (`declare -n b=a[0]; declare -ni b')
+    // leaves them, so the strip below is gated on this.
+    bool was_nameref = v.nameref;
     // A localvar_inherit'd local already holds the enclosing value, so it stays
     // visible; only a genuinely empty fresh scalar is marked declared-but-unset.
     if (fresh_var && !inherited_local && eq == std::string::npos && v.kind == VarKind::Scalar)
@@ -2632,6 +2657,13 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
       ret = 1;
     } else if (nameref) {
       v.nameref = true;
+      // A nameref cannot also carry the integer or case-fold attributes: NEWLY
+      // adding `-n' to a variable that has them strips them (bash declare.def
+      // unsets att_integer|att_uppercase|att_lowercase|att_capcase), so
+      // `declare -i ivar; declare -n ivar=foo' prints `declare -n ivar="foo"'.
+      // Re-declaring an existing nameref (`declare -n b=a[0]; declare -ni b')
+      // leaves them, so only strip when the reference is being introduced.
+      if (!was_nameref) v.integer = v.ucase = v.lcase = v.capcase = false;
     }
     // `+X' removes attributes.  Applied after the assignment so `typeset +n
     // foo=other' writes through the still-active nameref to its target before
