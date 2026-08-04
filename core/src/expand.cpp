@@ -528,6 +528,29 @@ static bool array_ref(const std::string &body, char &lead, std::string &name, ch
   return false;
 }
 
+// True when S is a whole-array splat reference `BASE[@]' / `BASE[*]' (BASE a
+// non-empty identifier-shaped prefix); fills BASE and SEL ('@' or '*').
+static bool is_array_splat(const std::string &s, std::string &base, char &sel) {
+  size_t lb = s.find('[');
+  if (lb == std::string::npos || lb == 0 || s.size() != lb + 3 || s.back() != ']')
+    return false;
+  char c = s[lb + 1];
+  if (c != '@' && c != '*') return false;
+  base = s.substr(0, lb);
+  sel = c;
+  return true;
+}
+
+// A nameref whose target is a whole-array splat (`declare -n ref=arr[@]'):
+// expanding $ref / ${ref} yields every element like ${arr[@]}.  Returns true and
+// fills BASE and SEL ('@' or '*') when NAME is such a nameref.
+static bool nameref_array_splat(Shell &sh, const std::string &name, std::string &base,
+                                char &sel) {
+  auto it = sh.vars.find(name);
+  if (it == sh.vars.end() || !it->second.nameref) return false;
+  return is_array_splat(it->second.value, base, sel);
+}
+
 // Detect NAME[@]OP / NAME[*]OP where OP is an operator applied element-wise
 // (case-mod ^ , ; pattern removal # % ; substitution / ; transform @).  Slicing
 // (:offset) and default (:-) forms act on the array as a whole and are excluded.
@@ -804,6 +827,53 @@ void Expander::emit_zsh_subscript(const std::string &name, const std::string &su
   }
   std::string val = sh_.array_get(name, sh_.zsh_subscript(name, expand_no_split(sub)));
   for (char c : val) { out += c; mask += qm; }
+}
+
+void Expander::emit_array_items(const std::vector<std::string> &items, char sel, bool dq,
+                                std::string &out, std::string &mask) {
+  if (sel == '@' && dq) {
+    // "${a[@]}": one field per element (empties kept); absorb the quoted-null
+    // the opening quote emitted so an empty list drops the word.
+    if (!out.empty() && out.back() == QNULL && mask.back() == MMARK) {
+      out.pop_back();
+      mask.pop_back();
+    }
+    for (size_t k = 0; k < items.size(); k++) {
+      if (k) { out += FIELD_SEP; mask += MMARK; }
+      out += QNULL; mask += MMARK;
+      for (char c : items[k]) { out += c; mask += '1'; }
+    }
+  } else if (sel == '*' && dq) {
+    std::string is = sh_.ifs();
+    std::string j = mb_first_char(is);
+    for (size_t k = 0; k < items.size(); k++) {
+      if (k) for (char c : j) { out += c; mask += '1'; }
+      for (char c : items[k]) { out += c; mask += '1'; }
+    }
+  } else if (sel == '*' && splitting_ && sh_.ifs().empty()) {
+    bool first = true;
+    for (size_t k = 0; k < items.size(); k++) {
+      if (items[k].empty()) continue;
+      if (!first) { out += FIELD_SEP; mask += MMARK; }
+      first = false;
+      for (char c : items[k]) { out += c; mask += '0'; }
+    }
+  } else if (sel == '*') {
+    std::string is = sh_.ifs();
+    std::string j = mb_first_char(is);
+    for (size_t k = 0; k < items.size(); k++) {
+      if (k) for (char c : j) { out += c; mask += '0'; }
+      for (char c : items[k]) { out += c; mask += '0'; }
+    }
+  } else {
+    bool first = true;
+    for (size_t k = 0; k < items.size(); k++) {
+      if (splitting_ && items[k].empty()) continue;
+      if (!first) { out += FIELD_SEP; mask += MMARK; }
+      first = false;
+      for (char c : items[k]) { out += c; mask += '0'; }
+    }
+  }
 }
 
 void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::string &out,
@@ -1118,6 +1188,26 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
             i = end + 1;
             return;
           }
+        }
+      }
+      // `${ref}' where ref is a nameref to a whole-array splat (`arr[@]') expands
+      // like `${arr[@]}'; likewise `${!indir}' where indir's VALUE is such a
+      // splat.  Rewrite the body to the target so the array path below preserves
+      // the field structure (a plain string return would flatten it).  A body
+      // carrying any operator won't match the bare-name lookup, so this only
+      // fires for `${ref}' / `${!indir}'.
+      {
+        std::string nrbase;
+        char nrsel;
+        if (nameref_array_splat(sh_, body, nrbase, nrsel)) {
+          body = nrbase + '[' + nrsel + ']';
+        } else if (body.size() > 1 && body[0] == '!') {
+          // ${!indir}: a non-nameref plain variable whose value is `arr[@]'.
+          // (A nameref indir is special-cased to its target NAME elsewhere.)
+          auto it = sh_.vars.find(body.substr(1));
+          if (it != sh_.vars.end() && !it->second.nameref &&
+              is_array_splat(it->second.value, nrbase, nrsel))
+            body = it->second.value;
         }
       }
       char lead, sel;
@@ -1646,6 +1736,16 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
       }
     }
     return;
+  }
+  // A bare `$ref' where ref is a nameref to a whole-array splat (`arr[@]'/
+  // `arr[*]') expands to every element, like $arr[@] would.
+  {
+    std::string nrbase;
+    char nrsel;
+    if (nameref_array_splat(sh_, name, nrbase, nrsel)) {
+      emit_array_items(sh_.array_values(nrbase), nrsel, dq, out, mask);
+      return;
+    }
   }
   bool set = false;
   std::string v = param_value(name, set);
