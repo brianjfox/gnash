@@ -2444,9 +2444,15 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
                        name.c_str());
           return 1;
         }
-        rv.value = tgt;
-        rv.invisible = false;  // a nameref given a target is now visible
-                               // (`typeset -n r; typeset -n r=P' -> `-n r="P"')
+        // A `declare -n' naming an existing array is rejected below ("reference
+        // variable cannot be an array"); leave the array untouched -- don't store
+        // the target or clear its invisible flag -- so a rejected retarget of a
+        // declared-but-empty array still prints `declare -a array', not `=()'.
+        if (rv.kind != VarKind::Indexed && rv.kind != VarKind::Assoc) {
+          rv.value = tgt;
+          rv.invisible = false;  // a nameref given a target is now visible
+                                 // (`typeset -n r; typeset -n r=P' -> `-n r="P"')
+        }
       } else {
         val = pre_val;  // expanded above, in the enclosing scope, before localizing
         // Honor a pre-existing integer attribute too (e.g. `readonly x+=7' on a
