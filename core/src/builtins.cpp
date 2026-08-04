@@ -2344,12 +2344,18 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
           (cur->second.kind == VarKind::Indexed || cur->second.kind == VarKind::Assoc);
       bool unwrap_quoted = mk_array || mk_assoc ||
           (arrayvar && (argv[0] == "declare" || argv[0] == "typeset"));
-      if (!arraylit && unwrap_quoted && val.size() >= 4 &&
+      if (!nameref && !arraylit && unwrap_quoted && val.size() >= 4 &&
           (val.front() == '\'' || val.front() == '"') && val.back() == val.front() &&
           val[1] == '(' && val[val.size() - 2] == ')') {
         apply_assignment_word(sh, name + (append ? "+=" : "=") +
                                       val.substr(1, val.size() - 2));
       } else if (arraylit || subscript) {
+        // An UNQUOTED compound (`declare -n array=(one two three)') is assigned
+        // as an array literal even under -n; the "reference variable cannot be an
+        // array" error then fires on the resulting array below (bash).  A QUOTED
+        // compound (`declare -n array='(...)'`) is instead a nameref-target value
+        // -- the unwrap above is gated on !nameref so it falls to the branch
+        // below and is rejected as an invalid target.
         apply_assignment_word(sh, a);  // NAME=(...) or NAME[i]=...
       } else if (nameref) {
         // `declare -n ref=target': store the target NAME as ref's own value.
