@@ -2045,6 +2045,11 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
         auto it = sh.vars.find(argv[i]);
         if (it == sh.vars.end() ||
             (local_p && !cur_locals.count(argv[i]))) {
+          // `declare -p A B C' prints each name's declaration (stdout) or
+          // "not found" (stderr) in argument order.  stdout is block-buffered
+          // under a pipe while stderr is not, so flush any already-printed
+          // declarations first to keep the interleaving bash produces.
+          std::fflush(stdout);
           std::fprintf(stderr, "%s%s: %s: not found\n", sh.err_prefix().c_str(),
                        argv[0].c_str(), argv[i].c_str());
           st = 1;
