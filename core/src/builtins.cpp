@@ -2608,6 +2608,11 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     // cannot be converted to a nameref, but `declare -rn foo=bar' on a fresh
     // var, or re-declaring an existing nameref, is fine.
     bool was_readonly = v.readonly;
+    // Whether v was already a nameref BEFORE this command: adding `-n' to a
+    // variable that was not one strips its integer/case attributes, but
+    // re-declaring an existing nameref (`declare -n b=a[0]; declare -ni b')
+    // leaves them, so the strip below is gated on this.
+    bool was_nameref = v.nameref;
     // A localvar_inherit'd local already holds the enclosing value, so it stays
     // visible; only a genuinely empty fresh scalar is marked declared-but-unset.
     if (fresh_var && !inherited_local && eq == std::string::npos && v.kind == VarKind::Scalar)
@@ -2652,6 +2657,13 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
       ret = 1;
     } else if (nameref) {
       v.nameref = true;
+      // A nameref cannot also carry the integer or case-fold attributes: NEWLY
+      // adding `-n' to a variable that has them strips them (bash declare.def
+      // unsets att_integer|att_uppercase|att_lowercase|att_capcase), so
+      // `declare -i ivar; declare -n ivar=foo' prints `declare -n ivar="foo"'.
+      // Re-declaring an existing nameref (`declare -n b=a[0]; declare -ni b')
+      // leaves them, so only strip when the reference is being introduced.
+      if (!was_nameref) v.integer = v.ucase = v.lcase = v.capcase = false;
     }
     // `+X' removes attributes.  Applied after the assignment so `typeset +n
     // foo=other' writes through the still-active nameref to its target before
