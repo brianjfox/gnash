@@ -2621,7 +2621,10 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     // turn off att_readonly).  Only declare/typeset/local reach here with a
     // removable readonly, and they carry the builtin-name prefix.
     if (rm_readonly) {
-      if (v.readonly) {
+      // `+r' on a readonly TARGETLESS nameref (`declare -rn r; declare +r r')
+      // follows the reference to nothing, so it is a silent no-op rather than a
+      // readonly-variable error -- there is no target variable to report.
+      if (v.readonly && !(v.nameref && v.value.empty())) {
         std::fprintf(stderr, "%s%s: %s: readonly variable\n",
                      sh.err_prefix().c_str(), argv[0].c_str(), aname.c_str());
         ret = 1;
@@ -2629,11 +2632,14 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     }
     if (rm_exported) v.exported = false;
     if (rm_integer) v.integer = false;
-    // Removing the nameref attribute from a readonly nameref is rejected, like
-    // adding one: modifying a readonly variable's type is an error, so `declare
-    // +n' on a readonly `declare -n' reports `readonly variable' (bash).  A `+n'
-    // on a readonly NON-nameref is a harmless no-op and does not error.
-    if (rm_nameref && v.readonly && v.nameref) {
+    // Removing the nameref attribute from a readonly nameref that HAS A TARGET
+    // is rejected, like adding one: modifying a readonly reference's type is an
+    // error, so `declare +n' on a readonly `declare -n r=x' reports `readonly
+    // variable' (bash).  But a readonly nameref with NO value (`declare -rn r')
+    // does allow `+n' to strip the attribute -- bash/ksh93 only forbid it when
+    // the nameref cell is non-null (declare.def).  A `+n' on a readonly
+    // NON-nameref is a harmless no-op and does not error.
+    if (rm_nameref && v.readonly && v.nameref && !v.value.empty()) {
       std::fprintf(stderr, "%s%s: %s: readonly variable\n",
                    sh.err_prefix().c_str(), argv[0].c_str(), aname.c_str());
       ret = 1;
