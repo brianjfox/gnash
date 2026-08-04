@@ -2045,6 +2045,11 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
         auto it = sh.vars.find(argv[i]);
         if (it == sh.vars.end() ||
             (local_p && !cur_locals.count(argv[i]))) {
+          // `declare -p A B C' prints each name's declaration (stdout) or
+          // "not found" (stderr) in argument order.  stdout is block-buffered
+          // under a pipe while stderr is not, so flush any already-printed
+          // declarations first to keep the interleaving bash produces.
+          std::fflush(stdout);
           std::fprintf(stderr, "%s%s: %s: not found\n", sh.err_prefix().c_str(),
                        argv[0].c_str(), argv[i].c_str());
           st = 1;
@@ -2514,8 +2519,16 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     // binding (fresh_local); at global scope the var is fresh if it did not
     // already exist.  Arrays set this in make_array; an existing variable keeps
     // its current value/visibility.
-    bool fresh_var = fresh_local || sh.vars.find(aname) == sh.vars.end();
-    Variable &v = sh.vars[aname];
+    // A nameref whose target is an array element (`declare -n ref=a[0]') derefs
+    // to `a[0]'.  bash has no variable named `a[0]' (`declare -p a[0]' reports
+    // "not found"); attributes attach to the base array `a', and the element
+    // value was already written through the subscript-aware Shell::set above.
+    // Bind `v' to the base so attribute application never creates a literal
+    // `a[0]' variable.
+    std::string vkey = aname;
+    if (size_t lb = aname.find('['); lb != std::string::npos) vkey = aname.substr(0, lb);
+    bool fresh_var = fresh_local || sh.vars.find(vkey) == sh.vars.end();
+    Variable &v = sh.vars[vkey];
     // Whether v was already readonly BEFORE this command applied its attributes
     // (`-r' below sets v.readonly): a pre-existing readonly plain variable
     // cannot be converted to a nameref, but `declare -rn foo=bar' on a fresh
