@@ -2301,6 +2301,20 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
         }
       }
     }
+    // `declare -a NAME[sub]=val' / `-A NAME[sub]=...' where NAME is a nameref
+    // cannot keep the reference -- a nameref has no subscript of its own -- so
+    // bash drops the nameref attribute (with a warning) and makes NAME itself the
+    // array, rather than following the reference to its target.  A bare `declare
+    // -a ref' (no subscript) still follows the nameref (handled by make_array).
+    if (subscript0 && (mk_array || mk_assoc) && !nameref && !rm_nameref) {
+      auto nv = sh.vars.find(name);
+      if (nv != sh.vars.end() && nv->second.nameref) {
+        std::fprintf(stderr, "%swarning: %s: removing nameref attribute\n",
+                     sh.err_prefix().c_str(), name.c_str());
+        nv->second.nameref = false;
+        nv->second.value.clear();  // discard the old target; NAME becomes the array
+      }
+    }
     if (mk_assoc) sh.make_array(name, true);
     else if (mk_array) sh.make_array(name, false);
     // A subscripted name implies an indexed array even without `-a'
