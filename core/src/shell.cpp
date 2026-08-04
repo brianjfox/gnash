@@ -878,6 +878,11 @@ int Shell::array_count(const std::string &n_in) const {
 
 void Shell::make_array(const std::string &n_in, bool assoc) {
   std::string n = deref(n_in);
+  // A nameref whose target is an array element (`declare -n ref=a[0]; declare -A
+  // ref') derefs to `a[0]'.  There is no variable named `a[0]'; bash applies the
+  // array attribute to the base array `a' (`declare -A a'), so strip the
+  // subscript here rather than creating a literal `a[0]' variable.
+  if (size_t lb = n.find('['); lb != std::string::npos) n = n.substr(0, lb);
   bool fresh = !vars.count(n);
   Variable &v = vars[n];
   if (fresh) v.invisible = true;  // `declare -a b' with no value: declared, unset
