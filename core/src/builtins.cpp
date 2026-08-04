@@ -1109,8 +1109,17 @@ int bi_export(Shell &sh, const std::vector<std::string> &argv) {
       std::vector<std::string> d = {"export", opt, a};
       int r = bi_declare(sh, d, false, false);
       if (r) st = r;
-    } else
-      sh.export_name(a);
+    } else {
+      // `export ref' where ref resolves to an array element is rejected like
+      // `export a[5]': the resolved `var[0]' is not a valid identifier (bash).
+      std::string dn = sh.deref(a);
+      if (dn.find('[') != std::string::npos && !sh.is_zsh()) {
+        std::fprintf(stderr, "%sexport: `%s': not a valid identifier\n",
+                     sh.err_prefix().c_str(), dn.c_str());
+        st = 1;
+      } else
+        sh.export_name(a);
+    }
   }
   return st;
 }
@@ -2416,6 +2425,8 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
           return 1;
         }
         rv.value = tgt;
+        rv.invisible = false;  // a nameref given a target is now visible
+                               // (`typeset -n r; typeset -n r=P' -> `-n r="P"')
       } else {
         val = pre_val;  // expanded above, in the enclosing scope, before localizing
         // Honor a pre-existing integer attribute too (e.g. `readonly x+=7' on a
@@ -2430,6 +2441,16 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
                                   exv->second.value.empty();
         bool eff_integer = !targetless_nameref &&
                            (integer || (exv != sh.vars.end() && exv->second.integer));
+        // A nameref inherits its target's integer attribute (for an element
+        // target, the base array's), so `declare -ai a; declare -n b=a[0];
+        // declare b+=1' adds arithmetically on a[0], matching bash.
+        if (!eff_integer && exv != sh.vars.end() && exv->second.nameref &&
+            !exv->second.value.empty()) {
+          std::string tgt = sh.deref(name);
+          size_t lb = tgt.find('[');
+          auto tv = sh.vars.find(lb == std::string::npos ? tgt : tgt.substr(0, lb));
+          if (tv != sh.vars.end() && tv->second.integer) eff_integer = true;
+        }
         if (eff_integer) {
           bool ok = true;
           long long rhs = eval_arith(sh, val, &ok);
@@ -2513,6 +2534,19 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
       auto nit = sh.vars.find(name);
       if (nit != sh.vars.end() && nit->second.nameref) aname = sh.deref(name);
     }
+    // The `readonly'/`export' builtins require a plain identifier target.  A
+    // nameref that resolves to an array element (`declare -n ref=var[0];
+    // readonly ref') is rejected -- the resolved `var[0]' is not a valid
+    // identifier -- and nothing is modified.  `declare'/`typeset' instead
+    // convert the element's base into an array, so this is gated to
+    // readonly/export (which reach bi_declare via force_ro / the -x path).
+    if ((argv[0] == "readonly" || argv[0] == "export") && !sh.is_zsh() &&
+        aname.find('[') != std::string::npos) {
+      std::fprintf(stderr, "%s%s: `%s': not a valid identifier\n",
+                   sh.err_prefix().c_str(), argv[0].c_str(), aname.c_str());
+      ret = 1;
+      continue;
+    }
     // A brand-new scalar declared with no value is invisible (unset) until
     // assigned, matching bash's att_invisible: `declare x' / `local -i n' create
     // a variable that ${x-word} and `-v' treat as unset.  A `local' makes a fresh
@@ -2587,7 +2621,10 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     // turn off att_readonly).  Only declare/typeset/local reach here with a
     // removable readonly, and they carry the builtin-name prefix.
     if (rm_readonly) {
-      if (v.readonly) {
+      // `+r' on a readonly TARGETLESS nameref (`declare -rn r; declare +r r')
+      // follows the reference to nothing, so it is a silent no-op rather than a
+      // readonly-variable error -- there is no target variable to report.
+      if (v.readonly && !(v.nameref && v.value.empty())) {
         std::fprintf(stderr, "%s%s: %s: readonly variable\n",
                      sh.err_prefix().c_str(), argv[0].c_str(), aname.c_str());
         ret = 1;
@@ -2595,11 +2632,14 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     }
     if (rm_exported) v.exported = false;
     if (rm_integer) v.integer = false;
-    // Removing the nameref attribute from a readonly nameref is rejected, like
-    // adding one: modifying a readonly variable's type is an error, so `declare
-    // +n' on a readonly `declare -n' reports `readonly variable' (bash).  A `+n'
-    // on a readonly NON-nameref is a harmless no-op and does not error.
-    if (rm_nameref && v.readonly && v.nameref) {
+    // Removing the nameref attribute from a readonly nameref that HAS A TARGET
+    // is rejected, like adding one: modifying a readonly reference's type is an
+    // error, so `declare +n' on a readonly `declare -n r=x' reports `readonly
+    // variable' (bash).  But a readonly nameref with NO value (`declare -rn r')
+    // does allow `+n' to strip the attribute -- bash/ksh93 only forbid it when
+    // the nameref cell is non-null (declare.def).  A `+n' on a readonly
+    // NON-nameref is a harmless no-op and does not error.
+    if (rm_nameref && v.readonly && v.nameref && !v.value.empty()) {
       std::fprintf(stderr, "%s%s: %s: readonly variable\n",
                    sh.err_prefix().c_str(), argv[0].c_str(), aname.c_str());
       ret = 1;

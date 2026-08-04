@@ -1062,6 +1062,15 @@ int Executor::run_simple(const SimpleCommand *c) {
         // diagnostic (Shell::set) quotes it verbatim rather than `42'.
         bool integer = vit != sh_.vars.end() && vit->second.integer &&
                        !(vit->second.nameref && vit->second.value.empty());
+        // A nameref inherits its TARGET's integer attribute (for an element
+        // target, the base array's): `declare -ai a; declare -n b=a[0]; b+=1'
+        // adds arithmetically on a[0] rather than string-appending, as bash does.
+        if (vit != sh_.vars.end() && vit->second.nameref && !vit->second.value.empty()) {
+          std::string tgt = sh_.deref(a.name);
+          size_t lb = tgt.find('[');
+          auto tv = sh_.vars.find(lb == std::string::npos ? tgt : tgt.substr(0, lb));
+          if (tv != sh_.vars.end() && tv->second.integer) integer = true;
+        }
         // A plain `name=value' / `name+=value' where name is already an array
         // targets element 0 (bash), so read/write that element rather than the
         // scalar field.
