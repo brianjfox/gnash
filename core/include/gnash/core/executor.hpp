@@ -29,6 +29,7 @@ class Executor {
   int run_if(const IfCommand *c);
   int run_loop(const LoopCommand *c);
   int run_for(const ForCommand *c);
+  int run_select(const ForCommand *c);
   int run_case(const CaseCommand *c);
   int run_funcdef(const FunctionDef *c);
   int run_cond(const CondCommand *c);

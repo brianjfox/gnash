@@ -1722,6 +1722,7 @@ int Executor::run_loop(const LoopCommand *c) {
 
 int Executor::run_for(const ForCommand *c) {
   int st = 0;
+  if (c->is_select) return run_select(c);
   if (!c->is_arith && !c->var.empty()) {
     // The loop variable must be a valid identifier (validated at execution,
     // as bash does: `NAME: line N: \`x-y': not a valid identifier').
@@ -1829,6 +1830,145 @@ int Executor::run_for(const ForCommand *c) {
   }
   sh_.loop_depth--;
   return st;
+}
+
+// `select NAME in WORDS; do BODY; done': print a numbered menu of WORDS to
+// stderr, prompt with $PS3 (default `#? '), read a selection into REPLY, bind
+// NAME to the chosen word (empty for an out-of-range/invalid choice), and run
+// BODY -- looping until EOF or `break'.  Mirrors bash's execute_select_command
+// / select_query / print_select_list (execute_cmd.c), including the column
+// layout and the KSH_COMPATIBLE reprint-only-after-an-empty-line behavior.
+int Executor::run_select(const ForCommand *c) {
+  // The loop variable must be a valid identifier, validated at run time as bash
+  // does (`NAME: line N: `x-y': not a valid identifier').
+  if (!c->var.empty()) {
+    bool okname = std::isalpha(static_cast<unsigned char>(c->var[0])) || c->var[0] == '_';
+    for (char ch : c->var)
+      if (!(std::isalnum(static_cast<unsigned char>(ch)) || ch == '_')) okname = false;
+    if (!okname) {
+      std::fprintf(stderr, "%s`%s': not a valid identifier\n", sh_.err_prefix().c_str(),
+                   c->var.c_str());
+      if (sh_.opt_posix && !sh_.interactive) { sh_.exiting = true; sh_.exit_status = 1; }
+      return (sh_.last_status = 1);
+    }
+  }
+  Expander ex(sh_);
+  std::vector<std::string> items =
+      c->words_present ? ex.expand_args(c->words) : sh_.positional;
+  if (items.empty()) return (sh_.last_status = 0);  // empty list: no loop (bash)
+  const int n = static_cast<int>(items.size());
+
+  // Character-count display width (bash uses wcswidth; byte count in C locale).
+  auto dwidth = [](const std::string &s) -> int {
+    if (MB_CUR_MAX <= 1) return static_cast<int>(s.size());
+    int w = 0;
+    size_t i = 0;
+    std::mbstate_t st{};
+    while (i < s.size()) {
+      size_t r = std::mbrtowc(nullptr, s.data() + i, s.size() - i, &st);
+      if (r == static_cast<size_t>(-2)) break;
+      if (r == static_cast<size_t>(-1) || r == 0) { r = 1; st = std::mbstate_t{}; }
+      i += r;
+      w++;
+    }
+    return w;
+  };
+  auto numlen = [](int v) -> int {
+    int d = 1;
+    for (int x = v; x >= 10; x /= 10) d++;
+    return d;
+  };
+
+  // Menu geometry (print_select_list).  RP_SPACE is ") ", RP_SPACE_LEN 2.
+  int maxw = 0;
+  for (const auto &s : items) maxw = std::max(maxw, dwidth(s));
+  const int indices_len = numlen(n);
+  const int max_elem_len = maxw + indices_len + 2 /*") "*/ + 2;
+  std::string colstr = sh_.get("COLUMNS");
+  int cols_avail = 80;
+  if (!colstr.empty()) { int cv = std::atoi(colstr.c_str()); if (cv > 0) cols_avail = cv; }
+
+  auto print_menu = [&]() {
+    int cols = max_elem_len ? cols_avail / max_elem_len : 1;
+    if (cols == 0) cols = 1;
+    int rows = n / cols + (n % cols != 0);
+    cols = n / rows + (n % rows != 0);
+    if (rows == 1) { rows = cols; cols = 1; }
+    int first_idxlen = numlen(rows);
+    for (int row = 0; row < rows; row++) {
+      int ind = row, pos = 0;
+      for (;;) {
+        int idxlen = (pos == 0) ? first_idxlen : indices_len;
+        std::fprintf(stderr, "%*d) %s", idxlen, ind + 1, items[ind].c_str());
+        int elem_len = dwidth(items[ind]) + idxlen + 2;
+        ind += rows;
+        if (ind >= n) break;
+        // indent from (pos+elem_len) to (pos+max_elem_len) with tabs/spaces.
+        int from = pos + elem_len, to = pos + max_elem_len, tab = 8;
+        while (from < to) {
+          if (to / tab > from / tab) { std::fputc('\t', stderr); from += tab - from % tab; }
+          else { std::fputc(' ', stderr); from++; }
+        }
+        pos += max_elem_len;
+      }
+      std::fputc('\n', stderr);
+    }
+  };
+
+  auto read_line = [](std::string &out) -> bool {
+    out.clear();
+    bool any = false;
+    char ch;
+    for (;;) {
+      ssize_t r = ::read(0, &ch, 1);
+      if (r <= 0) return any;  // EOF: a partial final line still counts as read
+      any = true;
+      if (ch == '\n') return true;
+      out += ch;
+    }
+  };
+
+  int st = 0;
+  bool show_menu = true;
+  sh_.loop_depth++;
+  for (;;) {
+    // select_query: (re)print the menu when needed, prompt, and read a choice.
+    std::string selection;
+    bool eof = false, have_sel = false;
+    for (;;) {
+      if (show_menu) print_menu();
+      std::string ps3 = sh_.is_set("PS3") ? sh_.get("PS3") : "#? ";
+      std::fprintf(stderr, "%s", ps3.c_str());
+      std::fflush(stderr);
+      std::string line;
+      if (!read_line(line)) { eof = true; break; }
+      sh_.set("REPLY", line);
+      if (line.empty()) { show_menu = true; continue; }  // blank line reprints
+      // Parse a decimal index, tolerating surrounding whitespace (valid_number).
+      const char *p = line.c_str();
+      while (std::isspace(static_cast<unsigned char>(*p))) p++;
+      char *end = nullptr;
+      long v = std::strtol(p, &end, 10);
+      bool numeric = end != p;
+      if (numeric) { while (std::isspace(static_cast<unsigned char>(*end))) end++; }
+      selection = (numeric && *end == '\0' && v >= 1 && v <= n) ? items[v - 1]
+                                                                : std::string();
+      have_sel = true;
+      break;
+    }
+    if (eof) { std::fputc('\n', stdout); std::fflush(stdout); st = 1; break; }
+    if (!have_sel) break;
+    // Bind NAME (write-through a nameref, honoring readonly); a failed bind
+    // aborts the select without running the body, as bash does.
+    if (!sh_.set(c->var, selection)) { st = 1; break; }
+    st = run(c->body.get());
+    if (sh_.break_count) { sh_.break_count--; break; }
+    if (sh_.continue_count) { if (--sh_.continue_count) break; }
+    if (unwinding()) break;
+    show_menu = false;  // KSH_COMPATIBLE: don't reprint the menu after a choice
+  }
+  sh_.loop_depth--;
+  return (sh_.last_status = st);
 }
 
 int Executor::run_case(const CaseCommand *c) {
