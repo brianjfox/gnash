@@ -1190,6 +1190,25 @@ bool Shell::set(const std::string &n_in, const std::string &v,
   {
     std::string base, sub;
     if (nameref_elt(n_in, base, sub)) {
+      // A nameref whose OWN value names an element of itself (`local -n a=a[0];
+      // a=X') is circular; after the declaration's circular-reference warnings
+      // bash rejects the write as `a[0]: not a valid identifier' and assigns
+      // nothing.  Test the immediate value, not the resolved base: an indirect
+      // chain (`a->b; b=a[1]; a=foo') is handled elsewhere by removing a's
+      // nameref attribute, not by this error.
+      {
+        auto nv = vars.find(n_in);
+        if (nv != vars.end() && nv->second.nameref) {
+          const std::string &ov = nv->second.value;
+          size_t lb = ov.find('[');
+          if (lb != std::string::npos && lb > 0 && ov.back() == ']' &&
+              ov.compare(0, lb, n_in) == 0) {
+            std::fprintf(stderr, "%s`%s[%s]': not a valid identifier\n",
+                         err_prefix().c_str(), base.c_str(), sub.c_str());
+            return false;
+          }
+        }
+      }
       // A scalar assignment through a nameref to a whole-array splat
       // (`declare -n r=a[@]; r=5') has no single element to target: bash rejects
       // the `@'/`*' subscript as a bad array subscript and assigns nothing.

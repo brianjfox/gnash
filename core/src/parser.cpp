@@ -991,8 +991,10 @@ struct Parser {
   }
 
   CommandPtr parse_coproc() {
+    int coproc_line = cur().line;  // $LINENO / error line of the coproc command
     advance();  // coproc
     auto n = std::make_unique<CoprocCommand>();
+    n->line = coproc_line;
     bool name_then_cmd =
         cur().type == Tok::Word && !cur().quoted && is_name(cur().text) &&
         (peek(1).type == Tok::Lparen ||
