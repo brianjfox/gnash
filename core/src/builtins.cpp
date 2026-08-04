@@ -1109,8 +1109,17 @@ int bi_export(Shell &sh, const std::vector<std::string> &argv) {
       std::vector<std::string> d = {"export", opt, a};
       int r = bi_declare(sh, d, false, false);
       if (r) st = r;
-    } else
-      sh.export_name(a);
+    } else {
+      // `export ref' where ref resolves to an array element is rejected like
+      // `export a[5]': the resolved `var[0]' is not a valid identifier (bash).
+      std::string dn = sh.deref(a);
+      if (dn.find('[') != std::string::npos && !sh.is_zsh()) {
+        std::fprintf(stderr, "%sexport: `%s': not a valid identifier\n",
+                     sh.err_prefix().c_str(), dn.c_str());
+        st = 1;
+      } else
+        sh.export_name(a);
+    }
   }
   return st;
 }
@@ -2524,6 +2533,19 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     if (!nameref && !rm_nameref) {
       auto nit = sh.vars.find(name);
       if (nit != sh.vars.end() && nit->second.nameref) aname = sh.deref(name);
+    }
+    // The `readonly'/`export' builtins require a plain identifier target.  A
+    // nameref that resolves to an array element (`declare -n ref=var[0];
+    // readonly ref') is rejected -- the resolved `var[0]' is not a valid
+    // identifier -- and nothing is modified.  `declare'/`typeset' instead
+    // convert the element's base into an array, so this is gated to
+    // readonly/export (which reach bi_declare via force_ro / the -x path).
+    if ((argv[0] == "readonly" || argv[0] == "export") && !sh.is_zsh() &&
+        aname.find('[') != std::string::npos) {
+      std::fprintf(stderr, "%s%s: `%s': not a valid identifier\n",
+                   sh.err_prefix().c_str(), argv[0].c_str(), aname.c_str());
+      ret = 1;
+      continue;
     }
     // A brand-new scalar declared with no value is invisible (unset) until
     // assigned, matching bash's att_invisible: `declare x' / `local -i n' create
