@@ -2416,6 +2416,8 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
           return 1;
         }
         rv.value = tgt;
+        rv.invisible = false;  // a nameref given a target is now visible
+                               // (`typeset -n r; typeset -n r=P' -> `-n r="P"')
       } else {
         val = pre_val;  // expanded above, in the enclosing scope, before localizing
         // Honor a pre-existing integer attribute too (e.g. `readonly x+=7' on a
