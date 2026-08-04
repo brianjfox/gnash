@@ -1190,6 +1190,14 @@ bool Shell::set(const std::string &n_in, const std::string &v,
   {
     std::string base, sub;
     if (nameref_elt(n_in, base, sub)) {
+      // A scalar assignment through a nameref to a whole-array splat
+      // (`declare -n r=a[@]; r=5') has no single element to target: bash rejects
+      // the `@'/`*' subscript as a bad array subscript and assigns nothing.
+      if (sub == "@" || sub == "*") {
+        std::fprintf(stderr, "%s%s[%s]: bad array subscript\n", err_prefix().c_str(),
+                     base.c_str(), sub.c_str());
+        return false;
+      }
       auto it = vars.find(base);
       if (it != vars.end() && it->second.readonly) {
         std::fprintf(stderr, "%s%s: readonly variable\n", err_prefix().c_str(),
