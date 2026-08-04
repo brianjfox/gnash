@@ -2430,6 +2430,16 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
                                   exv->second.value.empty();
         bool eff_integer = !targetless_nameref &&
                            (integer || (exv != sh.vars.end() && exv->second.integer));
+        // A nameref inherits its target's integer attribute (for an element
+        // target, the base array's), so `declare -ai a; declare -n b=a[0];
+        // declare b+=1' adds arithmetically on a[0], matching bash.
+        if (!eff_integer && exv != sh.vars.end() && exv->second.nameref &&
+            !exv->second.value.empty()) {
+          std::string tgt = sh.deref(name);
+          size_t lb = tgt.find('[');
+          auto tv = sh.vars.find(lb == std::string::npos ? tgt : tgt.substr(0, lb));
+          if (tv != sh.vars.end() && tv->second.integer) eff_integer = true;
+        }
         if (eff_integer) {
           bool ok = true;
           long long rhs = eval_arith(sh, val, &ok);
