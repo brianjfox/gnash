@@ -110,6 +110,12 @@ class Expander {
   void emit_zsh_subscript(const std::string &name, const std::string &sub, bool dq,
                           std::string &out, std::string &mask);
 
+  // Emit a list of array elements with `${a[@]}'/`${a[*]}' field/quote
+  // semantics (SEL is '@' or '*'), honoring the current quoting/splitting.
+  // Shared by the ${a[@]} path and namerefs/indirection to a whole-array splat.
+  void emit_array_items(const std::vector<std::string> &items, char sel, bool dq,
+                        std::string &out, std::string &mask);
+
   // zsh `${(flags)name}' expansion flags (join/split/sort/unique/case/keys).
   // Returns true and emits into out/mask when BODY begins with a `(flags)'
   // group; false (leaving out/mask untouched) otherwise, so the caller can
