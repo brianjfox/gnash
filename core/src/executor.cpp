@@ -574,8 +574,12 @@ void apply_array_assign(Shell &sh, Expander &ex, const Assign &a) {
     }
   }
   // An integer-attributed array (`declare -i') evaluates each element value as
-  // an arithmetic expression, and `+=' adds rather than string-appends.
-  auto vit = sh.vars.find(a.name);
+  // an arithmetic expression, and `+=' adds rather than string-appends.  The
+  // attribute lives on the target the assignment lands on, so resolve through a
+  // nameref (`declare -ai var; declare -n ref=var; ref[1]=' evaluates on var).
+  std::string dtgt = sh.deref(a.name);
+  size_t dlb = dtgt.find('[');
+  auto vit = sh.vars.find(dlb == std::string::npos ? dtgt : dtgt.substr(0, dlb));
   bool integer = vit != sh.vars.end() && vit->second.integer;
   if (a.sub) {
     // A compound value `(...)' cannot be assigned to a single element in bash

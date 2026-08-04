@@ -2320,26 +2320,40 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     // A subscripted name implies an indexed array even without `-a'
     // (`declare -r c[100]' creates an empty readonly array c).
     else if (subscript0) sh.make_array(name, false);
+    // Pre-assignment attributes (-i and the case folds, applied so a compound
+    // array literal's elements honor them) attach to the variable that actually
+    // receives the value.  For an existing nameref name that is the reference's
+    // TARGET (`local -n ref=var; local -i ref=(...)') -- bash applies -i to var
+    // and leaves ref a plain `-n' reference -- so resolve through the nameref.
+    std::string attr_name = name;
+    {
+      auto nv2 = sh.vars.find(name);
+      if (nv2 != sh.vars.end() && nv2->second.nameref && !nv2->second.value.empty()) {
+        std::string d = sh.deref(name);
+        size_t lb = d.find('[');
+        attr_name = (lb == std::string::npos) ? d : d.substr(0, lb);
+      }
+    }
     // bash applies declared attributes before the assignment, so a `declare -i'
     // array/associative literal (`declare -ai a=(1+1 2*3)') evaluates each
     // element arithmetically.  apply_array_assign reads the integer attribute
     // from the variable, so set it now rather than after the assignment (the
     // scalar path already honors the -i flag directly).
     if (integer && eq != std::string::npos && !name.empty() && !nameref)
-      sh.vars[name].integer = true;
+      sh.vars[attr_name].integer = true;
     // `declare +i NAME=value' removes the integer attribute BEFORE the
     // assignment, so an array/scalar value is stored verbatim rather than
     // arithmetically evaluated (`declare +i arr=(hello world)').
-    if (rm_integer && eq != std::string::npos && !name.empty() && sh.vars.count(name))
-      sh.vars[name].integer = false;
+    if (rm_integer && eq != std::string::npos && !name.empty() && sh.vars.count(attr_name))
+      sh.vars[attr_name].integer = false;
     // The case-fold attributes (`-l'/`-u'/`-c') likewise apply to array literal
     // elements, so set them before the assignment: array_set reads them from the
     // variable (`declare -al a=(ONE TWO)' -> [0]=one).  The scalar path folds the
     // value directly below, so this only matters for the compound-array path.
     if (eq != std::string::npos && !name.empty() && !nameref) {
-      if (lcase) sh.vars[name].lcase = true;
-      else if (ucase) sh.vars[name].ucase = true;
-      else if (capcase) sh.vars[name].capcase = true;
+      if (lcase) sh.vars[attr_name].lcase = true;
+      else if (ucase) sh.vars[attr_name].ucase = true;
+      else if (capcase) sh.vars[attr_name].capcase = true;
     }
     if (eq != std::string::npos) {
       std::string val = a.substr(eq + 1);
