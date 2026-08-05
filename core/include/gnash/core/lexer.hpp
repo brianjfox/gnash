@@ -50,6 +50,8 @@ struct Token {
   Tok type = Tok::Eof;
   std::string text;             // for Word / IoNumber
   int line = 1;                 // 1-based source line where the token starts
+  std::size_t start = 0;        // byte offset of the token in the input
+  std::size_t end = 0;          // one past the token's last byte
   bool preceded_by_blank = true;  // whitespace separated this from the previous token
   bool quoted = false;          // word contained quoting
   bool glued = false;           // Lparen immediately followed by `(' (for `((')
