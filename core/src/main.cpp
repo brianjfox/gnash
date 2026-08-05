@@ -461,6 +461,8 @@ int main(int argc, char **argv) {
     }
     std::ostringstream ss;
     ss << f.rdbuf();
+    f.close();  // free the descriptor: the script must not occupy a low fd
+                // for its whole run (bash parks its script fd high)
     sh.arg0 = args[idx];
     sh.shell_name = args[idx];  // scripts report errors as "SCRIPT: line N: ..."
     sh.positional.assign(args.begin() + idx + 1, args.end());

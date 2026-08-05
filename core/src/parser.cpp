@@ -237,8 +237,11 @@ struct Parser {
     if (w.size() < 3 || w.front() != '{' || w.back() != '}') return "";
     std::string n = w.substr(1, w.size() - 2);
     if (!(std::isalpha(static_cast<unsigned char>(n[0])) || n[0] == '_')) return "";
-    for (char c : n)
-      if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '_')) return "";
+    size_t i = 1;
+    while (i < n.size() && (std::isalnum(static_cast<unsigned char>(n[i])) || n[i] == '_')) i++;
+    // An array element is a valid target too: `exec {fd[0]}<&0' (bash).
+    if (i < n.size() && n[i] == '[' && n.back() == ']') return n;
+    if (i != n.size()) return "";
     return n;
   }
 
