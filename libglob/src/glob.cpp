@@ -7,7 +7,7 @@
 // lib/glob/glob.c: split the pattern on `/`, match each magic component against
 // the entries of the directory built so far, descend into matching directories,
 // and support `**` (globstar).  Dotfile handling comes from FNM_PERIOD.  Results
-// are sorted (C/ASCII order) and de-duplicated.
+// are sorted (C/ASCII order); duplicates from `**` decompositions are kept.
 
 #include <algorithm>
 #include <cstring>
@@ -157,6 +157,23 @@ void glob_recurse(const std::string &dir, const std::string &pat, int smflags, b
     } else {
       for (const std::string &D : dirs)
         glob_recurse(D, rest, smflags, matchdot, gxflags, results, /*literal_prefix=*/false);
+      // A trailing `**/' also matches SYMLINKS to directories (`ln -s a c'
+      // lists `c/'), even though the globstar descent never follows them.
+      if (rest.empty()) {
+        for (const std::string &D : dirs) {
+          DIR *dd = opendir(D.empty() ? "." : D.c_str());
+          if (!dd) continue;
+          struct dirent *e;
+          while ((e = readdir(dd)) != nullptr) {
+            std::string nm = e->d_name;
+            if (nm == "." || nm == "..") continue;
+            if (nm[0] == '.' && !matchdot) continue;
+            std::string full = D + nm;
+            if (!is_dir_nofollow(full) && is_dir(full)) results.push_back(full + "/");
+          }
+          closedir(dd);
+        }
+      }
     }
     return;
   }
@@ -214,7 +231,9 @@ std::vector<std::string> glob(std::string_view pattern, int flags) {
   glob_recurse(dir, pat, sm, matchdot, flags, results);
 
   std::sort(results.begin(), results.end());
-  results.erase(std::unique(results.begin(), results.end()), results.end());
+  // NO de-duplication: bash keeps one result per `**' decomposition, so
+  // `**/a/**' over a/a/a yields <a/a/a> three times (once per way of
+  // splitting the path between the two `**'s), exactly as ksh93 does.
   return results;
 }
 
