@@ -42,7 +42,8 @@ ParseResult parse(const std::string &input);
 ParseResult parse_with_aliases(const std::string &input,
                                const std::map<std::string, std::string> &aliases,
                                const std::map<std::string, std::string> &global_aliases = {},
-                               const std::map<std::string, std::string> &suffix_aliases = {});
+                               const std::map<std::string, std::string> &suffix_aliases = {},
+                               bool posix_mode = false);
 
 }  // namespace gnash::core
 

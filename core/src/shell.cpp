@@ -716,6 +716,16 @@ void Shell::array_set(const std::string &n_in, const std::string &sub, const std
   // discarded (and does not fail).  Only in the bash family -- zsh has no such
   // dynamic variables, so an assignment there is ordinary.
   if ((n == "GROUPS" || n == "FUNCNAME") && !is_zsh()) return;
+  // BASH_ALIASES is the live alias table: BASH_ALIASES[name]=value defines an
+  // alias, after the same name validation the alias builtin performs.
+  if (n == "BASH_ALIASES" && !is_zsh()) {
+    if (!valid_alias_name(sub)) {
+      std::fprintf(stderr, "%s`%s': invalid alias name\n", err_prefix().c_str(), sub.c_str());
+      return;
+    }
+    aliases[sub] = val;
+    return;
+  }
   // BASH_CMDS is the live command hash: BASH_CMDS[name]=value adds a hash
   // entry.  A `/' value is rejected in a restricted shell; a value without a
   // `/' is resolved through $PATH (and must be found) before it is stored.
@@ -1831,7 +1841,14 @@ int Shell::run_script_lines(const std::string &text) {
     cont_bslash = false;
 
     if (pos < text.size()) {
-      ParseResult chk = parse(pending);
+      // Completeness must be judged on the alias-expanded text: an alias can
+      // open a construct the raw line doesn't show (`alias al=' '; al for x
+      // in v' needs the do/done lines) or carry an open quote into the
+      // following text.
+      ParseResult chk =
+          aliases_active()
+              ? parse_with_aliases(pending, aliases, global_aliases, suffix_aliases, opt_posix)
+              : parse(pending);
       bool was_heredoc = in_heredoc;
       in_heredoc = chk.heredoc_eof;
       in_heredoc_quoted = chk.heredoc_eof_quoted;
@@ -1842,20 +1859,37 @@ int Shell::run_script_lines(const std::string &text) {
       in_heredoc = false;
     }
     flush();
+    // A non-interactive shell stops reading input after a syntax error (bash
+    // exits with status 2; the -c and script readers both abort here).
+    if (had_parse_error && !interactive) return st;
   }
   if (!exiting) flush();  // whatever remains (an incomplete tail still errors)
   return st;
 }
 
-int Shell::run_string(const std::string &script) {
-  if (is_csh()) return run_csh(*this, script);  // csh is a different language
-  // Aliases are expanded only when interactive or `shopt -s expand_aliases'.
-  bool expand_al = interactive;
+bool Shell::valid_alias_name(const std::string &name) {
+  if (name.empty()) return false;
+  for (char c : name)
+    if (std::strchr(" \t\n;|&()<>'\"`\\$/", static_cast<unsigned char>(c))) return false;
+  return true;
+}
+
+bool Shell::aliases_active() const {
+  // Aliases are expanded only when interactive or `shopt -s expand_aliases';
+  // posix mode enables alias expansion even in non-interactive shells.
+  bool expand_al = interactive || opt_posix;
   auto eit = shopt_opts.find("expand_aliases");
   if (eit != shopt_opts.end() && eit->second) expand_al = true;
-  bool have_aliases = !aliases.empty() || !global_aliases.empty() || !suffix_aliases.empty();
-  ParseResult r = (expand_al && have_aliases)
-                      ? parse_with_aliases(script, aliases, global_aliases, suffix_aliases)
+  return expand_al &&
+         (!aliases.empty() || !global_aliases.empty() || !suffix_aliases.empty());
+}
+
+int Shell::run_string(const std::string &script) {
+  if (is_csh()) return run_csh(*this, script);  // csh is a different language
+  had_parse_error = false;
+  ParseResult r = aliases_active()
+                      ? parse_with_aliases(script, aliases, global_aliases, suffix_aliases,
+                                           opt_posix)
                       : parse(script);
   if (!r.ok) {
     // bash's format: `NAME: [CONTEXT: ][-c: ]line N: syntax error...' per
@@ -1895,7 +1929,8 @@ int Shell::run_string(const std::string &script) {
       }
     }
     // A compound-assignment syntax error (`a=(x & y)') is reported by bash with
-    // status 1, not the usual 2.
+    // status 1, not the usual 2 -- and does not stop a non-interactive reader.
+    had_parse_error = !r.assign_error;
     last_status = r.assign_error ? 1 : 2;
     return last_status;
   }
@@ -1917,6 +1952,11 @@ int Shell::run_string(const std::string &script) {
   last_status = st;
   run_pending_traps();  // deliver signals received during the final command
   last_status = st;
+  // had_parse_error reports THIS string's parse only: a syntax error inside a
+  // nested run (eval, source, a trap body) does not abort the caller's reader
+  // -- bash keeps going after `eval "do"' but stops its own input after a
+  // top-level syntax error.
+  had_parse_error = false;
   return st;
 }
 
