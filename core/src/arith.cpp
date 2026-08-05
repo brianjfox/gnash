@@ -64,6 +64,7 @@ constexpr const char *kBadConst = "invalid integer constant";
 constexpr const char *kBadNumber = "invalid number";
 constexpr const char *kTooGreat = "value too great for base";
 constexpr const char *kLvalue = "assignment requires lvalue";
+constexpr const char *kRecursion = "expression recursion level exceeded";
 }  // namespace arith_err
 
 NodeP mk(K k) { auto n = std::make_unique<Node>(); n->k = k; return n; }
@@ -87,6 +88,36 @@ int base_digit(char c, long long base) {
     else return -1;
   }
   return d < base ? d : -1;
+}
+
+// Parse an integer literal with bash's WRAPPING overflow semantics: expr.c's
+// strlong accumulates `value*base + digit' with no overflow check, so
+// 9223372036854775808 wraps to INTMAX_MIN.  strtoll would saturate at
+// INTMAX_MAX, making `$(( -9223372036854775808 ))' come out one off.
+// Honors an optional sign and the 0x/0X and leading-0 prefixes.
+long long wrap_strtoll(const char *s, char **end) {
+  const char *p = s;
+  bool neg = false;
+  if (*p == '+' || *p == '-') { neg = *p == '-'; p++; }
+  unsigned base = 10;
+  const char *fallback = p;  // where to leave *end if no digits follow a prefix
+  if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) { base = 16; fallback = p + 1; p += 2; }
+  else if (p[0] == '0') { base = 8; p += 1; fallback = p; }
+  unsigned long long v = 0;
+  const char *d0 = p;
+  for (;; p++) {
+    unsigned d;
+    char c = *p;
+    if (c >= '0' && c <= '9') d = static_cast<unsigned>(c - '0');
+    else if (base == 16 && c >= 'a' && c <= 'f') d = static_cast<unsigned>(c - 'a') + 10;
+    else if (base == 16 && c >= 'A' && c <= 'F') d = static_cast<unsigned>(c - 'A') + 10;
+    else break;
+    if (d >= base) break;
+    v = v * base + d;
+  }
+  if (end) *end = const_cast<char *>(p == d0 ? fallback : p);
+  long long r = static_cast<long long>(v);
+  return neg ? -r : r;
 }
 
 // ---- parser: string -> AST (no shell access; pure) ------------------------
@@ -235,20 +266,20 @@ struct Parser {
   NodeP bit_or() {
     NodeP v = bit_xor();
     for (;;) { skip();
-      if (peek() == '|' && s.compare(pos, 2, "||") != 0) { mark_op(); pos++; v = binary(K::BOr, std::move(v), bit_xor()); }
+      if (peek() == '|' && s.compare(pos, 2, "||") != 0 && !at_op_assign()) { mark_op(); pos++; v = binary(K::BOr, std::move(v), bit_xor()); }
       else break;
     }
     return v;
   }
   NodeP bit_xor() {
     NodeP v = bit_and();
-    while (peek() == '^') { mark_op(); pos++; v = binary(K::BXor, std::move(v), bit_and()); }
+    while (peek() == '^' && !at_op_assign()) { mark_op(); pos++; v = binary(K::BXor, std::move(v), bit_and()); }
     return v;
   }
   NodeP bit_and() {
     NodeP v = equality();
     for (;;) { skip();
-      if (peek() == '&' && s.compare(pos, 2, "&&") != 0) { mark_op(); pos++; v = binary(K::BAnd, std::move(v), equality()); }
+      if (peek() == '&' && s.compare(pos, 2, "&&") != 0 && !at_op_assign()) { mark_op(); pos++; v = binary(K::BAnd, std::move(v), equality()); }
       else break;
     }
     return v;
@@ -276,6 +307,8 @@ struct Parser {
   NodeP shift() {
     NodeP v = additive();
     for (;;) {
+      skip();
+      if (s.compare(pos, 3, "<<=") == 0 || s.compare(pos, 3, ">>=") == 0) break;  // OP= token
       if (eat("<<")) v = binary(K::Shl, std::move(v), additive());
       else if (eat(">>")) v = binary(K::Shr, std::move(v), additive());
       else break;
@@ -287,19 +320,24 @@ struct Parser {
     for (;;) { skip(); char c = peek();
       // A `+'/`-' after an operand is a binary operator even when another sign
       // follows (`4+++a' is `4 + ++a'); the trailing sign is handled as a unary
-      // operator by the right operand.
-      if (c == '+') { mark_op(); pos++; v = binary(K::Add, std::move(v), multiplicative()); }
-      else if (c == '-') { mark_op(); pos++; v = binary(K::Sub, std::move(v), multiplicative()); }
+      // operator by the right operand.  `+='/`-=' are single assignment tokens
+      // (never `+' then `='): left for the caller, so `1 ? 20 : x+=2' reports
+      // bash's "attempted assignment to non-variable" at the `+='.
+      if (c == '+' && !at_op_assign()) { mark_op(); pos++; v = binary(K::Add, std::move(v), multiplicative()); }
+      else if (c == '-' && !at_op_assign()) { mark_op(); pos++; v = binary(K::Sub, std::move(v), multiplicative()); }
       else break;
     }
     return v;
   }
+  // The single-character operator at pos is really the head of an OP=
+  // assignment token.
+  bool at_op_assign() { return pos + 1 < s.size() && s[pos + 1] == '='; }
   NodeP multiplicative() {
     NodeP v = power();
     for (;;) { skip(); char c = peek();
-      if (c == '*' && s.compare(pos, 2, "**") != 0) { mark_op(); pos++; v = binary(K::Mul, std::move(v), power()); }
-      else if (c == '/') { mark_op(); pos++; v = binary(K::Div, std::move(v), power()); }
-      else if (c == '%') { mark_op(); pos++; v = binary(K::Mod, std::move(v), power()); }
+      if (c == '*' && s.compare(pos, 2, "**") != 0 && !at_op_assign()) { mark_op(); pos++; v = binary(K::Mul, std::move(v), power()); }
+      else if (c == '/' && !at_op_assign()) { mark_op(); pos++; v = binary(K::Div, std::move(v), power()); }
+      else if (c == '%' && !at_op_assign()) { mark_op(); pos++; v = binary(K::Mod, std::move(v), power()); }
       else break;
     }
     return v;
@@ -309,12 +347,23 @@ struct Parser {
     if (eat("**")) return binary(K::Pow, std::move(base), power());  // right-associative
     return base;
   }
+  // A postfix `++'/`--' after an expression that is not a bare variable --
+  // e.g. `--x++', where the `++' would apply to the value of `--x' -- is
+  // bash's "++: assignment requires lvalue" (the lexer saw a variable last,
+  // so the pair reads as a postfix operator, then fails the lvalue check).
+  NodeP postlv_check(NodeP n) {
+    skip();
+    if ((n->k == K::PreInc || n->k == K::PreDec) && !n->name.empty() &&
+        (s.compare(pos, 2, "++") == 0 || s.compare(pos, 2, "--") == 0))
+      note(s.substr(pos, 2) + ": " + arith_err::kLvalue, pos);
+    return n;
+  }
   NodeP unary() {
     DepthGuard g(*this);
     if (!g.allowed) return mk(K::Num);  // too deep: bail with a placeholder
     skip();
-    if (eat("++")) return preincr(K::PreInc);
-    if (eat("--")) return preincr(K::PreDec);
+    if (eat("++")) return postlv_check(preincr(K::PreInc));
+    if (eat("--")) return postlv_check(preincr(K::PreDec));
     char c = peek();
     if (c == '+') { mark_op(); pos++; return unary(); }
     if (c == '-') { mark_op(); pos++; auto n = mk(K::Neg); n->a = unary(); n->src = n->a->src; return n; }
@@ -399,7 +448,7 @@ struct Parser {
         auto n = mk(K::Num); n->src = numstart; return n;
       }
       char *end = nullptr;
-      long long v = std::strtoll(s.c_str() + pos, &end, 0);  // 0x/0 prefixes honored
+      long long v = wrap_strtoll(s.c_str() + pos, &end);  // 0x/0 prefixes honored
       pos = static_cast<size_t>(end - s.c_str());
       auto n = mk(K::Num); n->num = v; n->src = numstart; return n;
     }
@@ -463,7 +512,7 @@ bool try_int(const std::string &s, long long &out) {
   if (i < n && (s[i] == '+' || s[i] == '-')) i++;
   if (i >= n || !std::isdigit(static_cast<unsigned char>(s[i]))) return false;
   char *end = nullptr;
-  out = std::strtoll(s.c_str() + start, &end, 0);
+  out = wrap_strtoll(s.c_str() + start, &end);
   size_t j = static_cast<size_t>(end - s.c_str());
   while (j < n && std::isspace(static_cast<unsigned char>(s[j]))) j++;
   return j == n;
@@ -478,11 +527,35 @@ struct Ctx {
   size_t err_pos = std::string::npos;  // offset of the error token (see Parser)
   std::string err_msg;
   const char *cmd_name = nullptr;  // "(("/"let" -- prefixes a nameref-target error
+  // A fully formatted diagnostic from a NESTED evaluation (a variable's value
+  // failing to evaluate names the VALUE as the expression, not the outer
+  // expression: `A="4 + "; $((A))' -> `4 + : ... operand expected').  When
+  // set, eval_arith_msg prints it verbatim instead of formatting err_msg.
+  std::string full_msg;
   void note(const std::string &m, size_t p) {
     if (err_pos == std::string::npos) { err_pos = p; err_msg = m; }
     ok = false;
   }
 };
+
+// Format bash's arithmetic diagnostic body: `EXPR: MESSAGE (error token is
+// "TOKEN")', with the number-constant messages trimming trailing whitespace.
+static std::string format_arith_err(const std::string &expr, const std::string &msg,
+                                    size_t err_pos) {
+  size_t lead = 0;
+  while (lead < expr.size() && std::isspace(static_cast<unsigned char>(expr[lead]))) lead++;
+  std::string display = expr.substr(lead);
+  std::string token = err_pos <= expr.size() ? expr.substr(err_pos) : std::string();
+  if (msg == arith_err::kBadBase || msg == arith_err::kBadConst ||
+      msg == arith_err::kBadNumber || msg == arith_err::kTooGreat) {
+    auto rtrim = [](std::string &s) {
+      while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) s.pop_back();
+    };
+    rtrim(display);
+    rtrim(token);
+  }
+  return display + ": " + msg + " (error token is \"" + token + "\")";
+}
 
 long long eval_node(const Node *n, Ctx &ctx);  // fwd
 
@@ -497,35 +570,112 @@ long long eval_string(Shell &sh, const std::string &str, int depth, bool *ok) {
   if (blank_expr(str)) { if (ok) *ok = true; return 0; }
   if (try_int(str, iv)) { if (ok) *ok = true; return iv; }
   Parsed p = parse_cached(str);
-  Ctx ctx{sh, p.ok, depth, p.err_pos, p.err_msg};  // carry any parse error forward
+  Ctx ctx{sh, p.ok, depth, p.err_pos, p.err_msg, nullptr, {}};  // carry any parse error forward
   long long v = eval_node(p.root.get(), ctx);
   if (ok) *ok = ctx.ok;
   return v;
 }
 
-// Read a variable/array element and evaluate its (string) value as arithmetic,
-// recursively -- like bash, where `a=b+1; b=3; echo $((a))' yields 4.
-long long ref_get(const Node *n, Ctx &ctx) {
-  std::string v;
-  if (n->has_sub) {
-    std::string sub = n->sub;
-    if (!ctx.sh.array_expand_once_ok(n->name, sub)) { ctx.ok = false; return 0; }
-    v = ctx.sh.array_get(n->name, ctx.sh.zsh_subscript(n->name, sub));
+// Resolve an lvalue's subscript ONCE, so a read-modify-write (`d[x++]++',
+// `++d[RANDOM]', `d[i--]+=2') runs the subscript's side effects a single time,
+// as bash does.  For an indexed-array target the subscript arithmetic is
+// evaluated here (the numeric result re-evaluates idempotently in
+// array_get/array_set, which still apply negative-index resolution); an
+// associative key passes through untouched.
+static bool resolve_sub(const Node *n, Ctx &ctx, std::string &out) {
+  out = n->sub;
+  if (!ctx.sh.array_expand_once_ok(n->name, out)) { ctx.ok = false; return false; }
+  out = ctx.sh.zsh_subscript(n->name, out);
+  auto it = ctx.sh.vars.find(ctx.sh.deref(n->name));
+  bool assoc = it != ctx.sh.vars.end() && it->second.kind == VarKind::Assoc;
+  if (!assoc) {
+    bool o = true;
+    long long k = eval_string(ctx.sh, out, ctx.depth + 1, &o);
+    if (!o) { ctx.ok = false; return false; }
+    out = std::to_string(k);
   }
-  else { v = ctx.sh.get(n->name); if (v.empty()) { std::string dv; if (ctx.sh.dynamic_var(n->name, dv)) v = dv; } }
-  if (v.empty()) return 0;
-  if (ctx.depth > 100) return 0;
-  bool o = true;
-  long long r = eval_string(ctx.sh, v, ctx.depth + 1, &o);
-  return o ? r : 0;
+  return true;
 }
-void ref_set(const Node *n, long long val, Ctx &ctx) {
+
+// Read a variable/array element and evaluate its (string) value as arithmetic,
+// recursively -- like bash, where `a=b+1; b=3; echo $((a))' yields 4.  RSUB,
+// when given, is the already-resolved subscript from resolve_sub.
+long long ref_get(const Node *n, Ctx &ctx, const std::string *rsub = nullptr) {
+  std::string v;
+  bool have = true;
+  if (n->has_sub) {
+    if (rsub) {
+      v = ctx.sh.array_get(n->name, *rsub);
+    } else {
+      std::string sub = n->sub;
+      if (!ctx.sh.array_expand_once_ok(n->name, sub)) { ctx.ok = false; return 0; }
+      v = ctx.sh.array_get(n->name, ctx.sh.zsh_subscript(n->name, sub));
+    }
+    // For nounset, an element of a wholly unset variable counts as unbound
+    // (bash blames the bare NAME: `a[0] > 4' -> `a: unbound variable').
+    have = ctx.sh.vars.count(ctx.sh.deref(n->name)) != 0;
+  } else if (!ctx.sh.get_if_set(n->name, v)) {
+    std::string dv;
+    if (ctx.sh.dynamic_var(n->name, dv)) v = dv;
+    else have = false;
+  }
+  if (!have && ctx.sh.opt_nounset) {
+    // set -u: an unset variable in arithmetic aborts like any other expansion
+    // (non-interactive bash exits with 127); the message is already printed,
+    // so fail without queueing a second diagnostic.
+    std::fprintf(stderr, "%s%s: unbound variable\n", ctx.sh.err_prefix().c_str(),
+                 n->name.c_str());
+    ctx.sh.exiting = true;
+    ctx.sh.exit_status = 127;
+    ctx.ok = false;
+    return 0;
+  }
+  if (blank_expr(v)) return 0;
+  long long iv;
+  if (try_int(v, iv)) return iv;
+  // bash caps value-recursion (`a=b; b=a; $((a))') at MAX_EXPR_RECURSION_LEVEL
+  // and blames the value that would evaluate at the tripping level.
+  if (ctx.depth + 1 >= 1023) {
+    ctx.full_msg = format_arith_err(v, arith_err::kRecursion, 0);
+    ctx.ok = false;
+    return 0;
+  }
+  // Evaluate the value with error PROPAGATION: a malformed value (`A="4 + ";
+  // $(( A + 4 ))') aborts the whole expression, and the diagnostic names the
+  // VALUE as the failing expression, exactly as bash reports it.
+  Parsed p = parse_cached(v);
+  Ctx sub{ctx.sh, p.ok, ctx.depth + 1, p.err_pos, p.err_msg, ctx.cmd_name, {}};
+  long long r = eval_node(p.root.get(), sub);
+  if (!sub.ok) {
+    ctx.ok = false;
+    if (!sub.full_msg.empty()) ctx.full_msg = sub.full_msg;
+    else if (sub.err_pos != std::string::npos)
+      ctx.full_msg = format_arith_err(v, sub.err_msg, sub.err_pos);
+    return 0;
+  }
+  return r;
+}
+void ref_set(const Node *n, long long val, Ctx &ctx, const std::string *rsub = nullptr) {
   if (!ctx.ok) return;  // a read/subscript error already aborted the expression
   if (n->has_sub) {
+    if (rsub) {
+      ctx.sh.array_set(n->name, *rsub, std::to_string(val));
+      return;
+    }
     std::string sub = n->sub;
     if (!ctx.sh.array_expand_once_ok(n->name, sub)) { ctx.ok = false; return; }
     ctx.sh.array_set(n->name, ctx.sh.zsh_subscript(n->name, sub), std::to_string(val));
-  } else if (!ctx.sh.set(n->name, std::to_string(val), ctx.cmd_name))
+    return;
+  }
+  // A bare array name in arithmetic reads and WRITES element 0 (`x=(1 2);
+  // ((x=9))' yields x=([0]=9 [1]=2) in bash) -- Shell::set would ignore it.
+  auto it = ctx.sh.vars.find(ctx.sh.deref(n->name));
+  if (it != ctx.sh.vars.end() &&
+      (it->second.kind == VarKind::Indexed || it->second.kind == VarKind::Assoc)) {
+    ctx.sh.array_set(n->name, "0", std::to_string(val));
+    return;
+  }
+  if (!ctx.sh.set(n->name, std::to_string(val), ctx.cmd_name))
     ctx.ok = false;  // readonly, or an invalid nameref target (`((: `0': ...')
 }
 
@@ -540,10 +690,17 @@ long long eval_node(const Node *n, Ctx &ctx) {
     case K::Neg: return -A();
     case K::LNot: return A() ? 0 : 1;
     case K::BNot: return ~A();
-    case K::PreInc: { long long v = ref_get(n, ctx) + 1; ref_set(n, v, ctx); return v; }
-    case K::PreDec: { long long v = ref_get(n, ctx) - 1; ref_set(n, v, ctx); return v; }
-    case K::PostInc: { long long v = ref_get(n, ctx); ref_set(n, v + 1, ctx); return v; }
-    case K::PostDec: { long long v = ref_get(n, ctx); ref_set(n, v - 1, ctx); return v; }
+    case K::PreInc: case K::PreDec: case K::PostInc: case K::PostDec: {
+      // Read-modify-write: resolve any subscript once (its side effects must
+      // not run again for the write back).
+      std::string rs;
+      const std::string *rp = nullptr;
+      if (n->has_sub) { if (!resolve_sub(n, ctx, rs)) return 0; rp = &rs; }
+      long long cur = ref_get(n, ctx, rp);
+      long long d = (n->k == K::PreInc || n->k == K::PostInc) ? 1 : -1;
+      ref_set(n, cur + d, ctx, rp);
+      return (n->k == K::PreInc || n->k == K::PreDec) ? cur + d : cur;
+    }
     case K::Mul: { long long l = A(); return l * eval_node(n->b.get(), ctx); }
     case K::Div: { long long l = A(), r = eval_node(n->b.get(), ctx); if (r == 0) { ctx.note(arith_err::kDiv0, n->b->src); return 0; } if (l == LLONG_MIN && r == -1) return LLONG_MIN; return l / r; }
     case K::Mod: { long long l = A(), r = eval_node(n->b.get(), ctx); if (r == 0) { ctx.note(arith_err::kDiv0, n->b->src); return 0; } if (l == LLONG_MIN && r == -1) return 0; return l % r; }
@@ -579,8 +736,13 @@ long long eval_node(const Node *n, Ctx &ctx) {
       long long rhs = A();
       long long res = rhs;
       const std::string o = n->aop ? n->aop : "=";
+      // For OP= the subscript is resolved once and shared by the read and the
+      // write back (`d[x++]+=2' bumps x a single time, as bash).
+      std::string rs;
+      const std::string *rp = nullptr;
+      if (o != "=" && n->has_sub) { if (!resolve_sub(n, ctx, rs)) return 0; rp = &rs; }
       if (o != "=") {
-        long long cur = ref_get(n, ctx);
+        long long cur = ref_get(n, ctx, rp);
         if (o == "+=") res = cur + rhs;
         else if (o == "-=") res = cur - rhs;
         else if (o == "*=") res = cur * rhs;
@@ -592,7 +754,7 @@ long long eval_node(const Node *n, Ctx &ctx) {
         else if (o == "^=") res = cur ^ rhs;
         else if (o == "|=") res = cur | rhs;
       }
-      ref_set(n, res, ctx);
+      ref_set(n, res, ctx, rp);
       return res;
     }
   }
@@ -614,29 +776,18 @@ long long eval_arith_msg(Shell &sh, const std::string &expr, const char *cmd_nam
   if (blank_expr(expr)) { if (ok) *ok = true; return 0; }
   if (try_int(expr, iv)) { if (ok) *ok = true; return iv; }
   Parsed p = parse_cached(expr);
-  Ctx ctx{sh, p.ok, 0, p.err_pos, p.err_msg, cmd_name};
+  Ctx ctx{sh, p.ok, 0, p.err_pos, p.err_msg, cmd_name, {}};
   long long v = eval_node(p.root.get(), ctx);
   if (ok) *ok = ctx.ok;
-  if (!ctx.ok && ctx.err_pos != std::string::npos && ctx.err_pos <= expr.size()) {
-    size_t lead = 0;
-    while (lead < expr.size() && std::isspace(static_cast<unsigned char>(expr[lead]))) lead++;
-    std::string display = expr.substr(lead);
-    std::string token = expr.substr(ctx.err_pos);
-    // A malformed numeric constant's error token is the number itself, without
-    // the trailing whitespace that padded the expression (`$(( 3425#56 ))' ->
-    // `3425#56', not `3425#56 ').  Operator/operand-expected errors keep their
-    // trailing space, so only trim for the number-constant diagnostics.
-    if (ctx.err_msg == arith_err::kBadBase || ctx.err_msg == arith_err::kBadConst ||
-        ctx.err_msg == arith_err::kBadNumber || ctx.err_msg == arith_err::kTooGreat) {
-      auto rtrim = [](std::string &s) {
-        while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) s.pop_back();
-      };
-      rtrim(display);
-      rtrim(token);
-    }
-    std::string prefix = (cmd_name && cmd_name[0]) ? std::string(cmd_name) + ": " : "";
-    std::fprintf(stderr, "%s%s%s: %s (error token is \"%s\")\n", sh.err_prefix().c_str(),
-                 prefix.c_str(), display.c_str(), ctx.err_msg.c_str(), token.c_str());
+  std::string prefix = (cmd_name && cmd_name[0]) ? std::string(cmd_name) + ": " : "";
+  if (!ctx.ok && !ctx.full_msg.empty()) {
+    // A nested value-evaluation failure carries its own fully formatted
+    // diagnostic naming the VALUE as the expression.
+    std::fprintf(stderr, "%s%s%s\n", sh.err_prefix().c_str(), prefix.c_str(),
+                 ctx.full_msg.c_str());
+  } else if (!ctx.ok && ctx.err_pos != std::string::npos && ctx.err_pos <= expr.size()) {
+    std::fprintf(stderr, "%s%s%s\n", sh.err_prefix().c_str(), prefix.c_str(),
+                 format_arith_err(expr, ctx.err_msg, ctx.err_pos).c_str());
   }
   return v;
 }
