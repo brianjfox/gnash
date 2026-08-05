@@ -442,7 +442,9 @@ int main(int argc, char **argv) {
     }
     sh.init_job_control(false);
     read_startup_files(sh, startup_prefix, login, false, sopts);
-    sh.run_string(cmd);
+    // bash parses a -c string command-by-command (parse_and_execute), so an
+    // alias defined on one line is in effect for the lines after it.
+    sh.run_script_lines(cmd);
   } else if (!force_stdin && idx < args.size()) {
     // A directory named as a script: bash reports it with the script name as
     // the error prefix (not argv0) and exits 126.

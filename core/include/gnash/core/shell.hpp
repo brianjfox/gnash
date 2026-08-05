@@ -471,6 +471,16 @@ class Shell {
 
   // Parse and execute a script; returns the final exit status.
   int run_string(const std::string &script);
+  // Whether run_string's OWN parse of its input failed (nested runs -- eval,
+  // source, traps -- do not leak theirs).  A non-interactive line reader stops
+  // reading its input when set, as bash does after a top-level syntax error.
+  bool had_parse_error = false;
+  // Alias expansion applies: interactive or `shopt -s expand_aliases', and at
+  // least one alias table is non-empty.
+  bool aliases_active() const;
+  // bash valid_alias_name: no shell metacharacters, blanks, quoting
+  // characters, `$', or `/' anywhere in the name.
+  static bool valid_alias_name(const std::string &name);
   // Run a script buffer command-by-command (as bash reads scripts), so history
   // recording/expansion and mid-script alias definitions behave like bash.
   int run_script_lines(const std::string &text);

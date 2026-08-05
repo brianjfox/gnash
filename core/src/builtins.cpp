@@ -4254,7 +4254,16 @@ int bi_alias(Shell &sh, const std::vector<std::string> &argv) {
         st = 1;
       }
     } else {
-      table[a.substr(0, eq)] = a.substr(eq + 1);
+      std::string name = a.substr(0, eq);
+      // bash refuses names containing metacharacters, blanks, quoting
+      // characters, `$', or `/' (valid_alias_name); zsh has no such check.
+      if (!sh.is_zsh() && !Shell::valid_alias_name(name)) {
+        std::fprintf(stderr, "%salias: `%s': invalid alias name\n", sh.err_prefix().c_str(),
+                     name.c_str());
+        st = 1;
+        continue;
+      }
+      table[name] = a.substr(eq + 1);
     }
   }
   return st;

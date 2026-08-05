@@ -486,8 +486,10 @@ struct Parser {
       return nullptr;
     }
 
-    // name () { ... }
-    if (cur().type == Tok::Word && !cur().quoted && is_funcname(cur().text) &&
+    // name () { ... } -- a QUOTED word is still parsed as a function
+    // definition (bash's grammar takes any WORD here); its invalid name is
+    // reported at execution, and the reader keeps going.
+    if (cur().type == Tok::Word && (cur().quoted || is_funcname(cur().text)) &&
         peek(1).type == Tok::Lparen && peek(2).type == Tok::Rparen)
       return parse_funcdef_paren();
 
@@ -995,8 +997,11 @@ struct Parser {
     advance();  // coproc
     auto n = std::make_unique<CoprocCommand>();
     n->line = coproc_line;
+    // Any word followed by a compound command is taken as the coproc NAME
+    // (bash's grammar: COPROC WORD shell_command); an invalid name is
+    // reported at execution, not as a syntax error (`coproc @ { :; }').
     bool name_then_cmd =
-        cur().type == Tok::Word && !cur().quoted && is_name(cur().text) &&
+        cur().type == Tok::Word && !cur().quoted &&
         (peek(1).type == Tok::Lparen ||
          (peek(1).type == Tok::Word && !peek(1).quoted && is_compound_kw(peek(1).text)));
     if (name_then_cmd) {
@@ -1197,116 +1202,251 @@ static bool is_assignment_word(const std::string &w) {
   return i < w.size() && w[i] == '=';
 }
 
-// Expand aliases in command position on a token stream (in place).  An
-// unquoted word in command position that names an alias is replaced by the
-// alias body's tokens; a body ending in blank makes the following word eligible
-// too, and a word is not re-expanded within its own expansion.
-static void expand_alias_tokens(std::vector<Token> &toks,
-                                const std::map<std::string, std::string> &aliases,
-                                const std::map<std::string, std::string> &global_aliases,
-                                const std::map<std::string, std::string> &suffix_aliases) {
-  if (aliases.empty() && global_aliases.empty() && suffix_aliases.empty()) return;
+// Alias expansion is a TEXTUAL substitution performed on the input before it
+// is parsed, mirroring bash's lexer-level push_string mechanics (parse.y
+// alias_expand_token / shell_getc END_ALIAS): the body is spliced into the
+// character stream in place of the alias word, so an unbalanced quote in a
+// body continues into the following text, a trailing backslash escapes the
+// next input character, and a `#' comments out the rest of the line.
+
+// bash returns one virtual space when the expansion is exhausted so the
+// following character cannot glue onto the body's last word (`alias
+// foo='echo 0'; foo>&2' must not become an fd-0 redirect) -- EXCEPT when the
+// body ends in a blank/newline/metacharacter, in an unquoted backslash, or
+// inside a quoted string or comment (parse.y shell_getc, END_ALIAS return).
+static bool alias_wants_sentinel(const std::string &body) {
+  if (body.empty()) return false;
+  char last = body.back();
+  static const std::string meta = "()<>;&| \t\n";
+  if (meta.find(last) != std::string::npos) return false;
+  bool ub = false;      // trailing run of backslashes has odd parity
+  char q = 0;           // open quote at end of body: ' or "
+  bool comment = false; // body ends inside a `#' comment
+  bool esc = false;     // next char is escaped (quote-state scan)
+  char prev = 0;
+  for (char c : body) {
+    ub = !ub && c == '\\';  // bash's unquoted_backslash: a bare parity toggle
+    if (comment) { if (c == '\n') comment = false; prev = c; continue; }
+    if (esc) { esc = false; prev = c; continue; }
+    if (q == '\'') { if (c == '\'') q = 0; prev = c; continue; }
+    if (q == '"') {
+      if (c == '\\') esc = true;
+      else if (c == '"') q = 0;
+      prev = c; continue;
+    }
+    if (c == '\\') { esc = true; prev = c; continue; }
+    if (c == '\'' || c == '"') { q = c; prev = c; continue; }
+    if (c == '#' && (prev == 0 || prev == ' ' || prev == '\t' || prev == '\n' ||
+                     meta.find(prev) != std::string::npos))
+      comment = true;
+    prev = c;
+  }
+  return !ub && q == 0 && !comment;
+}
+
+// The result of textual alias expansion: the expanded input plus a per-byte
+// map of the line each byte should REPORT.  Bytes spliced in from an alias
+// body all report the line of the invoking word (bash does not advance
+// $LINENO across an alias body); original bytes keep their physical line.
+struct AliasExpansion {
+  std::string text;
+  std::vector<int> linemap;
+  bool changed = false;
+};
+
+// One splice region: while a token starts inside the region, the alias NAME
+// that produced it stays "being expanded" there and cannot expand again
+// (bash's AL_BEINGEXPANDED).  A region whose alias value ended in a blank
+// makes the next word after it eligible for expansion (bash's PST_ALEXPNEXT
+// set on pop_string).
+struct AliasZone {
+  std::size_t start, end;
+  std::string name;
+  bool ends_blank;
+};
+
+static AliasExpansion alias_splice_text(const std::string &input,
+                                        const std::map<std::string, std::string> &aliases,
+                                        const std::map<std::string, std::string> &global_aliases,
+                                        const std::map<std::string, std::string> &suffix_aliases,
+                                        bool posix_mode) {
+  AliasExpansion ax;
+  ax.text = input;
+  ax.linemap.resize(input.size());
+  {
+    int ln = 1;
+    for (std::size_t b = 0; b < input.size(); b++) {
+      ax.linemap[b] = ln;
+      if (input[b] == '\n') ln++;
+    }
+  }
+  if (aliases.empty() && global_aliases.empty() && suffix_aliases.empty()) return ax;
+
   static const std::set<std::string> kw = {
       "if", "then", "else", "elif", "do", "done", "{", "}", "while", "until",
       "for", "case", "select", "fi", "esac", "!", "time", "function"};
-  bool cmd_pos = true, next_also = false;
-  // After `for'/`select'/`case' the next word is a variable name (or the value
-  // being matched), not a command word, so it must NOT be alias-expanded -- e.g.
-  // `for j in ...; do' with `alias j=...' must keep `j' literal, as bash does.
-  bool name_next = false;
-  std::set<std::string> active;
+
+  std::vector<AliasZone> zones;
+
+  // A word directly after a region whose alias value ended in a blank (only
+  // blanks between) is eligible for expansion even outside command position.
+  auto follows_blank_zone = [&](const Token &t) {
+    for (const AliasZone &z : zones) {
+      if (!z.ends_blank || z.end > t.start) continue;
+      bool blanks = true;
+      for (std::size_t b = z.end; b < t.start && blanks; b++)
+        blanks = ax.text[b] == ' ' || ax.text[b] == '\t';
+      if (blanks) return true;
+    }
+    return false;
+  };
+  auto zone_blocked = [&](const Token &t) {
+    for (const AliasZone &z : zones)
+      if (z.name == t.text && t.start >= z.start && t.start < z.end) return true;
+    return false;
+  };
+  // Replace [start,end) of the working text with an alias NAME's replacement
+  // string REP, keeping the line map and existing zones consistent.
+  auto splice = [&](std::size_t start, std::size_t end, const std::string &rep,
+                    const std::string &name, bool ends_blank) {
+    long delta = static_cast<long>(rep.size()) - static_cast<long>(end - start);
+    int inv_line = start < ax.linemap.size() ? ax.linemap[start]
+                   : (ax.linemap.empty() ? 1 : ax.linemap.back());
+    ax.text = ax.text.substr(0, start) + rep + ax.text.substr(end);
+    ax.linemap.erase(ax.linemap.begin() + static_cast<long>(start),
+                     ax.linemap.begin() + static_cast<long>(end));
+    ax.linemap.insert(ax.linemap.begin() + static_cast<long>(start), rep.size(), inv_line);
+    for (AliasZone &z : zones) {
+      if (z.end <= start) continue;
+      if (z.start >= end) { z.start += delta; z.end += delta; continue; }
+      z.end += delta;  // the zone encloses the replaced span
+    }
+    zones.push_back({start, start + rep.size(), name, ends_blank});
+    ax.changed = true;
+  };
+
+  bool progress = true;
   int guard = 0;
-  for (size_t i = 0; i < toks.size() && guard < 10000;) {
-    Tok ty = toks[i].type;
-    if (ty == Tok::Newline || ty == Tok::Semi || ty == Tok::Amp || ty == Tok::Pipe ||
-        ty == Tok::AndAnd || ty == Tok::OrOr || ty == Tok::Lparen || ty == Tok::SemiSemi ||
-        ty == Tok::PipeAnd || ty == Tok::SemiAnd || ty == Tok::SemiSemiAnd) {
-      cmd_pos = true; next_also = false; name_next = false; active.clear(); i++; continue;
-    }
-    // A leading redirection (with an optional fd number and its target word)
-    // belongs to the command prefix and does not end command position, so an
-    // alias in the command word after `< file cmd' still expands.
-    if (ty == Tok::IoNumber) { i++; continue; }
-    if (is_redir_op(ty)) {
-      i++;  // the operator
-      if (i < toks.size() && toks[i].type == Tok::Word) i++;  // its target word
-      continue;  // cmd_pos unchanged
-    }
-    if (ty != Tok::Word) { i++; continue; }
-    const std::string text = toks[i].text;
-    bool quoted = toks[i].quoted;
-    if (!quoted && kw.count(text)) {
-      cmd_pos = true; next_also = false;
-      name_next = (text == "for" || text == "select" || text == "case");
-      i++; continue;
-    }
-    // The variable name after for/select/case: never an alias, and it is not a
-    // command word, so what follows it (the `in'/`do'/list) is not either.
-    if (name_next) { name_next = false; cmd_pos = false; i++; continue; }
-    // zsh global aliases (`alias -g') expand in ANY word position.
-    if (!quoted && global_aliases.count(text) && !active.count(text)) {
-      active.insert(text);
-      guard++;
-      std::vector<Token> rep = tokenize(global_aliases.at(text));
-      if (!rep.empty() && rep.back().type == Tok::Eof) rep.pop_back();
-      toks.erase(toks.begin() + static_cast<long>(i));
-      toks.insert(toks.begin() + static_cast<long>(i), rep.begin(), rep.end());
-      continue;  // reprocess from i: the body may contain operators (| > ...)
-    }
-    // zsh suffix aliases (`alias -s ext=cmd'): a bare `file.ext' in command
-    // position, whose `ext' has a suffix alias and which is not itself an alias,
-    // runs `cmd file.ext'.
-    if ((cmd_pos || next_also) && !quoted && !suffix_aliases.empty() && !aliases.count(text)) {
-      size_t dot = text.rfind('.');
-      if (dot != std::string::npos && dot + 1 < text.size()) {
-        auto sit = suffix_aliases.find(text.substr(dot + 1));
-        if (sit != suffix_aliases.end()) {
-          guard++;
-          std::vector<Token> cmd = tokenize(sit->second);
-          if (!cmd.empty() && cmd.back().type == Tok::Eof) cmd.pop_back();
-          toks.insert(toks.begin() + static_cast<long>(i), cmd.begin(), cmd.end());
-          continue;  // reprocess from i: the inserted command is now cmd_pos
+  while (progress && guard++ < 1000) {
+    progress = false;
+    std::vector<Token> toks = tokenize(ax.text);
+
+    bool cmd_pos = true;
+    // After `for'/`select' the next word is a variable name, not a command
+    // word, so it must NOT be alias-expanded (`for j in ...' with `alias
+    // j=...' keeps `j' literal, as bash does).
+    bool name_next = false;
+    // Nested `case' contexts: 0 = expecting the subject word, 1 = expecting
+    // `in', 2 = in pattern position (no expansion -- patterns are not command
+    // words), 3 = in a clause body.
+    std::vector<int> case_state;
+
+    for (std::size_t i = 0; i < toks.size() && !progress; i++) {
+      const Token &t = toks[i];
+      Tok ty = t.type;
+      if (ty == Tok::SemiSemi || ty == Tok::SemiAnd || ty == Tok::SemiSemiAnd) {
+        if (!case_state.empty()) case_state.back() = 2;
+        cmd_pos = true; name_next = false;
+        continue;
+      }
+      if (ty == Tok::Rparen) {
+        if (!case_state.empty() && case_state.back() == 2) {
+          case_state.back() = 3;
+          cmd_pos = true; name_next = false;
+        }
+        continue;
+      }
+      if (ty == Tok::Newline || ty == Tok::Semi || ty == Tok::Amp || ty == Tok::Pipe ||
+          ty == Tok::AndAnd || ty == Tok::OrOr || ty == Tok::Lparen || ty == Tok::PipeAnd) {
+        // Inside case pattern position a newline does not start a command.
+        if (case_state.empty() || case_state.back() != 2) { cmd_pos = true; name_next = false; }
+        continue;
+      }
+      if (ty == Tok::IoNumber) continue;
+      if (is_redir_op(ty)) {
+        // The operator's target word: not a command word (skip it below), but
+        // still eligible when it directly follows a blank-ending expansion
+        // (bash checks PST_ALEXPNEXT for every token read) -- `alias c='< ';
+        // ... c file' expands a `file' alias.  A leading redirection does not
+        // end command position.
+        if (i + 1 < toks.size() && toks[i + 1].type == Tok::Word) {
+          const Token &w = toks[i + 1];
+          if (!w.quoted && follows_blank_zone(w) && aliases.count(w.text) && !zone_blocked(w)) {
+            const std::string &val = aliases.at(w.text);
+            bool ends_blank = !val.empty() && (val.back() == ' ' || val.back() == '\t');
+            splice(w.start, w.end, val + (alias_wants_sentinel(val) ? " " : ""), w.text, ends_blank);
+            progress = true;
+            continue;
+          }
+          i++;  // skip the target word
+        }
+        continue;  // cmd_pos unchanged
+      }
+      if (ty != Tok::Word) continue;
+
+      // case machinery: subject and patterns are never expanded.
+      if (!case_state.empty() && case_state.back() == 0) { case_state.back() = 1; continue; }
+      if (!case_state.empty() && case_state.back() == 1) {
+        if (!t.quoted && t.text == "in") case_state.back() = 2;
+        continue;
+      }
+      if (!case_state.empty() && case_state.back() == 2) {
+        if (!t.quoted && t.text == "esac") { case_state.pop_back(); cmd_pos = false; }
+        continue;
+      }
+
+      if (name_next) { name_next = false; cmd_pos = false; continue; }
+
+      bool eligible = !t.quoted && (cmd_pos || follows_blank_zone(t));
+
+      // Posix.2 does not allow reserved words to be aliased: recognize them
+      // before attempting alias expansion.  In default mode the alias check
+      // comes first, so an eligible aliased reserved word expands (bash
+      // parse.y read_token order).
+      bool is_kw = !t.quoted && kw.count(t.text) && cmd_pos;
+      if (!(posix_mode && is_kw) && eligible && aliases.count(t.text) && !zone_blocked(t)) {
+        const std::string &val = aliases.at(t.text);
+        bool ends_blank = !val.empty() && (val.back() == ' ' || val.back() == '\t');
+        splice(t.start, t.end, val + (alias_wants_sentinel(val) ? " " : ""), t.text, ends_blank);
+        progress = true;
+        continue;
+      }
+      // zsh global aliases (`alias -g') expand in ANY word position.
+      if (!t.quoted && global_aliases.count(t.text) && !zone_blocked(t)) {
+        const std::string &val = global_aliases.at(t.text);
+        splice(t.start, t.end, val, t.text, false);
+        progress = true;
+        continue;
+      }
+      // zsh suffix aliases (`alias -s ext=cmd'): a bare `file.ext' in command
+      // position, whose `ext' has a suffix alias and which is not itself an
+      // alias, runs `cmd file.ext' (the inserted command word takes over
+      // command position, so this does not re-fire).
+      if (eligible && !suffix_aliases.empty() && !aliases.count(t.text)) {
+        std::size_t dot = t.text.rfind('.');
+        if (dot != std::string::npos && dot + 1 < t.text.size()) {
+          auto sit = suffix_aliases.find(t.text.substr(dot + 1));
+          if (sit != suffix_aliases.end()) {
+            splice(t.start, t.start, sit->second + " ", t.text, false);
+            progress = true;
+            continue;
+          }
         }
       }
-    }
-    if ((cmd_pos || next_also) && !quoted && aliases.count(text) && !active.count(text)) {
-      const std::string &val = aliases.at(text);
-      active.insert(text);
-      // Alias expansion is a textual substitution: the replacement tokens all
-      // report the line where the alias was invoked, even when the body itself
-      // contains newlines (bash does not advance $LINENO across an alias body).
-      int inv_line = toks[i].line;
-      bool trailing = !val.empty() && (val.back() == ' ' || val.back() == '\t');
-      std::vector<Token> rep = tokenize(val);
-      if (!rep.empty() && rep.back().type == Tok::Eof) rep.pop_back();
-      for (Token &t : rep) t.line = inv_line;
-      toks.erase(toks.begin() + static_cast<long>(i));
-      toks.insert(toks.begin() + static_cast<long>(i), rep.begin(), rep.end());
-      guard++;
-      // If the body ends in a blank, the word that followed the alias is also
-      // eligible for expansion (bash chains this while each body ends blank).
-      size_t np = i + rep.size();
-      while (trailing && np < toks.size() && toks[np].type == Tok::Word && !toks[np].quoted &&
-             aliases.count(toks[np].text) && !active.count(toks[np].text) && guard < 10000) {
-        const std::string &v2 = aliases.at(toks[np].text);
-        active.insert(toks[np].text);
-        trailing = !v2.empty() && (v2.back() == ' ' || v2.back() == '\t');
-        int np_line = toks[np].line;
-        std::vector<Token> r2 = tokenize(v2);
-        if (!r2.empty() && r2.back().type == Tok::Eof) r2.pop_back();
-        for (Token &t : r2) t.line = np_line;
-        toks.erase(toks.begin() + static_cast<long>(np));
-        toks.insert(toks.begin() + static_cast<long>(np), r2.begin(), r2.end());
-        guard++;
-        np += r2.size();
+
+      if (is_kw) {
+        cmd_pos = true;
+        name_next = (t.text == "for" || t.text == "select");
+        if (t.text == "case") case_state.push_back(0);
+        else if (t.text == "esac" && !case_state.empty()) { case_state.pop_back(); cmd_pos = false; }
+        continue;
       }
-      next_also = false;
-      continue;  // reprocess from i (its command word may itself be an alias)
+      // A prefix assignment keeps command position for the following word.
+      if (cmd_pos && !t.quoted && is_assignment_word(t.text)) continue;
+      cmd_pos = false;
     }
-    // A prefix assignment keeps command position for the following command word.
-    if (cmd_pos && !quoted && is_assignment_word(text)) { i++; continue; }
-    cmd_pos = false; next_also = false; i++;
   }
+  return ax;
 }
 
 ParseResult parse(const std::string &input) {
@@ -1317,9 +1457,21 @@ ParseResult parse(const std::string &input) {
 ParseResult parse_with_aliases(const std::string &input,
                                const std::map<std::string, std::string> &aliases,
                                const std::map<std::string, std::string> &global_aliases,
-                               const std::map<std::string, std::string> &suffix_aliases) {
-  std::vector<Token> toks = tokenize(input);
-  expand_alias_tokens(toks, aliases, global_aliases, suffix_aliases);
+                               const std::map<std::string, std::string> &suffix_aliases,
+                               bool posix_mode) {
+  AliasExpansion ax =
+      alias_splice_text(input, aliases, global_aliases, suffix_aliases, posix_mode);
+  std::vector<Token> toks = tokenize(ax.text);
+  if (ax.changed) {
+    // Tokens report the line of the byte they start at: original bytes keep
+    // their physical line, spliced bytes the invoking word's line.  The Eof
+    // token falls on the line after the last content (bash parses input with
+    // a trailing newline).
+    for (Token &t : toks) {
+      if (t.start < ax.linemap.size()) t.line = ax.linemap[t.start];
+      else if (!ax.linemap.empty()) t.line = ax.linemap.back() + 1;
+    }
+  }
   Parser p(std::move(toks));
   return p.run();
 }

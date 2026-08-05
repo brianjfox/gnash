@@ -1596,6 +1596,18 @@ int Executor::run_coproc(const CoprocCommand *c) {
   // The shell keeps the other ends open on high, close-on-exec descriptors and
   // publishes them as NAME[0] (read from the coproc) / NAME[1] (write to it),
   // with NAME_PID holding the child's pid.  NAME defaults to COPROC.
+  // The parser accepts any word as the name; validate it here as bash's
+  // execute_coproc does (`coproc @ { :; }' -> `@': not a valid identifier).
+  if (!c->name.empty()) {
+    bool ok = std::isalpha(static_cast<unsigned char>(c->name[0])) || c->name[0] == '_';
+    for (char ch : c->name)
+      if (!(std::isalnum(static_cast<unsigned char>(ch)) || ch == '_')) ok = false;
+    if (!ok) {
+      std::fprintf(stderr, "%s`%s': not a valid identifier\n", sh_.err_prefix().c_str(),
+                   c->name.c_str());
+      return (sh_.last_status = 1);
+    }
+  }
   const std::string name = c->name.empty() ? std::string("COPROC") : c->name;
   int out_pipe[2], in_pipe[2];  // out: coproc->shell;  in: shell->coproc
   if (pipe(out_pipe) < 0) {
@@ -2027,8 +2039,9 @@ static int first_body_line(const Command *c) {
 
 int Executor::run_funcdef(const FunctionDef *c) {
   // bash rejects a function name that contained an unquoted `$' expansion
-  // (W_HASDOLLAR) -- e.g. `function sys$read' -- as not a valid identifier.
-  if (c->name.find('$') != std::string::npos) {
+  // (W_HASDOLLAR) -- e.g. `function sys$read' -- or any quoting (`'a b c' ()')
+  // as not a valid identifier; the raw word, quotes included, is echoed.
+  if (c->name.find_first_of("$'\"\\") != std::string::npos) {
     std::fprintf(stderr, "%s`%s': not a valid identifier\n",
                  sh_.err_prefix().c_str(), c->name.c_str());
     return (sh_.last_status = 1);

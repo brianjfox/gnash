@@ -590,6 +590,8 @@ struct Lexer {
         t.type = Tok::Newline;
         t.line = tline;
         t.preceded_by_blank = blanked;
+        t.start = pos;
+        t.end = pos + 1;
         out.push_back(t);
         pos++;
         if (!pending.empty()) collect_heredocs();
@@ -606,18 +608,24 @@ struct Lexer {
       if ((c == '<' || c == '>') && !(pos + 1 < n && in[pos + 1] == '(')) is_op = true;
 
       if (is_op) {
+        std::size_t tstart = pos;
         Token t = read_operator();
         t.line = tline;
         t.preceded_by_blank = blanked;
+        t.start = tstart;
+        t.end = pos;
         bool is_heredoc = (t.type == Tok::DLess || t.type == Tok::DLessDash);
         out.push_back(t);
         if (is_heredoc) awaiting = (t.type == Tok::DLessDash) ? 1 : 0;
         continue;
       }
 
+      std::size_t wstart = pos;
       Token t = read_word();
       t.line = tline;
       t.preceded_by_blank = blanked;
+      t.start = wstart;
+      t.end = pos;
       out.push_back(t);
       if (awaiting >= 0 && t.type == Tok::Word) {
         bool q = false;
@@ -632,6 +640,8 @@ struct Lexer {
     if (!pending.empty()) collect_heredocs();
     Token eof;
     eof.type = Tok::Eof;
+    eof.start = n;
+    eof.end = n;
     // bash parses input with a guaranteed trailing newline, so EOF falls on the
     // line after the last content -- add one when the input has no final newline.
     eof.line = line_for(n) + ((n > 0 && in[n - 1] != '\n') ? 1 : 0);
