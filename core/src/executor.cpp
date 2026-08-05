@@ -1482,7 +1482,14 @@ int Executor::run_simple(const SimpleCommand *c) {
     // In posix mode, assignments preceding a function call persist.
     if (sh_.opt_posix) restore.clear();
     undo_temp();
-  } else if ((apply_temp(), run_builtin(sh_, argv, &status))) {
+  } else if ((apply_temp(), [&] {
+               // `command' strips the POSIX special-builtin exit property: a
+               // failing `command . nofile' does not end a posix-mode shell.
+               sh_.posix_builtin_shield = skip_functions;
+               bool b = run_builtin(sh_, argv, &status);
+               sh_.posix_builtin_shield = false;
+               return b;
+             }())) {
     // A preceding `VAR=val builtin' applies to the builtin (e.g. IFS=, read),
     // then is restored.  It keeps effect permanently when the builtin makes the
     // variable readonly or exported: `export'/`readonly' always do, `declare'/

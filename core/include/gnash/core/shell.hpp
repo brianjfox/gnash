@@ -461,8 +461,14 @@ class Shell {
   // status merely propagated from a command the builtin ran (`eval false'), and
   // bash exempts a few error kinds (`trap' bad signal, `shift', `break'/
   // `continue'), whose paths deliberately do not call it.
+  // Set while a builtin runs via `command NAME', which strips the POSIX
+  // special-builtin exit-on-error property (`command . nofile' continues).
+  bool posix_builtin_shield = false;
   void posix_special_builtin_error(int status = 1) {
-    if (opt_posix && !interactive) { exiting = true; exit_status = status; }
+    if (opt_posix && !interactive && !posix_builtin_shield) {
+      exiting = true;
+      exit_status = status;
+    }
   }
 
   // --- helpers -----------------------------------------------------------

@@ -3122,10 +3122,17 @@ static bool umask_symbolic(const std::string &s, mode_t &allowed, char &errch, b
       i++;
       if (op != '+' && op != '-' && op != '=') { errch = op; erropr = true; return false; }
       int perms = 0;
-      while (i < s.size() && std::strchr("rwxXst", s[i])) {
+      while (i < s.size() && std::strchr("rwxXstugo", s[i])) {
         if (s[i] == 'r') perms |= 0444;
         else if (s[i] == 'w') perms |= 0222;
         else if (s[i] == 'x' || s[i] == 'X') perms |= 0111;
+        else if (s[i] == 'u' || s[i] == 'g' || s[i] == 'o') {
+          // A who letter as a permission copies that class's CURRENT allowed
+          // bits (`umask g+u' grants group what user has, `o=u' mirrors it).
+          int shift = s[i] == 'u' ? 6 : s[i] == 'g' ? 3 : 0;
+          int b = (allowed >> shift) & 7;
+          perms |= (b << 6) | (b << 3) | b;
+        }
         // s/t (setuid/sticky) live outside the 0777 umask -- consume, ignore.
         i++;
       }
@@ -5438,6 +5445,18 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
         st = 1;
         giveup = true;
         sh.posix_special_builtin_error(st);  // `.'/source: fatal in posix
+      }
+    } else if (sh.opt_posix) {
+      // POSIX `.'/source: search $PATH only -- NO current-directory fallback
+      // even when the file exists there.  A miss is `.: NAME: file not found'
+      // and (unshielded) fatal for a non-interactive posix shell.
+      const char *penv = std::getenv("PATH");
+      if (!search(penv ? penv : "")) {
+        std::fprintf(stderr, "%s%s: %s: file not found\n", sh.err_prefix().c_str(),
+                     cmd.c_str(), fname.c_str());
+        st = 1;
+        giveup = true;
+        sh.posix_special_builtin_error(st);
       }
     } else if (sh.shopt_opts["sourcepath"] && access(fname.c_str(), R_OK) != 0) {
       const char *penv = std::getenv("PATH");
