@@ -821,7 +821,7 @@ struct Parser {
       // word (`=3'); re-gluing them reconstructs the original operator, while a
       // space ("> =3") would make it unparseable.  A blank in the source still
       // separates operands, so distinct operands keep their own tokens.
-      if (!expr.empty() && cur().preceded_by_blank) expr += ' ';
+      if (cur().preceded_by_blank) expr += ' ';
       expr += tok_to_text(cur());
       advance();
     }
@@ -830,8 +830,8 @@ struct Parser {
       return parse_subshell();
     }
     auto n = std::make_unique<ArithCommand>();
-    // Keep the trailing blank (the reconstruction never yields a leading one)
-    // so an error diagnostic matches bash's raw expression text.
+    // Keep the leading and trailing blanks so an error diagnostic and the
+    // xtrace line match bash's raw expression text (`+ ((  42  ))').
     n->expression = expr;
     n->line = arith_line;
     parse_redirect_list(n->redirects);
