@@ -48,6 +48,8 @@ scripts=(
   'echo {a,b,c}{1,2}'
   'echo {1..10}'
   'echo {5..1}'
+  'echo {9223372036854775805..9223372036854775807}'
+  'echo {-9223372036854775806..-9223372036854775808}'
   'echo pre{X,Y,Z}post'
   'v=HelloWorld; echo ${#v}'
   'v=HelloWorld; echo ${v:2:5}'

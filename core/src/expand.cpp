@@ -2934,6 +2934,7 @@ std::vector<std::string> brace_expand(const std::string &text) {
               long va = std::strtol(a.c_str(), &ea, 10), vb = std::strtol(b.c_str(), &eb, 10);
               long step = stepstr.empty() ? 1 : std::strtol(stepstr.c_str(), &es, 10);
               bool step_ok = stepstr.empty() || (es && *es == '\0');
+              if (step == LONG_MIN) step_ok = false;  // -step would overflow
               if (step == 0) step = 1;
               else if (step < 0) step = -step;
               bool a_num = ea && *ea == '\0' && !a.empty();
@@ -2958,9 +2959,17 @@ std::vector<std::string> brace_expand(const std::string &text) {
                 unsigned long long span =
                     (va <= vb) ? static_cast<unsigned long long>(vb) - static_cast<unsigned long long>(va)
                                : static_cast<unsigned long long>(va) - static_cast<unsigned long long>(vb);
-                if (span / static_cast<unsigned long long>(step) < kMaxBraceItems) {
-                  if (va <= vb) for (long v = va; v <= vb; v += step) items.push_back(fmt(v));
-                  else for (long v = va; v >= vb; v -= step) items.push_back(fmt(v));
+                // Iterate by element count, incrementing only between
+                // elements (like bash's mkseq): a bound at LONG_MAX/LONG_MIN
+                // must not be stepped past, which overflows and loops forever.
+                unsigned long long count = span / static_cast<unsigned long long>(step) + 1;
+                if (count <= kMaxBraceItems) {
+                  long v = va;
+                  for (unsigned long long j = 0;;) {
+                    items.push_back(fmt(v));
+                    if (++j >= count) break;
+                    if (va <= vb) v += step; else v -= step;
+                  }
                 }
               } else if (a.size() == 1 && b.size() == 1 && step_ok &&
                          std::isalpha(static_cast<unsigned char>(a[0])) &&
