@@ -572,6 +572,29 @@ static bool array_op_ref(const std::string &body, std::string &name, char &sel,
          c == '@';
 }
 
+// Find the top-level `:' separating a substring OFFSET from its LENGTH,
+// skipping a colon that belongs to a `?:' ternary in the offset expression
+// (`${PARAM:1 ? 4 : 2}') and any colon inside nested ${...}, $(...), (...),
+// or [...] -- bash's skiparith.  npos when there is no length.
+static size_t length_colon(const std::string &s) {
+  int depth = 0, quest = 0;
+  for (size_t i = 0; i < s.size(); i++) {
+    char c = s[i];
+    if (c == '$' && i + 1 < s.size() && (s[i + 1] == '{' || s[i + 1] == '(')) {
+      depth++; i++; continue;
+    }
+    if (c == '(' || c == '[' || c == '{') { depth++; continue; }
+    if (c == ')' || c == ']' || c == '}') { if (depth) depth--; continue; }
+    if (depth) continue;
+    if (c == '?') { quest++; continue; }
+    if (c == ':') {
+      if (quest) { quest--; continue; }
+      return i;
+    }
+  }
+  return std::string::npos;
+}
+
 // Detect array/positional slicing: NAME[@]:off[:len] / NAME[*]:off[:len] and
 // the positional @:off[:len] / *:off[:len].  offx/lenx are the raw arithmetic
 // offset and length; haslen indicates whether a length was given.
@@ -595,7 +618,7 @@ static bool slice_ref(const std::string &body, std::string &name, char &sel,
   }
   if (p >= body.size() || body[p] != ':') return false;
   std::string tail = body.substr(p + 1);
-  size_t colon = tail.find(':');
+  size_t colon = length_colon(tail);
   if (colon == std::string::npos) { offx = tail; haslen = false; }
   else { offx = tail.substr(0, colon); lenx = tail.substr(colon + 1); haslen = true; }
   return true;
@@ -902,7 +925,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
     if (end != std::string::npos) {
       std::string expr = t.substr(i + 3, (end - 1) - (i + 3));
       bool ok = true;
-      long long v = eval_arith_msg(sh_, expand_no_split(expr, false, false), "", &ok);
+      long long v = eval_arith_msg(sh_, expand_arith(expr), "", &ok);
       if (!ok) { sh_.arith_error = true; i = end + 1; return; }
       std::string s = std::to_string(v);
       for (char c : s) { out += c; mask += qm; }
@@ -916,7 +939,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
     if (end != std::string::npos) {
       std::string expr = t.substr(i + 2, end - (i + 2));
       bool ok = true;
-      long long v = eval_arith_msg(sh_, expand_no_split(expr, false, false), "", &ok);
+      long long v = eval_arith_msg(sh_, expand_arith(expr), "", &ok);
       if (!ok) { sh_.arith_error = true; i = end + 1; return; }
       std::string s = std::to_string(v);
       for (char c : s) { out += c; mask += qm; }
@@ -2286,14 +2309,19 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
     return val;
   }
 
-  // ${name:offset:length}
+  // ${name:offset:length} -- offset/length undergo parameter expansion before
+  // the arithmetic (`${PARAM:$OFFSET}', `${PARAM:${OFFSET:-0}}').
   if (rest[0] == ':') {
     std::string args = rest.substr(1);
-    size_t colon2 = args.find(':');
+    size_t colon2 = length_colon(args);
     bool ok = true;
-    long long off = eval_arith(sh, colon2 == std::string::npos ? args : args.substr(0, colon2), &ok);
+    long long off = eval_arith(
+        sh, ex.expand_no_split(colon2 == std::string::npos ? args : args.substr(0, colon2),
+                               false, false),
+        &ok);
     long long len = -1;
-    if (colon2 != std::string::npos) len = eval_arith(sh, args.substr(colon2 + 1), &ok);
+    if (colon2 != std::string::npos)
+      len = eval_arith(sh, ex.expand_no_split(args.substr(colon2 + 1), false, false), &ok);
     // Offset and length are counted in characters (bash), not bytes: map them
     // through mb_byteoff so a UTF-8 value slices on code-point boundaries.
     long long n = static_cast<long long>(mb_charlen(val));
@@ -2343,6 +2371,52 @@ void Expander::process_dq(const std::string &text, size_t &i, std::string &out,
       i++;
     }
   }
+}
+
+// Expand TEXT for an arithmetic context ($((...)), (( )), $[...]): parameter,
+// command, and arithmetic expansion as if inside double quotes; unescaped
+// double-quote characters are removed but single quotes stay ORDINARY
+// characters, so `$(( "1+1" ))' is 2 while `$(( 'foo' ))' is the arithmetic
+// syntax error bash reports (expr.c never sees quoting).
+std::string Expander::expand_arith(const std::string &text) {
+  std::string out, mask;
+  size_t i = 0;
+  while (i < text.size()) {
+    char c = text[i];
+    if (c == '\\' && i + 1 < text.size() &&
+        (text[i + 1] == '$' || text[i + 1] == '`' || text[i + 1] == '"' ||
+         text[i + 1] == '\\')) {
+      out += text[i + 1];
+      mask += '1';
+      i += 2;
+      continue;
+    }
+    if (c == '$') { expand_dollar(text, i, true, out, mask); continue; }
+    if (c == '`') {
+      size_t j = i + 1;
+      std::string inner;
+      while (j < text.size() && text[j] != '`') {
+        if (text[j] == '\\' && j + 1 < text.size() &&
+            (text[j + 1] == '`' || text[j + 1] == '\\' || text[j + 1] == '$')) {
+          inner += text[j + 1];
+          j += 2;
+        } else {
+          inner += text[j++];
+        }
+      }
+      int st = 0;
+      std::string res = sh_.run_and_capture(inner, &st);
+      sh_.note_cmdsub(st);
+      for (char ch : res) { out += ch; mask += '1'; }
+      i = (j < text.size()) ? j + 1 : j;
+      continue;
+    }
+    if (c == '"') { i++; continue; }
+    out += c;
+    mask += '0';
+    i++;
+  }
+  return out;
 }
 
 std::string Expander::expand_dq_word(const std::string &w_in) {

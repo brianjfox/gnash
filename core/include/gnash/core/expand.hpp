@@ -41,6 +41,9 @@ class Expander {
   // specials, single quotes are literal.  Not used under the zsh personality,
   // whose quoting rules differ.
   std::string expand_dq_word(const std::string &w);
+  // Arithmetic-context expansion: like a double-quoted string, but unescaped
+  // double quotes are removed and single quotes stay ordinary characters.
+  std::string expand_arith(const std::string &text);
 
   // Assignment RHS: tilde + parameter/command/arith + quote removal, no split,
   // no glob.

@@ -183,13 +183,13 @@ void CondCommand::print(std::string &out) const {
 
 void ArithCommand::print(std::string &out) const {
   invert_prefix(this, out);
-  // `expression' keeps a trailing blank (so an arithmetic error reproduces
-  // bash's raw text); the reconstructed single-line form trims it back off.
-  std::string e = expression;
-  while (!e.empty() && std::isspace(static_cast<unsigned char>(e.back()))) e.pop_back();
-  out += "(( ";
-  out += e;
-  out += " ))";
+  // `expression' keeps its leading/trailing blanks (so errors and xtrace
+  // reproduce bash's raw text); the printer wraps the raw text directly,
+  // exactly as bash does (`((  x + 1  ))' stays double-spaced, `((x+1))'
+  // stays unspaced).
+  out += "((";
+  out += expression;
+  out += "))";
   print_redirects(redirects, out);
 }
 
