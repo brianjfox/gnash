@@ -74,7 +74,12 @@ int heredoc_fd(const std::string &body) {
 }
 
 void save_fd(int fd, std::vector<SavedFd> &saved) {
-  int s = fcntl(fd, F_DUPFD_CLOEXEC, 10);
+  // Backups live well above the fd-10+ region users reach with `exec 10>&1'
+  // and the {var} allocations: a user redirect landing on a backup slot would
+  // clobber it (`{ exec 10>&1; } > file' must still restore stdout -- the
+  // backup used to sit at fd 10 and the inner exec overwrote it, leaving
+  // stdout pointing at the file forever).
+  int s = fcntl(fd, F_DUPFD_CLOEXEC, 100);
   saved.push_back({fd, s});
 }
 
