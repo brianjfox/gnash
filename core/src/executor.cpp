@@ -134,9 +134,32 @@ static int open_redir_output(Shell &sh, const std::string &fn, bool clobbering) 
 bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved) {
   Expander ex(sh);
   int target_fd = r.source_fd;
+  // Install NEWFD as FD, saving FD's previous state, and consume NEWFD.  When
+  // the kernel handed us FD itself (open() returns the target number exactly
+  // when it was free), the previous state is `closed' -- saving after the
+  // open would snapshot the new file, and the callers' close(f) would close
+  // the very descriptor just installed (`exec 4>file' with fd 3 occupied).
   auto redir_to = [&](int newfd, int fd) {
+    if (newfd == fd) {
+      saved.push_back({fd, -1});
+      return;
+    }
     save_fd(fd, saved);
     dup2(newfd, fd);
+    close(newfd);
+  };
+  // `&>file' / bare `>&file': install F as BOTH stdout and stderr, consuming
+  // it, with the same handed-us-the-target-fd care as redir_to.
+  auto install_both = [&](int f) {
+    for (int t : {1, 2}) {
+      if (f == t) {
+        saved.push_back({t, -1});
+        continue;
+      }
+      save_fd(t, saved);
+      dup2(f, t);
+    }
+    if (f != 1 && f != 2) close(f);
   };
 
   // A restricted shell forbids output redirections (creating/truncating/
@@ -165,12 +188,59 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved) {
   // while `exec' (discard_saved_fds) keeps it open.  `{var}>&-' / `{var}<&-'
   // instead close the descriptor whose number the variable currently holds.
   if (!r.fd_var.empty()) {
-    auto assign_fd = [&](int f) {
-      int hi = fcntl(f, F_DUPFD_CLOEXEC, 10);
-      if (hi >= 0) { close(f); f = hi; }
-      saved.push_back({f, -1});
-      sh.set(r.fd_var, std::to_string(f));
+    // Store the fd number into the {var} target, which may be an array
+    // element (`exec {fd[0]}<&0').  A readonly (or otherwise unassignable)
+    // target fails the whole redirection with bash's diagnostic.
+    auto store_var = [&](int f) -> bool {
+      size_t br = r.fd_var.find('[');
+      bool ok;
+      if (br != std::string::npos) {
+        std::string base = r.fd_var.substr(0, br);
+        std::string sub = r.fd_var.substr(br + 1, r.fd_var.size() - br - 2);
+        auto it = sh.vars.find(sh.deref(base));
+        ok = !(it != sh.vars.end() && it->second.readonly);
+        if (ok) sh.array_set(base, sub, std::to_string(f));
+      } else {
+        ok = sh.set(r.fd_var, std::to_string(f));
+      }
+      if (!ok) {
+        std::fprintf(stderr, "%s%s: cannot assign fd to variable\n", sh.err_prefix().c_str(),
+                     r.fd_var.c_str());
+        close(f);
+        return false;
+      }
+      // bash leaves a {var} descriptor OPEN after the command completes; only
+      // with `shopt -s varredir_close' is it closed like other redirections.
+      auto vit = sh.shopt_opts.find("varredir_close");
+      if (vit != sh.shopt_opts.end() && vit->second) saved.push_back({f, -1});
       return true;
+    };
+    // Read the fd number the {var} target currently holds (for the close and
+    // move forms).
+    auto read_var = [&]() -> std::string {
+      size_t br = r.fd_var.find('[');
+      if (br != std::string::npos)
+        return sh.array_get(r.fd_var.substr(0, br),
+                            r.fd_var.substr(br + 1, r.fd_var.size() - br - 2));
+      return sh.get(r.fd_var);
+    };
+    auto assign_fd = [&](int f, const std::string &fn = std::string()) {
+      int hi = fcntl(f, F_DUPFD_CLOEXEC, 10);
+      if (hi < 0) {
+        // The move to a high descriptor failed (e.g. `ulimit -n' below 10):
+        // bash reports the duplication failure (no line number) and then the
+        // target with the same errno, and the redirection fails.
+        int e = errno;
+        std::fprintf(stderr, "%s: redirection error: cannot duplicate fd: %s\n",
+                     sh.shell_name.c_str(), std::strerror(e));
+        if (!fn.empty())
+          std::fprintf(stderr, "%s%s: %s\n", sh.err_prefix().c_str(), fn.c_str(),
+                       std::strerror(e));
+        close(f);
+        return false;
+      }
+      close(f);
+      return store_var(hi);
     };
     auto open_var = [&](int flags) -> bool {
       std::string fn;
@@ -181,7 +251,7 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved) {
                      std::strerror(errno));
         return false;
       }
-      return assign_fd(f);
+      return assign_fd(f, fn);
     };
     switch (r.op) {
       case RedirOp::InputRedir:   return open_var(O_RDONLY);
@@ -193,20 +263,32 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved) {
       case RedirOp::DupInput: {
         std::string w = ex.expand_no_split(r.target.text);
         if (w == "-") {  // close the descriptor the variable names
-          std::string cur = sh.get(r.fd_var);
-          if (!cur.empty()) { int n = std::atoi(cur.c_str()); if (n >= 0) close(n); }
+          std::string cur = read_var();
+          if (cur.empty()) {
+            // `exec {v}>&-' with no fd number in the variable: bash reports
+            // the bare variable name as an ambiguous redirect.
+            std::fprintf(stderr, "%s%s: ambiguous redirect\n", sh.err_prefix().c_str(),
+                         r.fd_var.c_str());
+            return false;
+          }
+          int n = std::atoi(cur.c_str());
+          if (n >= 0) close(n);
           return true;
         }
+        // `{v}<&N-' moves: duplicate N then close it.
+        bool move = w.size() > 1 && w.back() == '-';
+        if (move) w.pop_back();
         int src = std::atoi(w.c_str());
         int f = fcntl(src, F_DUPFD_CLOEXEC, 10);
         if (f < 0) {
-          std::fprintf(stderr, "%s%s: %s\n", sh.err_prefix().c_str(), w.c_str(),
+          // The diagnostic names the UNEXPANDED word (`$fd: Bad file
+          // descriptor'), as bash does.
+          std::fprintf(stderr, "%s%s: %s\n", sh.err_prefix().c_str(), r.target.text.c_str(),
                        std::strerror(errno));
           return false;
         }
-        saved.push_back({f, -1});
-        sh.set(r.fd_var, std::to_string(f));
-        return true;
+        if (move) close(src);
+        return store_var(f);
       }
       case RedirOp::HereDoc:
       case RedirOp::HereDocStrip: {
@@ -233,7 +315,6 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved) {
       int f = open(fn.c_str(), O_RDONLY);
       if (f < 0) { std::fprintf(stderr, "%s%s: %s\n", sh.err_prefix().c_str(), fn.c_str(), std::strerror(errno)); return false; }
       redir_to(f, target_fd < 0 ? 0 : target_fd);
-      close(f);
       return true;
     }
     case RedirOp::OutputRedir:
@@ -249,7 +330,6 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved) {
       }
       if (f < 0) { std::fprintf(stderr, "%s%s: %s\n", sh.err_prefix().c_str(), fn.c_str(), std::strerror(errno)); return false; }
       redir_to(f, target_fd < 0 ? 1 : target_fd);
-      close(f);
       return true;
     }
     case RedirOp::AppendOutput: {
@@ -258,7 +338,6 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved) {
       int f = open(fn.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0666);
       if (f < 0) { std::fprintf(stderr, "%s%s: %s\n", sh.err_prefix().c_str(), fn.c_str(), std::strerror(errno)); return false; }
       redir_to(f, target_fd < 0 ? 1 : target_fd);
-      close(f);
       return true;
     }
     case RedirOp::InputOutput: {
@@ -267,7 +346,6 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved) {
       int f = open(fn.c_str(), O_RDWR | O_CREAT, 0666);
       if (f < 0) return false;
       redir_to(f, target_fd < 0 ? 0 : target_fd);
-      close(f);
       return true;
     }
     case RedirOp::AndOutput:
@@ -286,10 +364,7 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved) {
         }
       }
       if (f < 0) return false;
-      redir_to(f, 1);
-      save_fd(2, saved);
-      dup2(f, 2);
-      close(f);
+      install_both(f);
       return true;
     }
     case RedirOp::DupOutput:
@@ -327,10 +402,7 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved) {
                          std::strerror(errno));
             return false;
           }
-          redir_to(f, 1);
-          save_fd(2, saved);
-          dup2(f, 2);
-          close(f);
+          install_both(f);
           return true;
         }
         std::fprintf(stderr, "%s%s: ambiguous redirect\n", sh.err_prefix().c_str(),
@@ -338,8 +410,16 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved) {
         return false;
       }
       int src = std::atoi(w.c_str());
+      // A source fd that is not open is an error, reported with the
+      // UNEXPANDED word (`echo foo >&$fd' -> `$fd: Bad file descriptor').
+      if (fcntl(src, F_GETFD) < 0) {
+        std::fprintf(stderr, "%s%s: %s\n", sh.err_prefix().c_str(), r.target.text.c_str(),
+                     std::strerror(EBADF));
+        return false;
+      }
       save_fd(fd, saved);
       dup2(src, fd);
+      if (w.back() == '-') close(src);  // the move form `[n]<&digit-'
       return true;
     }
     case RedirOp::HereDoc:
@@ -348,7 +428,6 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved) {
       int f = heredoc_fd(body);
       if (f < 0) return false;
       redir_to(f, target_fd < 0 ? 0 : target_fd);
-      close(f);
       return true;
     }
     case RedirOp::HereString: {
@@ -356,7 +435,6 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved) {
       int f = heredoc_fd(body);
       if (f < 0) return false;
       redir_to(f, target_fd < 0 ? 0 : target_fd);
-      close(f);
       return true;
     }
   }

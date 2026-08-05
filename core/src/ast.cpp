@@ -61,7 +61,12 @@ void print_redirects(const std::vector<Redirect> &redirs, std::string &out) {
     switch (r.op) {
       case RedirOp::HereDoc: out += "<<"; out += r.target.text; continue;
       case RedirOp::HereDocStrip: out += "<<-"; out += r.target.text; continue;
-      case RedirOp::DupInput: out += "<&"; out += r.target.text; continue;
+      // A close (`{v}<&-') is one operation regardless of direction; bash's
+      // printer renders it `>&-'.
+      case RedirOp::DupInput:
+        out += (!r.fd_var.empty() && r.target.text == "-") ? ">&" : "<&";
+        out += r.target.text;
+        continue;
       case RedirOp::DupOutput: out += ">&"; out += r.target.text; continue;
       default: break;
     }
@@ -256,7 +261,11 @@ struct MPrinter {
     switch (r.op) {
       case RedirOp::HereDoc: out += "<<"; out += r.target.text; return;
       case RedirOp::HereDocStrip: out += "<<-"; out += r.target.text; return;
-      case RedirOp::DupInput: out += "<&"; out += r.target.text; return;
+      // A close (`{v}<&-') prints as `>&-', as in print_redirects above.
+      case RedirOp::DupInput:
+        out += (!r.fd_var.empty() && r.target.text == "-") ? ">&" : "<&";
+        out += r.target.text;
+        return;
       case RedirOp::DupOutput: out += ">&"; out += r.target.text; return;
       default: break;
     }
