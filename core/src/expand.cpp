@@ -3540,9 +3540,9 @@ std::vector<std::string> brace_expand(const std::string &text) {
                 auto fmt = [&](long v) {
                   if (!pad) return std::to_string(v);
                   bool neg = v < 0;
-                  std::string d = std::to_string(neg ? -v : v);
-                  while (d.size() < width) d = "0" + d;
-                  return (neg ? "-" : "") + d;
+                  std::string ds = std::to_string(neg ? -v : v);
+                  while (ds.size() < width) ds = "0" + ds;
+                  return (neg ? "-" : "") + ds;
                 };
                 unsigned long long span =
                     (va <= vb) ? static_cast<unsigned long long>(vb) - static_cast<unsigned long long>(va)

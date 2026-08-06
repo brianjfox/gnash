@@ -163,7 +163,7 @@ extern "C" char *tilde_expand(const char *string) {
       result = static_cast<char *>(
           xrealloc(result, 1 + (result_size += static_cast<size_t>(start) + 20)));
 
-    std::strncpy(result + result_index, string, static_cast<size_t>(start));
+    std::memcpy(result + result_index, string, static_cast<size_t>(start));
     result_index += static_cast<size_t>(start);
     string += start;
 
