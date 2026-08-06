@@ -20,6 +20,10 @@
 #include <cwchar>
 #include <cwctype>
 #include <functional>
+#ifdef GNASH_HAVE_ICONV
+#include <iconv.h>
+#endif
+#include <langinfo.h>
 #include <pwd.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -326,8 +330,53 @@ static std::string mb_case_fold(const std::string &val, const std::string &pat,
   return out;
 }
 
-// Encode a Unicode code point as UTF-8 (for \u / \U), matching bash's u32cconv.
+// Encode a Unicode code point for \u / \U, matching bash's u32cconv: in the
+// active LC_CTYPE locale's charset when it is not UTF-8 (Big5, EUC, ...), with
+// UTF-8 as both the common case and the can't-convert fallback.  wcrtomb is
+// no use here: on the BSDs (macOS included) wchar_t in a Big5 locale is the
+// zero-extended multibyte value, not a Unicode code point, so like bash we
+// convert the UTF-8 form with iconv.
+void append_utf8_raw(std::string &out, unsigned long v);
+
 void append_utf8(std::string &out, unsigned long v) {
+#ifdef GNASH_HAVE_ICONV
+  if (v > 0x7f) {
+    const char *cs = nl_langinfo(CODESET);
+    if (cs && *cs && std::strcmp(cs, "UTF-8") != 0) {
+      // Convert the UTF-8 form to the locale charset; an unknown charset
+      // falls back to ASCII (bash: "We assume ASCII when presented with an
+      // unknown encoding").  Only a failed iconv_open yields raw UTF-8; a
+      // conversion failure for this particular character yields the ISO C99
+      // escape text instead (bash u32tocesc: \uXXXX below 0x10000, \UXXXXXXXX
+      // above, uppercase hex).
+      iconv_t cd = iconv_open(cs, "UTF-8");
+      if (cd == reinterpret_cast<iconv_t>(-1)) cd = iconv_open("ASCII", "UTF-8");
+      if (cd != reinterpret_cast<iconv_t>(-1)) {
+        std::string u8;
+        append_utf8_raw(u8, v);
+        char inbuf[8], outbuf[25];
+        std::memcpy(inbuf, u8.data(), u8.size());
+        char *ip = inbuf, *op = outbuf;
+        size_t il = u8.size(), ol = sizeof(outbuf);
+        size_t r = iconv(cd, &ip, &il, &op, &ol);
+        iconv_close(cd);
+        if (r != static_cast<size_t>(-1) && il == 0) {
+          out.append(outbuf, sizeof(outbuf) - ol);
+        } else {
+          char esc[16];
+          std::snprintf(esc, sizeof(esc), v < 0x10000 ? "\\u%04lX" : "\\U%08lX", v);
+          out += esc;
+        }
+        return;
+      }
+    }
+  }
+#endif
+  append_utf8_raw(out, v);
+}
+
+// The plain UTF-8 encoding (also the fallback when iconv can't convert).
+void append_utf8_raw(std::string &out, unsigned long v) {
   if (v <= 0x7f) {
     out += static_cast<char>(v);
   } else if (v <= 0x7ff) {

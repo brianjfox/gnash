@@ -1870,12 +1870,35 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
     }
     return cnt;
   };
+  // Bytes inside a multibyte character are data: in charsets like Big5 a
+  // trail byte can be `\' or the delimiter value, and must be neither escape
+  // nor terminator.  mb_pend buffers a character in progress; a byte that
+  // completes (or turns out not to start) a multibyte character resets it.
+  std::string mb_pend;
+  auto mb_data_byte = [&](char ch) -> bool {
+    if (MB_CUR_MAX <= 1) return false;
+    if (mb_pend.empty() && static_cast<unsigned char>(ch) < 0x80) return false;
+    mb_pend += ch;
+    wchar_t wc;
+    std::mbstate_t st{};
+    size_t r = std::mbrtowc(&wc, mb_pend.data(), mb_pend.size(), &st);
+    if (r == static_cast<size_t>(-2)) return true;  // incomplete: need more bytes
+    bool valid = r != static_cast<size_t>(-1) && mb_pend.size() > 1;
+    mb_pend.clear();
+    return valid;  // a completed multibyte trail byte is data; else reprocess
+  };
   if (!(have_n && nchars == 0)) {
     for (;;) {
       char ch;
       int r = read_byte(ch);
       if (r <= 0) { eof = (r == 0); timed_out = (r < 0); break; }
       if (ch == '\0' && delim != 0) continue;    // stray NULs are discarded
+      if (mb_data_byte(ch)) {
+        line += ch;
+        quoted += '\0';
+        if (have_n && mb_count(line) >= nchars) break;
+        continue;
+      }
       if (!raw && ch == '\\') {                  // backslash escaping (unless -r)
         char nx;
         int r2 = read_byte(nx);
