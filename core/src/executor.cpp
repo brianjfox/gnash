@@ -1391,6 +1391,7 @@ int Executor::run_simple(const SimpleCommand *c) {
   auto apply_temp = [&]() {
     for (const auto &a : assigns) {
       sh_.temp_env_active.insert(a.first);  // let a called function's `local' inherit it
+      sh_.temp_env_depth[a.first]++;
       auto it = sh_.vars.find(a.first);
       restore.push_back({a.first,
                          it == sh_.vars.end() ? std::nullopt : std::optional<Variable>(it->second)});
@@ -1417,6 +1418,12 @@ int Executor::run_simple(const SimpleCommand *c) {
   auto undo_temp = [&]() {
     for (auto it = restore.rbegin(); it != restore.rend(); ++it) {
       if (sh_.temp_consumed.count(it->first)) continue;  // localized: frame owns it
+      // A posix special builtin persisted this binding through us: keep the
+      // value it set and consume the mark (`var=30 func' + `var=20 return').
+      if (sh_.temp_persist.count(it->first)) {
+        sh_.temp_persist.erase(it->first);
+        continue;
+      }
       if (it->second) sh_.vars[it->first] = *it->second;
       else sh_.vars.erase(it->first);
     }
@@ -1425,6 +1432,8 @@ int Executor::run_simple(const SimpleCommand *c) {
       sh_.temp_env_active.erase(a.first);
       sh_.temp_prior.erase(a.first);
       sh_.temp_consumed.erase(a.first);
+      auto d = sh_.temp_env_depth.find(a.first);
+      if (d != sh_.temp_env_depth.end() && --d->second <= 0) sh_.temp_env_depth.erase(d);
     }
   };
 
@@ -1562,7 +1571,16 @@ int Executor::run_simple(const SimpleCommand *c) {
           "source", "times", "trap",  "unset"};
       if (kSpecial.count(argv[0])) persist = true;
     }
-    if (persist) restore.clear();
+    if (persist) {
+      // A name also bound by an ENCLOSING temporary environment (depth >= 2:
+      // ours plus at least one outer) persists through it -- mark it so the
+      // outer undo keeps the value this builtin set.
+      for (const auto &a : assigns) {
+        auto d = sh_.temp_env_depth.find(a.first);
+        if (d != sh_.temp_env_depth.end() && d->second >= 2) sh_.temp_persist.insert(a.first);
+      }
+      restore.clear();
+    }
     undo_temp();
     // A builtin that performs an internal assignment (e.g. `declare -i a[$bad]=x'
     // under array_expand_once) can raise the arithmetic-error flag from deep in
