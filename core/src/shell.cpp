@@ -1913,6 +1913,31 @@ static OpenCtx open_context(const std::string &t) {
 // old-style backtick, whose own backslash pre-pass splices `\<newline>' away
 // before the inner quoting is even seen.  A single quote inside `$(...)' (or at
 // top level) keeps the backslash literal; only backticks force the splice.
+// True when T's final character sits inside a comment (an unquoted `#' that
+// began a word, running to end of line with no newline after it): a trailing
+// backslash there is comment TEXT, never a line continuation (bash --
+// `echo $(\n echo hi # \\\n)' closes fine).
+static bool ends_in_comment(const std::string &t) {
+  bool squote = false, dquote = false;
+  char prev = '\n';
+  for (size_t i = 0; i < t.size(); i++) {
+    char c = t[i];
+    if (squote) { if (c == '\'') squote = false; prev = c; continue; }
+    if (!dquote && c == '#' && (prev == ' ' || prev == '\t' || prev == '\n' ||
+                                prev == ';' || prev == '(' || prev == '&' || prev == '|')) {
+      while (i < t.size() && t[i] != '\n') i++;
+      if (i >= t.size()) return true;  // comment runs to the end
+      prev = '\n';
+      continue;
+    }
+    if (c == '\\') { if (i + 1 < t.size()) i++; prev = 'x'; continue; }
+    if (c == '\'' && !dquote) squote = true;
+    else if (c == '"') dquote = !dquote;
+    prev = c;
+  }
+  return false;
+}
+
 static bool squote_backslash_literal(const std::string &t) {
   bool squote = false, dquote = false, btick = false;
   char prev = '\n';  // start of input behaves like just after a newline
@@ -2047,7 +2072,7 @@ int Shell::run_script_lines(const std::string &text) {
     // character, not a line continuation.  In an unquoted here-document bash
     // still splices `\<newline>' (before even checking for the delimiter), so
     // only suppress the continuation for a quoted delimiter.
-    if (nbs % 2 == 1 && !squote_backslash_literal(pending) &&
+    if (nbs % 2 == 1 && !squote_backslash_literal(pending) && !ends_in_comment(pending) &&
         !(in_heredoc && in_heredoc_quoted)) {
       pending.pop_back();
       cont_bslash = true;
