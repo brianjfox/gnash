@@ -4321,7 +4321,11 @@ int bi_ulimit(Shell &sh, const std::vector<std::string> &argv) {
     }
   }
   if (i < argv.size()) value = argv[i];
-  if (!hard && !soft) soft = true;  // default acts on the soft limit
+  // Reporting defaults to the soft limit; SETTING with neither -S nor -H
+  // changes BOTH limits (bash: `ulimit -c 0' zeroes hard and soft).
+  bool set_both = !hard && !soft && !value.empty();
+  if (set_both) hard = soft = true;
+  if (!hard && !soft) soft = true;  // default reports the soft limit
 
   if (all) {
     for (const auto &r : kUlimits) ulimit_print_one(r, hard, true);
@@ -4334,7 +4338,11 @@ int bi_ulimit(Shell &sh, const std::vector<std::string> &argv) {
   for (char o : reqs) {
     const UlimitRes *r = nullptr;
     for (const auto &e : kUlimits) if (e.opt == o) { r = &e; break; }
-    if (!r) { std::fprintf(stderr, "%sulimit: -%c: invalid option\n", sh.err_prefix().c_str(), o); return 2; }
+    if (!r) {
+      std::fprintf(stderr, "%sulimit: -%c: invalid option\n", sh.err_prefix().c_str(), o);
+      std::fprintf(stderr, "ulimit: usage: ulimit [-SHabcdefiklmnpqrstuvxPRT] [limit]\n");
+      return 2;
+    }
     rs.push_back(r);
   }
 
@@ -4342,6 +4350,17 @@ int bi_ulimit(Shell &sh, const std::vector<std::string> &argv) {
     bool labeled = rs.size() > 1;
     for (const UlimitRes *r : rs) ulimit_print_one(*r, hard, labeled);
     return 0;
+  }
+  // The value must be `unlimited', `soft', `hard', or an unsigned number --
+  // bash rejects a leading `+' or `-' ("maybe someday the leading `+' will
+  // be accepted, but not today").
+  if (value != "unlimited" && value != "hard" && value != "soft") {
+    for (char c : value)
+      if (c < '0' || c > '9') {
+        std::fprintf(stderr, "%sulimit: %s: invalid number\n", sh.err_prefix().c_str(),
+                     value.c_str());
+        return 1;
+      }
   }
   // Set the given value on each requested resource.
   for (const UlimitRes *r : rs) {
@@ -4356,7 +4375,10 @@ int bi_ulimit(Shell &sh, const std::vector<std::string> &argv) {
     if (hard) rl.rlim_max = nv;
     if (soft) rl.rlim_cur = nv;
     if (setrlimit(r->res, &rl) != 0) {
-      std::fprintf(stderr, "%sulimit: %s\n", sh.err_prefix().c_str(), std::strerror(errno));
+      // bash names the resource: `ulimit: max user processes: cannot modify
+      // limit: Operation not permitted'.
+      std::fprintf(stderr, "%sulimit: %s: cannot modify limit: %s\n",
+                   sh.err_prefix().c_str(), r->desc, std::strerror(errno));
       return 1;
     }
   }
