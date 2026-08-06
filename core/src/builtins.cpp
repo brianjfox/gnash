@@ -2260,7 +2260,12 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
         bool ro = sh.readonly_functions.count(kv.first) > 0;
         if (readonly && !ro) continue;  // `-r' lists only readonly functions
         if (funcnames) std::printf("declare -f%s %s\n", ro ? "r" : "", kv.first.c_str());
-        else std::printf("%s\n", named_function_string(kv.first, kv.second, sh.opt_posix).c_str());
+        else {
+          std::printf("%s\n", named_function_string(kv.first, kv.second, sh.opt_posix).c_str());
+          // The `readonly -f' listing follows each body with the reusable
+          // attribute line (`declare -fr NAME'), unlike plain `declare -f'.
+          if (readonly) std::printf("declare -fr %s\n", kv.first.c_str());
+        }
       }
       return 0;
     }
