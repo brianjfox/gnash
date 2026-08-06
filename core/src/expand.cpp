@@ -2193,6 +2193,15 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
     // evaluator as `' '` / `~' and raise a syntax error rather than reading index 0.
     // Associative keys keep the plain expansion (their quoting rules differ).
     std::string esub = assoc_sub ? ex.expand_no_split(sub) : ex.expand_dq_word(sub);
+    // An associative subscript that expands empty is an error naming the RAW
+    // text: `${#wheat[$unset]}' -> `[$unset]: bad array subscript', and the
+    // command aborts (bash).
+    if (assoc_sub && esub.empty() && sub != "@" && sub != "*") {
+      std::fprintf(stderr, "%s[%s]: bad array subscript\n", sh.err_prefix().c_str(),
+                   sub.c_str());
+      sh.arith_error = true;
+      return std::string();
+    }
     if (!sh.array_expand_once_ok(name, esub)) { sh.arith_error = true; return std::string(); }
     // zsh subscripts are 1-based; translate before the (0-based) array read.
     tsub = sh.zsh_subscript(name, esub);

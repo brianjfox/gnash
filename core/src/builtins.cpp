@@ -338,6 +338,26 @@ static bool lenient_element_target(Shell &sh, size_t argv_idx) {
   return lb != std::string::npos && lb > 0 && r.text.back() == ']';
 }
 
+// Without assoc_expand_once, a `name[sub]' builtin target's subscript gets
+// expanded AGAIN by the assignment; a quote the first expansion left behind
+// (`a[80's]' from `a[$b]', b="80's") makes that re-expansion fail, so bash
+// rejects the whole word as not a valid identifier (assoc9.sub).  True when
+// the target either needs no re-expansion or its quotes are balanced.
+static bool subscript_reexpands(Shell &sh, const std::string &target) {
+  if (expand_once_on(sh)) return true;
+  size_t lb = target.find('[');
+  if (lb == std::string::npos || target.empty() || target.back() != ']') return true;
+  std::string sub = target.substr(lb + 1, target.size() - lb - 2);
+  bool sq = false, dq = false;
+  for (size_t i = 0; i < sub.size(); i++) {
+    char c = sub[i];
+    if (!sq && c == '\\') { i++; continue; }
+    if (!dq && c == '\'') sq = !sq;
+    else if (!sq && c == '"') dq = !dq;
+  }
+  return !sq && !dq;
+}
+
 bool well_formed_element(const std::string &s, bool allow_empty = false) {
   size_t lb = s.find('[');
   if (lb == std::string::npos) return s.find(']') == std::string::npos;
@@ -479,8 +499,9 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
 
   if (to_var) {
     auto lb = vname.find('[');
-    if (lb != std::string::npos && !lenient_element_target(sh, vname_idx) &&
-        !well_formed_element(vname)) {
+    if (lb != std::string::npos &&
+        ((!lenient_element_target(sh, vname_idx) && !well_formed_element(vname)) ||
+         !subscript_reexpands(sh, vname))) {
       std::fprintf(stderr, "%sprintf: `%s': not a valid identifier\n",
                    sh.err_prefix().c_str(), vname.c_str());
       return 1;
@@ -1263,8 +1284,16 @@ int bi_unset(Shell &sh, const std::vector<std::string> &argv) {
     }
     // A malformed element reference (an unbalanced bracket from word
     // splitting, e.g. `unset a[$(echo' + `foo)]') is a SILENT no-op in bash.
+    // EXCEPT when the base names an associative array: its subscript spans to
+    // the LAST `]' and may itself be a bracket (`unset A[]]' removes key `]',
+    // `unset A[[]' key `[' -- assoc17.sub), so no balance check applies.
     size_t lb = argv[i].find('[');
-    if (!noref && !expand_once_on(sh) &&
+    bool assoc_base = false;
+    if (lb != std::string::npos && lb > 0 && !argv[i].empty() && argv[i].back() == ']') {
+      auto abit = sh.vars.find(sh.deref(argv[i].substr(0, lb)));
+      assoc_base = abit != sh.vars.end() && abit->second.kind == VarKind::Assoc;
+    }
+    if (!noref && !expand_once_on(sh) && !assoc_base &&
         (lb != std::string::npos || argv[i].find(']') != std::string::npos) &&
         !well_formed_element(argv[i], /*allow_empty=*/true)) {
       continue;
@@ -1294,6 +1323,28 @@ int bi_unset(Shell &sh, const std::vector<std::string> &argv) {
       if (bit != sh.vars.end() && !sh.array_expand_once_ok(base, sub)) {
         ret = 1;
         continue;
+      }
+      // WITHOUT assoc_expand_once, an associative subscript is expanded a
+      // second time by unset itself (`unset -v "b[\$x]"' removes the key $x
+      // names -- assoc9.sub) -- EXCEPT under BASH_COMPAT <= 51, whose pre-5.2
+      // semantics take the text literally (`unset 'map[foo$(cmd)bar]'' removes
+      // that key without ever running the command substitution --
+      // quotearray3.sub).  A re-expansion that comes up empty is a bad
+      // subscript when the text had a `$' (an unset variable); otherwise the
+      // literal text stands (a lone `"' stays `"').
+      std::string ucompat = sh.get("BASH_COMPAT");
+      long ucv = ucompat.empty() ? 99 : std::strtol(ucompat.c_str(), nullptr, 10);
+      if (bit != sh.vars.end() && bit->second.kind == VarKind::Assoc &&
+          !expand_once_on(sh) && !(ucv > 0 && ucv <= 51) && sub != "@" && sub != "*") {
+        Expander uex(sh);
+        std::string esub = uex.expand_no_split(sub);
+        if (esub.empty() && sub.find('$') != std::string::npos) {
+          std::fprintf(stderr, "%sunset: [%s]: bad array subscript\n",
+                       sh.err_prefix().c_str(), sub.c_str());
+          ret = 1;
+          continue;
+        }
+        if (!esub.empty()) sub = esub;
       }
       if (bit != sh.vars.end() && bit->second.readonly) {
         std::fprintf(stderr, "%sunset: %s: cannot unset: readonly variable\n",
@@ -1818,7 +1869,7 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
   for (size_t ni = 0; ni < names.size(); ni++) {
     const std::string &nm = names[ni];
     if (lenient_element_target(sh, ni < name_idx.size() ? name_idx[ni] : SIZE_MAX)) continue;
-    if (!valid_read_target(nm)) {
+    if (!valid_read_target(nm) || !subscript_reexpands(sh, nm)) {
       std::fprintf(stderr, "%sread: `%s': not a valid identifier\n", sh.err_prefix().c_str(),
                    nm.c_str());
       return 1;
@@ -2100,6 +2151,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
   // `+X' flags remove an attribute rather than adding it (`typeset +n foo').
   bool rm_integer = false, rm_readonly = false, rm_exported = false;
   bool rm_nameref = false, rm_lcase = false, rm_ucase = false, rm_capcase = false;
+  bool rm_array = false, rm_assoc = false;
   for (; i < argv.size(); i++) {
     const std::string &a = argv[i];
     if (a == "--") { i++; break; }  // end-of-options marker
@@ -2130,8 +2182,8 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
         switch (a[k]) {
           case 'f': funcs = true; break;
           case 'F': funcnames = true; break;
-          case 'a': mk_array = true; break;
-          case 'A': mk_assoc = true; break;
+          case 'a': (add ? mk_array : rm_array) = true; break;
+          case 'A': (add ? mk_assoc : rm_assoc) = true; break;
           case 'i': (add ? integer : rm_integer) = true; break;
           case 'r': (add ? readonly : rm_readonly) = true; break;
           case 'x': (add ? exported : rm_exported) = true; break;
@@ -2422,16 +2474,38 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
           a_display = elem + (eq == std::string::npos ? std::string() : a.substr(append ? eq - 1 : eq));
         }
       }
+      // Under `shopt -s assoc_expand_once' an ASSOCIATIVE subscript is a
+      // literal key spanning to the last `]': `declare x["a[b"]=1' keys on
+      // `a[b' (an unclosed `[' is fine), but a `]' BEFORE the final one still
+      // rejects the word (`foo["foo]bar"]=bax' -- assoc9.sub).
+      bool assoc_literal = false;
+      {
+        size_t elb2 = elem.find('[');
+        auto dbit = sh.vars.find(sh.deref(elem.substr(0, elb2)));
+        if (expand_once_on(sh) && dbit != sh.vars.end() &&
+            dbit->second.kind == VarKind::Assoc && elem.back() == ']' &&
+            elb2 + 1 < elem.size() - 1) {
+          std::string inner = elem.substr(elb2 + 1, elem.size() - elb2 - 2);
+          if (inner.find(']') != std::string::npos) {
+            std::fprintf(stderr, "%s%s: `%s': not a valid identifier\n",
+                         sh.err_prefix().c_str(), argv[0].c_str(), a_display.c_str());
+            ret = 1;
+            continue;
+          }
+          assoc_literal = true;
+        }
+      }
       // An empty or invalid BASE name (`declare []=asdf') is the
       // invalid-identifier error, not a subscript diagnostic.
-      if (!valid_identifier(elem.substr(0, elem.find('['))) ||
-          !well_formed_element(elem, /*allow_empty=*/true)) {
+      if (!assoc_literal &&
+          (!valid_identifier(elem.substr(0, elem.find('['))) ||
+           !well_formed_element(elem, /*allow_empty=*/true))) {
         std::fprintf(stderr, "%s%s: `%s': not a valid identifier\n", sh.err_prefix().c_str(),
                      argv[0].c_str(), a_display.c_str());
         ret = 1;
         continue;
       }
-      if (!well_formed_element(elem)) {  // balanced but empty: a[]
+      if (!assoc_literal && !well_formed_element(elem)) {  // balanced but empty: a[]
         std::fprintf(stderr, "%s%s: bad array subscript\n", sh.err_prefix().c_str(),
                      elem.c_str());
         ret = 1;
@@ -2966,6 +3040,15 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     // variable as readonly and leaves the flag set (declare.def refuses to
     // turn off att_readonly).  Only declare/typeset/local reach here with a
     // removable readonly, and they carry the builtin-name prefix.
+    // `+a'/`+A' cannot remove the array nature of an existing array: bash
+    // reports `cannot destroy array variables in this way' and leaves it be
+    // (a `+a'/`+A' on a non-array is a harmless no-op).
+    if ((rm_assoc && v.kind == VarKind::Assoc) || (rm_array && v.kind == VarKind::Indexed)) {
+      std::fprintf(stderr, "%s%s: %s: cannot destroy array variables in this way\n",
+                   sh.err_prefix().c_str(), argv[0].c_str(), aname.c_str());
+      ret = 1;
+      continue;
+    }
     if (rm_readonly) {
       // `+r' on a readonly TARGETLESS nameref (`declare -rn r; declare +r r')
       // follows the reference to nothing, so it is a silent no-op rather than a

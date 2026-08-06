@@ -960,7 +960,10 @@ void Shell::make_array(const std::string &n_in, bool assoc) {
       v.assoc["0"] = v.value;
       v.value.clear();
     }
-    if (assoc && !fresh) v.assoc_buckets = 128;
+    // Only a SET (visible) scalar is a real conversion; a declared-but-unset
+    // placeholder (a fresh `local'/`declare' cell) makes a NEW table with the
+    // full 1024 buckets, exactly like bash's make_new_assoc_variable.
+    if (assoc && !fresh && !v.invisible) v.assoc_buckets = 128;
     v.kind = assoc ? VarKind::Assoc : VarKind::Indexed;
   }
 }
@@ -1025,6 +1028,13 @@ void Shell::array_assign(
     for (size_t x = 0; x < elems.size(); x++) {
       if (elems[x].first) { assoc_put(v, *elems[x].first, fold_val(elems[x].second)); continue; }
       const std::string &key = elems[x].second;
+      // An empty key in the flat list is a bad subscript; bash reports it as
+      // `"": bad array subscript' and stops the assignment (assoc11.sub).
+      if (key.empty()) {
+        std::fprintf(stderr, "%s\"\": bad array subscript\n", err_prefix().c_str());
+        last_status = 1;
+        return;
+      }
       assoc_put(v, key,
                 fold_val((x + 1 < elems.size()) ? elems[x + 1].second : std::string()));
       x++;  // consumed the paired value
