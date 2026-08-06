@@ -1025,6 +1025,13 @@ void Shell::array_assign(
     for (size_t x = 0; x < elems.size(); x++) {
       if (elems[x].first) { assoc_put(v, *elems[x].first, fold_val(elems[x].second)); continue; }
       const std::string &key = elems[x].second;
+      // An empty key in the flat list is a bad subscript; bash reports it as
+      // `"": bad array subscript' and stops the assignment (assoc11.sub).
+      if (key.empty()) {
+        std::fprintf(stderr, "%s\"\": bad array subscript\n", err_prefix().c_str());
+        last_status = 1;
+        return;
+      }
       assoc_put(v, key,
                 fold_val((x + 1 < elems.size()) ? elems[x + 1].second : std::string()));
       x++;  // consumed the paired value

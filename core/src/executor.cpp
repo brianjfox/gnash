@@ -603,6 +603,14 @@ parse_array_elems(Shell &sh, Expander &ex, const std::string &name, bool integer
                    sh.err_prefix().c_str(), name.c_str(), e.c_str());
       break;
     }
+    if (assoc) {
+      // An associative key/value list expands each word WITHOUT word
+      // splitting or pathname expansion (bash assign_assoc_from_kvlist):
+      // `v1=( $foo 3 )' with foo='1 2' keys on "1 2" whole, and an unquoted
+      // `*' stays a literal key (assoc11.sub, assoc12.sub).
+      out.emplace_back(std::nullopt, ex.expand_no_split(e, false, true));
+      continue;
+    }
     for (const std::string &f : ex.expand_args({Word{e, t.quoted ? W_QUOTED : 0}})) {
       out.emplace_back(std::nullopt, f);
       maxidx++;  // a positional element lands at the next index
