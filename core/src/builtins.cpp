@@ -4110,7 +4110,7 @@ int bi_hash(Shell &sh, const std::vector<std::string> &argv) {
     bool consumed = false;
     for (size_t k = 1; k < a.size(); k++) {
       char o = a[k];
-      if (o == 'r') { sh.hashed.clear(); expunge = true; }
+      if (o == 'r') { sh.hashed.clear(); sh.hashed_seq.clear(); expunge = true; }
       else if (o == 'l') list_l = true;
       else if (o == 'd') del_d = true;
       else if (o == 't') print_t = true;
@@ -4153,7 +4153,7 @@ int bi_hash(Shell &sh, const std::vector<std::string> &argv) {
                    ppath.c_str());
       return 1;
     }
-    sh.hashed[argv[i]] = ppath;
+    sh.hash_remember(argv[i], ppath);
     return 0;
   }
   if (i >= argv.size()) {
@@ -4162,12 +4162,13 @@ int bi_hash(Shell &sh, const std::vector<std::string> &argv) {
       if (!list_l) std::printf("hash: hash table empty\n");
       return 0;
     }
+    // Both listings walk the hash table in bash's bucket order, not sorted.
     if (list_l)
-      for (const auto &kv : sh.hashed)
-        std::printf("builtin hash -p %s %s\n", kv.second.c_str(), kv.first.c_str());
+      for (const auto &k : sh.hashed_order())
+        std::printf("builtin hash -p %s %s\n", sh.hashed.at(k).c_str(), k.c_str());
     else {
       std::printf("hits\tcommand\n");
-      for (const auto &kv : sh.hashed) std::printf("%4d\t%s\n", 0, kv.second.c_str());
+      for (const auto &k : sh.hashed_order()) std::printf("%4d\t%s\n", 0, sh.hashed.at(k).c_str());
     }
     return 0;
   }
@@ -4193,7 +4194,7 @@ int bi_hash(Shell &sh, const std::vector<std::string> &argv) {
     }
     std::string p = find_in_path(sh, n);
     if (p.empty()) { std::fflush(stdout); std::fprintf(stderr, "%shash: %s: not found\n", sh.err_prefix().c_str(), n.c_str()); st = 1; }
-    else sh.hashed[n] = p;
+    else sh.hash_remember(n, p);
   }
   return st;
 }
@@ -4621,7 +4622,8 @@ int bi_alias(Shell &sh, const std::vector<std::string> &argv) {
         st = 1;
         continue;
       }
-      table[name] = a.substr(eq + 1);
+      if (kind == 0) sh.alias_remember(name, a.substr(eq + 1));
+      else table[name] = a.substr(eq + 1);
     }
   }
   return st;

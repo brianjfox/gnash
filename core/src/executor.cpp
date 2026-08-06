@@ -1619,7 +1619,7 @@ int Executor::run_simple(const SimpleCommand *c) {
           std::string fresh = find_in_path(sh_, argv[0]);
           if (!fresh.empty()) {
             exec_file = fresh;
-            sh_.hashed[argv[0]] = fresh;
+            sh_.hash_remember(argv[0], fresh);
           }
         }
       }

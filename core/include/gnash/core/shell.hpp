@@ -33,6 +33,11 @@ struct Variable {
   std::map<std::string, std::string> assoc;    // associative array
   std::vector<std::string> assoc_seq;          // assoc key insertion order (for
                                                // bash-compatible hash iteration)
+  // Simulated bash hash-table size: fresh `declare -A' tables have 1024
+  // buckets (ASSOC_HASH_BUCKETS); a scalar CONVERTED to an associative array
+  // gets 128 (convert_var_to_assoc -> assoc_create(0)), so the same keys
+  // enumerate differently (varenv11.sub relies on both).
+  unsigned assoc_buckets = 1024;
   bool exported = false;
   bool readonly = false;
   bool integer = false;
@@ -102,6 +107,10 @@ class Shell {
   // and within a bucket newest-first), so `${a[@]}' etc. match bash byte for
   // byte.  Public so `declare -p' can print in the same order.
   static std::vector<std::string> assoc_order(const Variable &v);
+  // bash hash-table enumeration order for KEYS given in insertion order:
+  // buckets 0..n-1, newest-first within a bucket (hashlib.c layout).
+  static std::vector<std::string> bash_hash_order(const std::vector<std::string> &insertion,
+                                                  unsigned buckets);
   std::string array_get(const std::string &n, const std::string &sub) const;
   // True when the array element NAME[sub] currently exists (is set), as opposed
   // to array_get returning "" for both an unset element and one set to "".  Used
@@ -188,9 +197,25 @@ class Shell {
   // --- shell state for builtins -----------------------------------------
   bool login_shell = false;                  // logout only works in a login shell
   std::map<std::string, std::string> hashed;  // `hash': command name -> full path
+  std::vector<std::string> hashed_seq;        // insertion order (bash hash-walk)
   std::map<std::string, bool> shopt_opts;     // `shopt' option states
   std::set<std::string> disabled_builtins;    // `enable -n': builtins turned off
   std::map<std::string, std::string> aliases;  // `alias': name -> expansion
+  std::vector<std::string> alias_seq;          // insertion order (bash hash-walk)
+  // Remember a command path / alias, recording first-insertion order: bash
+  // walks its hash tables bucket-by-bucket, so `hash', BASH_CMDS, and
+  // BASH_ALIASES enumerate in the simulated table order (256 / 64 buckets).
+  void hash_remember(const std::string &name, const std::string &path) {
+    if (!hashed.count(name)) hashed_seq.push_back(name);
+    hashed[name] = path;
+  }
+  void alias_remember(const std::string &name, const std::string &val) {
+    if (!aliases.count(name)) alias_seq.push_back(name);
+    aliases[name] = val;
+  }
+  // Live keys of the hash/alias tables in bash enumeration order.
+  std::vector<std::string> hashed_order() const;
+  std::vector<std::string> aliases_order() const;
   std::map<std::string, std::string> global_aliases;  // zsh `alias -g': expand anywhere
   std::map<std::string, std::string> suffix_aliases;  // zsh `alias -s ext=cmd'
   std::map<std::string, std::string> completions;  // `complete': name -> spec string

@@ -201,11 +201,11 @@ std::vector<std::string> Shell::bash_argv_view() const {
 bool Shell::virtual_array(const std::string &name,
                           std::vector<std::pair<std::string, std::string>> &pairs) const {
   if (name == "BASH_ALIASES") {
-    for (const auto &kv : aliases) pairs.emplace_back(kv.first, kv.second);
+    for (const auto &k : aliases_order()) pairs.emplace_back(k, aliases.at(k));
     return true;
   }
   if (name == "BASH_CMDS") {
-    for (const auto &kv : hashed) pairs.emplace_back(kv.first, kv.second);
+    for (const auto &k : hashed_order()) pairs.emplace_back(k, hashed.at(k));
     return true;
   }
   if (name == "DIRSTACK") {
@@ -575,31 +575,59 @@ static void assoc_put(Variable &v, const std::string &key, const std::string &va
 // Order an associative array's keys the way bash walks its hash table: by
 // bucket index (hash & (nbuckets-1)), then, within a bucket, newest key first
 // (bash prepends on insert).  Associative arrays use ASSOC_HASH_BUCKETS=1024.
-std::vector<std::string> Shell::assoc_order(const Variable &v) {
-  const unsigned kBuckets = 1024;
-  std::vector<std::string> keys;
-  keys.reserve(v.assoc.size());
-  // Insertion order: keys recorded in assoc_seq, then any stragglers not yet
-  // tracked (defensive, so a missed seq update never drops a key).
-  std::vector<const std::string *> ins;
-  for (const auto &k : v.assoc_seq)
-    if (v.assoc.count(k)) ins.push_back(&k);
-  for (const auto &kv : v.assoc) {
-    bool seen = false;
-    for (const auto *p : ins) if (*p == kv.first) { seen = true; break; }
-    if (!seen) ins.push_back(&kv.first);
-  }
+std::vector<std::string> Shell::bash_hash_order(const std::vector<std::string> &insertion,
+                                                unsigned buckets) {
   struct E { unsigned bucket; size_t seq; const std::string *key; };
   std::vector<E> es;
-  es.reserve(ins.size());
-  for (size_t s = 0; s < ins.size(); s++)
-    es.push_back({assoc_hash_string(*ins[s]) & (kBuckets - 1), s, ins[s]});
+  es.reserve(insertion.size());
+  for (size_t s = 0; s < insertion.size(); s++)
+    es.push_back({assoc_hash_string(insertion[s]) & (buckets - 1), s, &insertion[s]});
   std::stable_sort(es.begin(), es.end(), [](const E &a, const E &b) {
     if (a.bucket != b.bucket) return a.bucket < b.bucket;
     return a.seq > b.seq;  // newest-first within a bucket
   });
+  std::vector<std::string> keys;
+  keys.reserve(es.size());
   for (const auto &e : es) keys.push_back(*e.key);
   return keys;
+}
+
+// Enumeration order of a name->value table given its recorded insertion
+// sequence: stale seq entries (erased names) are skipped, untracked names
+// (defensive) appended, then bash's bucket layout applied.
+static std::vector<std::string> table_order(const std::map<std::string, std::string> &table,
+                                            const std::vector<std::string> &seq,
+                                            unsigned buckets) {
+  std::vector<std::string> ins;
+  ins.reserve(table.size());
+  for (const auto &k : seq)
+    if (table.count(k)) ins.push_back(k);
+  for (const auto &kv : table) {
+    bool seen = false;
+    for (const auto &p : ins) if (p == kv.first) { seen = true; break; }
+    if (!seen) ins.push_back(kv.first);
+  }
+  return Shell::bash_hash_order(ins, buckets);
+}
+
+// bash's hashed-command table has 256 buckets (FILENAME_HASH_BUCKETS), the
+// alias table 64 (ALIAS_HASH_BUCKETS).
+std::vector<std::string> Shell::hashed_order() const { return table_order(hashed, hashed_seq, 256); }
+std::vector<std::string> Shell::aliases_order() const { return table_order(aliases, alias_seq, 64); }
+
+std::vector<std::string> Shell::assoc_order(const Variable &v) {
+  // Insertion order: keys recorded in assoc_seq, then any stragglers not yet
+  // tracked (defensive, so a missed seq update never drops a key).
+  std::vector<std::string> ins;
+  ins.reserve(v.assoc.size());
+  for (const auto &k : v.assoc_seq)
+    if (v.assoc.count(k)) ins.push_back(k);
+  for (const auto &kv : v.assoc) {
+    bool seen = false;
+    for (const auto &p : ins) if (p == kv.first) { seen = true; break; }
+    if (!seen) ins.push_back(kv.first);
+  }
+  return bash_hash_order(ins, v.assoc_buckets);
 }
 
 std::vector<std::string> Shell::array_values(const std::string &n_in) const {
@@ -725,7 +753,7 @@ void Shell::array_set(const std::string &n_in, const std::string &sub, const std
       std::fprintf(stderr, "%s`%s': invalid alias name\n", err_prefix().c_str(), sub.c_str());
       return;
     }
-    aliases[sub] = val;
+    alias_remember(sub, val);
     return;
   }
   // BASH_CMDS is the live command hash: BASH_CMDS[name]=value adds a hash
@@ -737,7 +765,7 @@ void Shell::array_set(const std::string &n_in, const std::string &sub, const std
         std::fprintf(stderr, "%s%s: restricted\n", err_prefix().c_str(), val.c_str());
         return;
       }
-      hashed[sub] = val;
+      hash_remember(sub, val);
       return;
     }
     std::string path = get("PATH"), full;
@@ -755,7 +783,7 @@ void Shell::array_set(const std::string &n_in, const std::string &sub, const std
       std::fprintf(stderr, "%s%s: not found\n", err_prefix().c_str(), val.c_str());
       return;
     }
-    hashed[sub] = full;
+    hash_remember(sub, full);
     return;
   }
   // DIRSTACK is the live directory stack: DIRSTACK[N]=dir rewrites a stack entry
@@ -922,6 +950,17 @@ void Shell::make_array(const std::string &n_in, bool assoc) {
       v.idx[0] = v.value;
       v.value.clear();
     }
+    // Converting to an associative array keeps the old value under the string
+    // key "0" (bash convert_var_to_assoc), and the converted table simulates
+    // bash's 128-bucket layout (assoc_create(0)) -- only a fresh `declare -A'
+    // gets the 1024-bucket ASSOC_HASH_BUCKETS one, so the same keys can
+    // enumerate differently (varenv11.sub).
+    if (assoc && !v.value.empty()) {
+      v.assoc_seq.push_back("0");
+      v.assoc["0"] = v.value;
+      v.value.clear();
+    }
+    if (assoc && !fresh) v.assoc_buckets = 128;
     v.kind = assoc ? VarKind::Assoc : VarKind::Indexed;
   }
 }
