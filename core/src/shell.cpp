@@ -978,8 +978,15 @@ void Shell::array_assign(
                  n.c_str());
     return;
   }
+  bool existed = vars.count(n) != 0;
   Variable &v = vars[n];
-  if (v.readonly) return;
+  if (v.readonly) {
+    // A compound assignment to a readonly variable reports and assigns
+    // nothing (`readonly a=7; a=(1 2 3)' -- varenv11.sub).
+    std::fprintf(stderr, "%s%s: readonly variable\n", err_prefix().c_str(), n.c_str());
+    last_status = 1;
+    return;
+  }
   // Array-assigning to an unset nameref (deref stopped on the nameref itself)
   // converts it into a real array and drops the nameref attribute, with bash's
   // warning (assign_array_var_from_word_list -> make_variable_value).  A nameref
@@ -1000,6 +1007,12 @@ void Shell::array_assign(
     v.idx.clear();
     v.assoc.clear();
     v.assoc_seq.clear();
+    v.value.clear();
+  } else if (v.kind == VarKind::Scalar && existed && !v.invisible && !assoc) {
+    // Appending a compound to a SET scalar converts it keeping the old value
+    // as element 0: `s=X; s+=(Y)' -> ([0]="X" [1]="Y"), including the empty
+    // string (bash); an unset variable starts at [0] with the new elements.
+    v.idx[0] = v.value;
     v.value.clear();
   }
   v.kind = (assoc || v.kind == VarKind::Assoc) ? VarKind::Assoc : VarKind::Indexed;
