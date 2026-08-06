@@ -1352,6 +1352,22 @@ int bi_unset(Shell &sh, const std::vector<std::string> &argv) {
         ret = 1;
         continue;
       }
+      // A SET SCALAR is its own element 0: `unset scalar[0]' removes the whole
+      // variable, any OTHER subscript is `not an array variable' (bash); a
+      // missing variable stays a silent no-op above.
+      if (bit != sh.vars.end() && bit->second.kind == VarKind::Scalar &&
+          !bit->second.invisible) {
+        bool zok = true;
+        long long zk = eval_arith(sh, sub, &zok);
+        if (zok && zk == 0) {
+          sh.unset(bd);
+          continue;
+        }
+        std::fprintf(stderr, "%sunset: %s: not an array variable\n",
+                     sh.err_prefix().c_str(), bd.c_str());
+        ret = 1;
+        continue;
+      }
       // A negative subscript below the array's first element is rejected
       // (`unset a[-2]' on an empty or too-short indexed array); bash names just
       // the bracketed subscript, not the array.
@@ -2441,10 +2457,14 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
       continue;
     }
     std::string a_display = a;  // error display; subscript shown expanded
+    // Whether the (deref'd) variable existed BEFORE this word's processing --
+    // later attribute plumbing can create the cell as a side effect.
+    bool preexisting_target = false;
     std::vector<std::pair<std::optional<std::string>, std::string>> pre_elems;
     bool have_pre_elems = false;
     size_t nend = a.find_first_of("[=");
     std::string name = (nend == std::string::npos) ? a : a.substr(0, nend);
+    preexisting_target = !name.empty() && sh.vars.count(sh.deref(name)) != 0;
     size_t eq = a.find('=');
     // A `+=' just before the `=' means append.  For a bare scalar (`name+=')
     // the `+' is part of neither the name nor the value.
@@ -2730,11 +2750,45 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
           (cur->second.kind == VarKind::Indexed || cur->second.kind == VarKind::Assoc);
       bool unwrap_quoted = mk_array || mk_assoc ||
           (arrayvar && (argv[0] == "declare" || argv[0] == "typeset"));
-      if (!nameref && !arraylit && unwrap_quoted && val.size() >= 4 &&
-          (val.front() == '\'' || val.front() == '"') && val.back() == val.front() &&
-          val[1] == '(' && val[val.size() - 2] == ')') {
-        apply_assignment_word(sh, name + (append ? "+=" : "=") +
-                                      val.substr(1, val.size() - 2));
+      // Reparse a STRING compound against the EXPANDED value, so both the
+      // quoted-literal form (`declare -a d='(...)'`) and one reached through
+      // an expansion (`declare -a foo="$l"' with l='( zeroind )') become
+      // array literals -- and their elements expand a second time (bash's
+      // assign_array_var_from_string).  A SUBSCRIPTED declare never reparses:
+      // `declare a[1]='(var)'' stores the literal string (with bash's
+      // deprecation warning when the variable did not exist).
+      std::string exval;
+      bool exval_compound = false;
+      // A SUBSCRIPTED declare with an explicit -a/-A and a parenthesized value
+      // also reparses -- the subscript is dropped and the compound replaces
+      // the whole array (`declare -a e[10]='(test)'' -> [0]=test, bash).
+      bool sub_compound_ok = subscript && (mk_array || mk_assoc);
+      if (!nameref && !arraylit && (!subscript || sub_compound_ok) && unwrap_quoted &&
+          eq != std::string::npos) {
+        Expander vex(sh);
+        exval = vex.expand_assignment(val);
+        exval_compound = exval.size() >= 2 && exval.front() == '(' && exval.back() == ')';
+      }
+      if (subscript && !mk_array && !mk_assoc && !sh.is_zsh() && eq != std::string::npos) {
+        Expander wex(sh);
+        std::string ev = wex.expand_assignment(val);
+            if (ev.size() >= 2 && ev.front() == '(' && ev.back() == ')' && !preexisting_target)
+          std::fprintf(stderr, "%swarning: %s%s=%s: quoted compound array assignment deprecated\n",
+                       sh.err_prefix().c_str(), name.c_str(),
+                       a.substr(nend, (append ? eq - 1 : eq) - nend).c_str(), ev.c_str());
+      }
+      if (exval_compound) {
+        Expander pex2(sh);
+        auto elems2 = parse_array_elems(sh, pex2, name, integer, append, exval);
+        auto ivk = sh.vars.find(name);
+        if (integer || (ivk != sh.vars.end() && ivk->second.integer))
+          for (auto &e2 : elems2) {
+            bool iok2 = true;
+            e2.second = std::to_string(eval_arith(sh, e2.second, &iok2));
+          }
+        auto avk2 = sh.vars.find(name);
+        bool as_assoc2 = mk_assoc || (avk2 != sh.vars.end() && avk2->second.kind == VarKind::Assoc);
+        sh.array_assign(name, elems2, append, as_assoc2);
       } else if (have_pre_elems && arraylit && !nameref) {
         // The elements were expanded in the enclosing scope before make_local.
         auto avk = sh.vars.find(name);
@@ -3044,8 +3098,14 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     // reports `cannot destroy array variables in this way' and leaves it be
     // (a `+a'/`+A' on a non-array is a harmless no-op).
     if ((rm_assoc && v.kind == VarKind::Assoc) || (rm_array && v.kind == VarKind::Indexed)) {
-      std::fprintf(stderr, "%s%s: %s: cannot destroy array variables in this way\n",
-                   sh.err_prefix().c_str(), argv[0].c_str(), aname.c_str());
+      // A READONLY array reports the readonly violation instead (bash checks
+      // the attribute change first): `declare +a c' on readonly c.
+      if (v.readonly)
+        std::fprintf(stderr, "%s%s: %s: readonly variable\n", sh.err_prefix().c_str(),
+                     argv[0].c_str(), aname.c_str());
+      else
+        std::fprintf(stderr, "%s%s: %s: cannot destroy array variables in this way\n",
+                     sh.err_prefix().c_str(), argv[0].c_str(), aname.c_str());
       ret = 1;
       continue;
     }
