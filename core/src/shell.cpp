@@ -1849,6 +1849,10 @@ int Shell::run_script_lines(const std::string &text) {
       return;
     }
     lineno_base = pending_line - 1;
+    // bash reads file input with a guaranteed trailing newline; without it a
+    // here-document whose delimiter is the last line of the file would be
+    // (wrongly) reported as delimited by end-of-file.
+    if (pending.back() != '\n') pending += '\n';
     st = run_string(pending);
     lineno_base = 0;
     hist_cur_cmd_index = -1;
