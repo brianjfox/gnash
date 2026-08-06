@@ -20,6 +20,7 @@
 #include <memory>
 #include <string>
 
+#include "gnash/core/expand.hpp"
 #include "gnash/core/shell.hpp"
 
 namespace gnash::core {
@@ -65,6 +66,7 @@ constexpr const char *kBadNumber = "invalid number";
 constexpr const char *kTooGreat = "value too great for base";
 constexpr const char *kLvalue = "assignment requires lvalue";
 constexpr const char *kRecursion = "expression recursion level exceeded";
+constexpr const char *kBadOp = "arithmetic syntax error: invalid arithmetic operator";
 }  // namespace arith_err
 
 NodeP mk(K k) { auto n = std::make_unique<Node>(); n->k = k; return n; }
@@ -187,10 +189,44 @@ struct Parser {
     if (pos < s.size() && s[pos] == '[') {
       pos++;
       int bdepth = 1;
+      // The subscript is captured RAW for one-shot expansion at evaluation;
+      // quoted spans and $(...) substitutions are opaque to the bracket
+      // balance, so `assoc['$k']' and `a[$(cmd)]' span correctly.
       while (pos < s.size() && bdepth > 0) {
-        if (s[pos] == '[') bdepth++;
-        else if (s[pos] == ']') { if (--bdepth == 0) { pos++; break; } }
-        if (bdepth > 0) n.sub += s[pos];
+        char c2 = s[pos];
+        if (c2 == '\\' && pos + 1 < s.size()) {
+          n.sub += c2; n.sub += s[pos + 1]; pos += 2; continue;
+        }
+        if (c2 == '\'') {
+          n.sub += c2;
+          while (++pos < s.size() && s[pos] != '\'') n.sub += s[pos];
+          if (pos < s.size()) { n.sub += '\''; pos++; }
+          continue;
+        }
+        if (c2 == '"') {
+          n.sub += c2;
+          while (++pos < s.size() && s[pos] != '"') {
+            if (s[pos] == '\\' && pos + 1 < s.size()) n.sub += s[pos++];
+            n.sub += s[pos];
+          }
+          if (pos < s.size()) { n.sub += '"'; pos++; }
+          continue;
+        }
+        if (c2 == '$' && pos + 1 < s.size() && s[pos + 1] == '(') {
+          n.sub += "$(";
+          pos += 2;
+          int pd = 1;
+          while (pos < s.size() && pd > 0) {
+            if (s[pos] == '(') pd++;
+            else if (s[pos] == ')') pd--;
+            n.sub += s[pos];
+            pos++;
+          }
+          continue;
+        }
+        if (c2 == '[') bdepth++;
+        else if (c2 == ']') { if (--bdepth == 0) { pos++; break; } }
+        if (bdepth > 0) n.sub += c2;
         pos++;
       }
       n.has_sub = true;
@@ -495,6 +531,8 @@ Parsed parse_cached(const std::string &expr) {
              std::strchr("+-*/%&^|", expr[q]) && expr.compare(q, 2, "&&") != 0 &&
              expr.compare(q, 2, "||") != 0)
       p.note(arith_err::kNonVar, q);  // +=, -=, ...: assign to non-lvalue
+    else if (expr[q] == ']')
+      p.note(arith_err::kBadOp, q);  // a stray `]': bash's invalid-operator error
     else
       p.note(arith_err::kExpr, q);
   }
@@ -532,6 +570,15 @@ struct Ctx {
   // expression: `A="4 + "; $((A))' -> `4 + : ... operand expected').  When
   // set, eval_arith_msg prints it verbatim instead of formatting err_msg.
   std::string full_msg;
+  // full_msg prints WITHOUT the command prefix (bash reports a subscript
+  // evaluation failure from the array layer, with no `((: ').
+  bool full_msg_bare = false;
+  // How subscripts are treated: 0 = legacy pre-expanded, silent ([[ and
+  // internal callers); 1 = arithmetic SOURCE text ((( )), $(( )), $[ ]) --
+  // the raw subscript is word-expanded once by the evaluator; 2 = already
+  // word-expanded arithmetic (`let') -- no re-expansion, but double-quote
+  // CHARS in the text are removable arithmetic quoting.
+  int expand_subs = 0;
   void note(const std::string &m, size_t p) {
     if (err_pos == std::string::npos) { err_pos = p; err_msg = m; }
     ok = false;
@@ -570,7 +617,7 @@ long long eval_string(Shell &sh, const std::string &str, int depth, bool *ok) {
   if (blank_expr(str)) { if (ok) *ok = true; return 0; }
   if (try_int(str, iv)) { if (ok) *ok = true; return iv; }
   Parsed p = parse_cached(str);
-  Ctx ctx{sh, p.ok, depth, p.err_pos, p.err_msg, nullptr, {}};  // carry any parse error forward
+  Ctx ctx{sh, p.ok, depth, p.err_pos, p.err_msg, nullptr, {}, false, 0};  // carry any parse error forward
   long long v = eval_node(p.root.get(), ctx);
   if (ok) *ok = ctx.ok;
   return v;
@@ -584,14 +631,78 @@ long long eval_string(Shell &sh, const std::string &str, int depth, bool *ok) {
 // associative key passes through untouched.
 static bool resolve_sub(const Node *n, Ctx &ctx, std::string &out) {
   out = n->sub;
-  if (!ctx.sh.array_expand_once_ok(n->name, out)) { ctx.ok = false; return false; }
+  auto kind_of = [&]() {
+    auto it = ctx.sh.vars.find(ctx.sh.deref(n->name));
+    return it != ctx.sh.vars.end() && it->second.kind == VarKind::Assoc;
+  };
+  if (ctx.expand_subs == 0) {
+    // Pre-expanded context ([[ operands, let, assignments): the text IS the
+    // final subscript; nothing here may expand or execute it again.
+    if (!ctx.sh.array_expand_once_ok(n->name, out)) { ctx.ok = false; return false; }
+    out = ctx.sh.zsh_subscript(n->name, out);
+    if (!kind_of()) {
+      if (blank_expr(out)) { out = "0"; return true; }
+      long long k;
+      if (!try_int(out, k)) {
+        Parsed p = parse_cached(out);
+        Ctx sc{ctx.sh, p.ok, ctx.depth + 1, p.err_pos, p.err_msg, ctx.cmd_name, {}, false, 0};
+        k = eval_node(p.root.get(), sc);
+        if (!sc.ok) {
+          ctx.ok = false;
+          // `let' reports a bad subscript (bare, from the array layer);
+          // other pre-expanded contexts stay silent as before.
+          if (ctx.cmd_name && std::strcmp(ctx.cmd_name, "let") == 0) {
+            ctx.full_msg = !sc.full_msg.empty()
+                               ? sc.full_msg
+                               : format_arith_err(out, sc.err_msg, sc.err_pos);
+            ctx.full_msg_bare = true;
+          }
+          return false;
+        }
+      }
+      out = std::to_string(k);
+    }
+    return true;
+  }
+  // Arithmetic context: the raw subscript is expanded exactly ONCE here
+  // (parameter/command/arithmetic expansion with quote removal), as bash
+  // does at evaluation: `assoc[$key]' keys on $key's VALUE, `assoc['$key']'
+  // on the literal string $key -- and the result is never re-scanned, so a
+  // `]' or `$(' in a value is inert data.
+  if (ctx.expand_subs == 1 && out.find_first_of("$`'\"\\") != std::string::npos) {
+    Expander ex(ctx.sh);
+    out = ex.expand_no_split(out);
+  }
   out = ctx.sh.zsh_subscript(n->name, out);
-  auto it = ctx.sh.vars.find(ctx.sh.deref(n->name));
-  bool assoc = it != ctx.sh.vars.end() && it->second.kind == VarKind::Assoc;
-  if (!assoc) {
-    bool o = true;
-    long long k = eval_string(ctx.sh, out, ctx.depth + 1, &o);
-    if (!o) { ctx.ok = false; return false; }
+  if (!kind_of()) {
+    // An indexed (or undeclared) target: an EMPTY word-expanded subscript is
+    // bash's `a[]': not a valid identifier; otherwise double-quote CHARS are
+    // removed (arithmetic expansion treats them as removable quoting, so
+    // `a[\" \"]' indexes 0) and the result is arith-evaluated.  A malformed
+    // subscript aborts with bash's diagnostic naming the SUBSCRIPT.
+    if (out.empty()) {
+      ctx.ok = false;
+      ctx.full_msg = "`" + n->name + "[]': not a valid identifier";
+      return false;
+    }
+    std::string ev;
+    for (char c : out)
+      if (c != '"') ev += c;
+    if (blank_expr(ev)) { out = "0"; return true; }
+    long long k;
+    if (!try_int(ev, k)) {
+      Parsed p = parse_cached(ev);
+      Ctx sc{ctx.sh, p.ok, ctx.depth + 1, p.err_pos, p.err_msg, ctx.cmd_name, {}, false, ctx.expand_subs};
+      k = eval_node(p.root.get(), sc);
+      if (!sc.ok) {
+        ctx.ok = false;
+        ctx.full_msg = !sc.full_msg.empty()
+                           ? sc.full_msg
+                           : format_arith_err(ev, sc.err_msg, sc.err_pos);
+        ctx.full_msg_bare = true;
+        return false;
+      }
+    }
     out = std::to_string(k);
   }
   return true;
@@ -607,9 +718,9 @@ long long ref_get(const Node *n, Ctx &ctx, const std::string *rsub = nullptr) {
     if (rsub) {
       v = ctx.sh.array_get(n->name, *rsub);
     } else {
-      std::string sub = n->sub;
-      if (!ctx.sh.array_expand_once_ok(n->name, sub)) { ctx.ok = false; return 0; }
-      v = ctx.sh.array_get(n->name, ctx.sh.zsh_subscript(n->name, sub));
+      std::string rs;
+      if (!resolve_sub(n, ctx, rs)) return 0;
+      v = ctx.sh.array_get(n->name, rs);
     }
     // For nounset, an element of a wholly unset variable counts as unbound
     // (bash blames the bare NAME: `a[0] > 4' -> `a: unbound variable').
@@ -644,13 +755,16 @@ long long ref_get(const Node *n, Ctx &ctx, const std::string *rsub = nullptr) {
   // $(( A + 4 ))') aborts the whole expression, and the diagnostic names the
   // VALUE as the failing expression, exactly as bash reports it.
   Parsed p = parse_cached(v);
-  Ctx sub{ctx.sh, p.ok, ctx.depth + 1, p.err_pos, p.err_msg, ctx.cmd_name, {}};
+  Ctx sub{ctx.sh, p.ok, ctx.depth + 1, p.err_pos, p.err_msg, ctx.cmd_name, {}, false, ctx.expand_subs};
   long long r = eval_node(p.root.get(), sub);
   if (!sub.ok) {
     ctx.ok = false;
-    if (!sub.full_msg.empty()) ctx.full_msg = sub.full_msg;
-    else if (sub.err_pos != std::string::npos)
+    if (!sub.full_msg.empty()) {
+      ctx.full_msg = sub.full_msg;
+      ctx.full_msg_bare = sub.full_msg_bare;
+    } else if (sub.err_pos != std::string::npos) {
       ctx.full_msg = format_arith_err(v, sub.err_msg, sub.err_pos);
+    }
     return 0;
   }
   return r;
@@ -662,9 +776,9 @@ void ref_set(const Node *n, long long val, Ctx &ctx, const std::string *rsub = n
       ctx.sh.array_set(n->name, *rsub, std::to_string(val));
       return;
     }
-    std::string sub = n->sub;
-    if (!ctx.sh.array_expand_once_ok(n->name, sub)) { ctx.ok = false; return; }
-    ctx.sh.array_set(n->name, ctx.sh.zsh_subscript(n->name, sub), std::to_string(val));
+    std::string rs;
+    if (!resolve_sub(n, ctx, rs)) return;
+    ctx.sh.array_set(n->name, rs, std::to_string(val));
     return;
   }
   // A bare array name in arithmetic reads and WRITES element 0 (`x=(1 2);
@@ -771,20 +885,21 @@ long long eval_arith(Shell &sh, const std::string &expr, bool *ok) {
 //   [SHELL: line N: ][CMD_NAME: ]EXPR: MESSAGE (error token is "TOKEN")
 // CMD_NAME is "" for $((...)), "((" for the (( )) command, "let" for `let'.
 long long eval_arith_msg(Shell &sh, const std::string &expr, const char *cmd_name,
-                         bool *ok) {
+                         bool *ok, int expand_subs) {
   long long iv;
   if (blank_expr(expr)) { if (ok) *ok = true; return 0; }
   if (try_int(expr, iv)) { if (ok) *ok = true; return iv; }
   Parsed p = parse_cached(expr);
-  Ctx ctx{sh, p.ok, 0, p.err_pos, p.err_msg, cmd_name, {}};
+  Ctx ctx{sh, p.ok, 0, p.err_pos, p.err_msg, cmd_name, {}, false, expand_subs};
   long long v = eval_node(p.root.get(), ctx);
   if (ok) *ok = ctx.ok;
   std::string prefix = (cmd_name && cmd_name[0]) ? std::string(cmd_name) + ": " : "";
   if (!ctx.ok && !ctx.full_msg.empty()) {
     // A nested value-evaluation failure carries its own fully formatted
-    // diagnostic naming the VALUE as the expression.
-    std::fprintf(stderr, "%s%s%s\n", sh.err_prefix().c_str(), prefix.c_str(),
-                 ctx.full_msg.c_str());
+    // diagnostic naming the VALUE as the expression; a subscript failure
+    // prints bare (no `((: ' prefix), as bash's array layer does.
+    std::fprintf(stderr, "%s%s%s\n", sh.err_prefix().c_str(),
+                 ctx.full_msg_bare ? "" : prefix.c_str(), ctx.full_msg.c_str());
   } else if (!ctx.ok && ctx.err_pos != std::string::npos && ctx.err_pos <= expr.size()) {
     std::fprintf(stderr, "%s%s%s\n", sh.err_prefix().c_str(), prefix.c_str(),
                  format_arith_err(expr, ctx.err_msg, ctx.err_pos).c_str());

@@ -41,7 +41,7 @@ class Executor {
   // short-circuit, so a runaway command aborts back to the REPL prompt.
   bool unwinding() const {
     return sh_.break_count || sh_.continue_count || sh_.returning ||
-           sh_.exiting || g_sigint_received;
+           sh_.exiting || sh_.arith_abort || g_sigint_received;
   }
 };
 

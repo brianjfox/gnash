@@ -930,7 +930,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
     if (end != std::string::npos) {
       std::string expr = t.substr(i + 3, (end - 1) - (i + 3));
       bool ok = true;
-      long long v = eval_arith_msg(sh_, expand_arith(expr), "", &ok);
+      long long v = eval_arith_msg(sh_, expand_arith(expr), "", &ok, /*expand_subs=*/1);
       if (!ok) { sh_.arith_error = true; i = end + 1; return; }
       std::string s = std::to_string(v);
       for (char c : s) { out += c; mask += qm; }
@@ -944,7 +944,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
     if (end != std::string::npos) {
       std::string expr = t.substr(i + 2, end - (i + 2));
       bool ok = true;
-      long long v = eval_arith_msg(sh_, expand_arith(expr), "", &ok);
+      long long v = eval_arith_msg(sh_, expand_arith(expr), "", &ok, /*expand_subs=*/1);
       if (!ok) { sh_.arith_error = true; i = end + 1; return; }
       std::string s = std::to_string(v);
       for (char c : s) { out += c; mask += qm; }
@@ -2396,6 +2396,32 @@ std::string Expander::expand_arith(const std::string &text) {
   size_t i = 0;
   while (i < text.size()) {
     char c = text[i];
+    // A `NAME[...]' array subscript is copied RAW: the arithmetic evaluator
+    // expands it exactly once itself (bash expands subscripts at evaluation,
+    // so `(( assoc[$key]++ ))' with `]'/`$(' in $key's VALUE keys on the
+    // literal value and never re-scans or executes it).
+    if (c == '[' && !out.empty() &&
+        (std::isalnum(static_cast<unsigned char>(out.back())) || out.back() == '_')) {
+      int bd = 0;
+      size_t j = i;
+      for (; j < text.size(); j++) {
+        char b = text[j];
+        if (b == '\\' && j + 1 < text.size()) { j++; continue; }
+        if (b == '\'') { while (++j < text.size() && text[j] != '\'') {} continue; }
+        if (b == '"') { while (++j < text.size() && text[j] != '"') if (text[j] == '\\') j++; continue; }
+        if (b == '$' && j + 1 < text.size() && text[j + 1] == '(') {
+          size_t e = scan_balanced(text, j + 1, '(', ')');
+          if (e != std::string::npos) { j = e; continue; }
+        }
+        if (b == '[') bd++;
+        else if (b == ']' && --bd == 0) break;
+      }
+      if (j < text.size()) {  // balanced: emit the span untouched
+        for (size_t k = i; k <= j; k++) { out += text[k]; mask += '0'; }
+        i = j + 1;
+        continue;
+      }
+    }
     if (c == '\\' && i + 1 < text.size() &&
         (text[i + 1] == '$' || text[i + 1] == '`' || text[i + 1] == '"' ||
          text[i + 1] == '\\')) {
