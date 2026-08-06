@@ -1547,7 +1547,8 @@ bool set_o_option(Shell &sh, const std::string &o, bool on) {
   else if (o == "ignoreeof") { if (on) sh.set("IGNOREEOF", "10"); else sh.unset("IGNOREEOF"); }
   // Valid bash `set -o' names whose behavior is unimplemented: accept as no-ops
   // (a script may set them; erroring would diverge from bash, which knows them).
-  else if (o == "allexport" || o == "braceexpand" ||
+  else if (o == "allexport") sh.opt_allexport = on;
+  else if (o == "braceexpand" ||
            o == "interactive-comments" || o == "nolog" ||
            o == "notify" || o == "onecmd")
     ;  // no-op
@@ -1563,7 +1564,7 @@ bool set_o_option(Shell &sh, const std::string &o, bool on) {
 std::vector<std::pair<std::string, bool>> set_option_states(Shell &sh) {
   bool i = sh.interactive;
   return {
-      {"allexport", false},   {"braceexpand", true},
+      {"allexport", sh.opt_allexport},   {"braceexpand", true},
       {"emacs", i ? (rl_editing_mode == 1) : sh.opt_emacs},
       {"errexit", sh.opt_errexit},
       {"errtrace", sh.opt_functrace}, {"functrace", sh.opt_functrace},
@@ -1659,7 +1660,8 @@ int bi_set(Shell &sh, const std::vector<std::string> &argv) {
           case 'h': sh.opt_hashall = on; break;  // -h/+h: hashall
           // Flags accepted as no-ops where the behavior is unimplemented:
           // allexport/notify/onecmd/braceexpand.
-          case 'a': case 'b': case 't': case 'B': break;
+          case 'a': sh.opt_allexport = on; break;  // allexport: assignments export
+          case 'b': case 't': case 'B': break;
           default:
             std::fprintf(stderr, "%sset: %c%c: invalid option\n", sh.err_prefix().c_str(),
                          a[0], a[k]);

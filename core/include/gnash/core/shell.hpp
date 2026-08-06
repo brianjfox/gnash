@@ -417,6 +417,7 @@ class Shell {
   bool opt_noexec = false;    // -n: read/parse commands but don't execute them
   bool opt_pipefail = false;  // -o pipefail: pipeline status = last non-zero stage
   bool opt_noclobber = false; // -C / -o noclobber: `>' won't overwrite an existing file
+  bool opt_allexport = false; // -a / -o allexport: every assignment marks the var exported
   bool opt_functrace = false; // -T / -o functrace: DEBUG/RETURN traps inherited
   bool opt_history = false;     // -o history: record command lines in the history
   bool opt_histexpand = false;  // -H / -o histexpand: `!' history expansion

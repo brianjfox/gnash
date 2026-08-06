@@ -1422,6 +1422,8 @@ bool Shell::set(const std::string &n_in, const std::string &v,
   }
   var.value = v;
   var.invisible = false;  // an assignment makes a declared-but-unset scalar visible
+  // `set -a': every assignment marks the variable for export (bash allexport).
+  if (opt_allexport) var.exported = true;
   // Setting POSIXLY_CORRECT (to any value) enables POSIX mode, as in bash.
   if (n == "POSIXLY_CORRECT") opt_posix = true;
   // A locale assignment re-applies LC_CTYPE so multibyte handling follows it.
