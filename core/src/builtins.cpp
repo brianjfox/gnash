@@ -1635,7 +1635,11 @@ int bi_set(Shell &sh, const std::vector<std::string> &argv) {
             }
             break;
           case 'o': {
-            if (i + 1 >= argv.size()) {
+            // A missing argument -- or one that itself looks like an option
+            // (`set -o -B') -- means the bare-`-o' listing; the option word
+            // then gets parsed normally (bash).
+            if (i + 1 >= argv.size() ||
+                (!argv[i + 1].empty() && (argv[i + 1][0] == '-' || argv[i + 1][0] == '+'))) {
               // `set -o' lists states; `set +o' reproduces as commands.
               for (const auto &o : set_option_states(sh)) {
                 if (on) std::printf("%-15s\t%s\n", o.first.c_str(), o.second ? "on" : "off");
