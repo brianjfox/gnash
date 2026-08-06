@@ -2215,10 +2215,28 @@ int Executor::run_funcdef(const FunctionDef *c) {
   // bash rejects a function name that contained an unquoted `$' expansion
   // (W_HASDOLLAR) -- e.g. `function sys$read' -- or any quoting (`'a b c' ()')
   // as not a valid identifier; the raw word, quotes included, is echoed.
-  if (c->name.find_first_of("$'\"\\") != std::string::npos) {
+  if (c->name.find_first_of("$'\"\\") != std::string::npos ||
+      // A process-substitution-shaped name (`<(:) ()') is likewise rejected.
+      ((c->name[0] == '<' || c->name[0] == '>') && c->name.size() > 1 && c->name[1] == '(')) {
     std::fprintf(stderr, "%s`%s': not a valid identifier\n",
                  sh_.err_prefix().c_str(), c->name.c_str());
     return (sh_.last_status = 1);
+  }
+  // Posix interpretation 383: a function may not have the name of a special
+  // builtin.  bash reports it and aborts a non-interactive shell outright
+  // (jump_to_top_level(ERREXIT) with EX_BADUSAGE).
+  if (sh_.opt_posix) {
+    static const std::set<std::string> kSpecialB = {
+        ":",      ".",     "break", "continue", "eval",  "exec",
+        "exit",   "export", "readonly", "return", "set", "shift",
+        "source", "times", "trap",  "unset"};
+    if (kSpecialB.count(c->name)) {
+      std::fprintf(stderr, "%s`%s': is a special builtin\n", sh_.err_prefix().c_str(),
+                   c->name.c_str());
+      sh_.last_status = 2;
+      if (!sh_.interactive) { sh_.exiting = true; sh_.exit_status = 2; }
+      return 2;
+    }
   }
   // A readonly function cannot be redefined.
   if (sh_.readonly_functions.count(c->name)) {
