@@ -1263,8 +1263,16 @@ int bi_unset(Shell &sh, const std::vector<std::string> &argv) {
     }
     // A malformed element reference (an unbalanced bracket from word
     // splitting, e.g. `unset a[$(echo' + `foo)]') is a SILENT no-op in bash.
+    // EXCEPT when the base names an associative array: its subscript spans to
+    // the LAST `]' and may itself be a bracket (`unset A[]]' removes key `]',
+    // `unset A[[]' key `[' -- assoc17.sub), so no balance check applies.
     size_t lb = argv[i].find('[');
-    if (!noref && !expand_once_on(sh) &&
+    bool assoc_base = false;
+    if (lb != std::string::npos && lb > 0 && !argv[i].empty() && argv[i].back() == ']') {
+      auto abit = sh.vars.find(sh.deref(argv[i].substr(0, lb)));
+      assoc_base = abit != sh.vars.end() && abit->second.kind == VarKind::Assoc;
+    }
+    if (!noref && !expand_once_on(sh) && !assoc_base &&
         (lb != std::string::npos || argv[i].find(']') != std::string::npos) &&
         !well_formed_element(argv[i], /*allow_empty=*/true)) {
       continue;
@@ -1294,6 +1302,28 @@ int bi_unset(Shell &sh, const std::vector<std::string> &argv) {
       if (bit != sh.vars.end() && !sh.array_expand_once_ok(base, sub)) {
         ret = 1;
         continue;
+      }
+      // WITHOUT assoc_expand_once, an associative subscript is expanded a
+      // second time by unset itself (`unset -v "b[\$x]"' removes the key $x
+      // names -- assoc9.sub) -- EXCEPT under BASH_COMPAT <= 51, whose pre-5.2
+      // semantics take the text literally (`unset 'map[foo$(cmd)bar]'' removes
+      // that key without ever running the command substitution --
+      // quotearray3.sub).  A re-expansion that comes up empty is a bad
+      // subscript when the text had a `$' (an unset variable); otherwise the
+      // literal text stands (a lone `"' stays `"').
+      std::string ucompat = sh.get("BASH_COMPAT");
+      long ucv = ucompat.empty() ? 99 : std::strtol(ucompat.c_str(), nullptr, 10);
+      if (bit != sh.vars.end() && bit->second.kind == VarKind::Assoc &&
+          !expand_once_on(sh) && !(ucv > 0 && ucv <= 51) && sub != "@" && sub != "*") {
+        Expander uex(sh);
+        std::string esub = uex.expand_no_split(sub);
+        if (esub.empty() && sub.find('$') != std::string::npos) {
+          std::fprintf(stderr, "%sunset: [%s]: bad array subscript\n",
+                       sh.err_prefix().c_str(), sub.c_str());
+          ret = 1;
+          continue;
+        }
+        if (!esub.empty()) sub = esub;
       }
       if (bit != sh.vars.end() && bit->second.readonly) {
         std::fprintf(stderr, "%sunset: %s: cannot unset: readonly variable\n",
