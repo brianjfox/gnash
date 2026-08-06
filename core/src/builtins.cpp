@@ -5535,12 +5535,27 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
       }
     }
   } else if (cmd == "exit") {
-    sh.exiting = true;
-    sh.exit_status = argv.size() > 1 ? (std::atoi(argv[1].c_str()) & 0xff) : sh.last_status;
-    st = sh.exit_status;
-    // `exit' inside a function runs the EXIT trap with that function's frame
-    // still active ($FUNCNAME), so snapshot the call stack before it unwinds.
-    if (sh.in_function()) { sh.exit_src_frames = sh.src_frames; sh.have_exit_frames = true; }
+    size_t ci = 1;
+    if (ci < argv.size() && argv[ci] == "--") ci++;
+    const std::string a = ci < argv.size() ? argv[ci] : std::string();
+    char *end = nullptr;
+    long v = a.empty() ? sh.last_status : std::strtol(a.c_str(), &end, 10);
+    if (!a.empty() && (end == a.c_str() || *end != '\0')) {
+      // A non-numeric argument is no longer a fatal error: bash reports it
+      // and the shell CONTINUES with status 2 (posix mode still treats the
+      // special-builtin error as fatal).
+      std::fprintf(stderr, "%sexit: %s: numeric argument required\n",
+                   sh.err_prefix().c_str(), a.c_str());
+      st = 2;
+      sh.posix_special_builtin_error(st);
+    } else {
+      sh.exiting = true;
+      sh.exit_status = static_cast<int>(v) & 0xff;
+      st = sh.exit_status;
+      // `exit' inside a function runs the EXIT trap with that function's frame
+      // still active ($FUNCNAME), so snapshot the call stack before it unwinds.
+      if (sh.in_function()) { sh.exit_src_frames = sh.src_frames; sh.have_exit_frames = true; }
+    }
   } else if (cmd == "return") {
     // `return' is only meaningful in a function or a sourced script; elsewhere
     // it is an error and must not unwind the current input (bash).
