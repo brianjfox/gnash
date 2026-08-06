@@ -176,6 +176,12 @@ class Shell {
   // itself ran `set' (source.def uw_maybe_pop_dollar_vars / ARGS_SETBLTIN),
   // and clears the flag after every such source.
   bool params_set_builtin = false;
+
+  // Set when `exec 0< file' rebinds fd 0 while commands are being read from
+  // standard input: the driver discards its buffered text and re-reads from
+  // the NEW fd 0 (`${SH} < redir1.sub' with `exec 0< redir2.sub' continues
+  // in redir2.sub -- redir.tests).
+  bool stdin_source_changed = false;
   std::vector<std::vector<std::pair<std::string, std::optional<Variable>>>> local_stack;
   // Per-scope saved getopt state, set when that scope localizes OPTIND.
   std::vector<std::optional<std::tuple<size_t, std::string, int>>> getopt_scope_saves;

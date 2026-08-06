@@ -877,11 +877,21 @@ int Executor::run(const Command *c) {
   if (auto *p = dynamic_cast<const SimpleCommand *>(c)) return run_simple(p);
   if (auto *p = dynamic_cast<const Connection *>(c)) return run_connection(p);
 
-  // Compound commands: apply redirects in-process around the body.
+  // Compound commands: apply redirects in-process around the body.  A
+  // redirection failure runs the ERR trap and is fatal under `set -e',
+  // exactly like a failing simple command (redir12.sub).
   std::vector<SavedFd> saved;
   if (!apply_redirects(sh_, c->redirects, saved)) {
     restore_fds(saved);
-    return (sh_.last_status = 1);
+    sh_.last_status = 1;
+    if (sh_.errexit_suppress == 0 && !unwinding()) {
+      sh_.run_err_trap(1);
+      if (sh_.opt_errexit) {
+        sh_.exiting = true;
+        sh_.exit_status = 1;
+      }
+    }
+    return sh_.last_status;
   }
   int st = sh_.last_status;
   if (auto *pa = dynamic_cast<const Subshell *>(c)) st = run_subshell(pa);
@@ -953,6 +963,7 @@ int Executor::run_connection(const Connection *c) {
         sh_.job_control = false;  // background: descendants must not touch the tty
         sh_.subshell_level++;
         sh_.traps.erase("CHLD");  // the parent fires CHLD when it reaps this job
+        if (!sh_.opt_functrace) sh_.traps.erase("ERR");  // not inherited without -E
         sh_.pending_sigchld = 0;
         Executor ex(sh_);
         int s = ex.run(c->first.get());
@@ -1788,8 +1799,14 @@ int Executor::run_simple(const SimpleCommand *c) {
   flush_builtin_stdout();
   // `exec' makes its redirections permanent in the current shell (this path is
   // only reached when exec had no command word, or its exec failed).
-  if (builtin && !argv.empty() && argv[0] == "exec" && status == 0)
+  if (builtin && !argv.empty() && argv[0] == "exec" && status == 0) {
+    // `exec 0< file' while reading commands from stdin swaps the command
+    // source: tell the stdin driver to re-read from the new fd 0.
+    if (sh_.invocation_char == 's')
+      for (const SavedFd &sf : saved)
+        if (sf.fd == 0) sh_.stdin_source_changed = true;
     discard_saved_fds(saved);
+  }
   else
     restore_fds(saved);
   if (c->flags & CMD_INVERT_RETURN) status = status ? 0 : 1;
@@ -1845,6 +1862,7 @@ int Executor::run_coproc(const CoprocCommand *c) {
     sh_.job_control = false;
     sh_.subshell_level++;
     sh_.traps.erase("CHLD");  // the parent fires CHLD when it reaps this job
+    if (!sh_.opt_functrace) sh_.traps.erase("ERR");  // not inherited without -E
     sh_.pending_sigchld = 0;
     Executor ex(sh_);
     int s = ex.run(c->body.get());
@@ -1886,6 +1904,7 @@ int Executor::run_subshell(const Subshell *c) {
     // itself runs when it exits.
     sh_.traps.erase("EXIT");
     sh_.traps.erase("CHLD");  // the parent fires CHLD for the subshell as a whole
+    if (!sh_.opt_functrace) sh_.traps.erase("ERR");  // not inherited without -E
     sh_.pending_sigchld = 0;
     // (external): a lone simple command can exec in place, no second fork.
     if (dynamic_cast<const SimpleCommand *>(c->body.get())) sh_.can_exec_replace = true;
