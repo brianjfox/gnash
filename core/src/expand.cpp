@@ -89,6 +89,9 @@ size_t scan_balanced(const std::string &t, size_t i, char open, char close,
   for (; i < t.size(); i++) {
     char c = t[i];
     if (case_aware && c == '<' && i + 1 < t.size() && t[i + 1] == '<' &&
+        i + 2 < t.size() && t[i + 2] == '<') {
+      i += 2;  // `<<<' here-string: skip the operator whole (loop adds 1)
+    } else if (case_aware && c == '<' && i + 1 < t.size() && t[i + 1] == '<' &&
         !(i + 2 < t.size() && t[i + 2] == '<')) {
       // Remember a here-document delimiter; its body lines are skipped
       // verbatim at the next newline (a `)' in them is not the closer).

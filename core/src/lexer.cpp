@@ -53,6 +53,12 @@ struct Pending {
   std::string delim;   // dequoted delimiter
   bool strip;          // <<- strips leading tabs
   bool quoted;         // delimiter was quoted
+  // A here-document left pending when a $(...) closed on the same line: the
+  // collected body is SPLICED into the word's text at splice_at (before the
+  // substitution's closer) so the inner command reads it, instead of being
+  // attached to a redirection.
+  bool comsub = false;
+  std::size_t splice_at = 0;
 };
 
 struct Lexer {
@@ -61,6 +67,13 @@ struct Lexer {
   std::size_t n;
   std::vector<Token> out;
   std::vector<Pending> pending;
+  // Heredocs pending when a $(...) closed mid-line (bash warns `command
+  // substitution: N unterminated here-document'); converted into comsub
+  // Pending entries when the containing word token lands.
+  struct CarryHd { std::string delim; bool strip; std::size_t splice_at; };
+  std::vector<CarryHd> comsub_carry;
+  int comsub_unterm = 0;
+  int comsub_unterm_line = 0;
   int awaiting = -1;  // -1 none, 0 <<, 1 <<-
   bool unterminated = false;
   char unterm_close = 0;  // the closer we were looking for at EOF
@@ -143,9 +156,10 @@ struct Lexer {
     if (pos < n) w += in[pos++];
     else { unterminated = true; if (!unterm_close) unterm_close = '`'; }
   }
-  void scan_paren(std::string &w) {  // pos at '('
+  void scan_paren(std::string &w, bool comsub_ctx = false) {  // pos at '('
     int depth = 0;
-    std::vector<std::pair<std::string, bool>> paren_heredocs;  // delim, <<-
+    struct PHd { std::string delim; bool strip; int depth; };
+    std::vector<PHd> paren_heredocs;  // pending heredocs inside the parens
     // A `)' that terminates a `case' pattern (`case x in x)') must not be
     // mistaken for the substitution's closing paren.  Track the paren depth of
     // each active (command-position) `case' body; a `)' at that depth is a
@@ -189,6 +203,14 @@ struct Lexer {
         }
         cmd_pos = true;
       } else if (c == '<' && pos + 1 < n && in[pos + 1] == '<' &&
+                 pos + 2 < n && in[pos + 2] == '<') {
+        // `<<<' here-string: consume the whole operator so its tail is not
+        // re-scanned as a here-document opener.
+        w += "<<<";
+        pos += 3;
+        saw_word = true;
+        word_plain = false;
+      } else if (c == '<' && pos + 1 < n && in[pos + 1] == '<' &&
                  !(pos + 2 < n && in[pos + 2] == '<')) {
         // A here-document inside the substitution: remember its delimiter so
         // the body lines (which may contain `)') are skipped verbatim at the
@@ -214,7 +236,7 @@ struct Lexer {
           w += dc;
           pos++;
         }
-        if (!delim.empty()) paren_heredocs.push_back({delim, strip_tabs});
+        if (!delim.empty()) paren_heredocs.push_back({delim, strip_tabs, depth});
         saw_word = true;
         word_plain = false;
       } else if (c == ';' || c == '&' || c == '|' || c == '\n') {
@@ -236,22 +258,22 @@ struct Lexer {
               bool had_nl = pos < n;
               std::string cmp = line;
               size_t tt = 0;
-              if (hd.second)
+              if (hd.strip)
                 while (tt < cmp.size() && cmp[tt] == '\t') tt++;
               cmp = cmp.substr(tt);
               // `EOF)': the substitution's closer may abut the delimiter --
               // consume the delimiter and resume at the `)' (bash warns and
               // ends the here-document at the end of the span).
-              if (cmp.compare(0, hd.first.size(), hd.first) == 0 &&
-                  cmp.size() > hd.first.size() && cmp[hd.first.size()] == ')') {
-                w += line.substr(0, tt + hd.first.size());
-                pos = ls + tt + hd.first.size();
+              if (cmp.compare(0, hd.delim.size(), hd.delim) == 0 &&
+                  cmp.size() > hd.delim.size() && cmp[hd.delim.size()] == ')') {
+                w += line.substr(0, tt + hd.delim.size());
+                pos = ls + tt + hd.delim.size();
                 closing = true;
                 break;
               }
               w += line;
               if (had_nl) { w += '\n'; pos++; }
-              if (cmp == hd.first) break;
+              if (cmp == hd.delim) break;
               if (!had_nl) break;
             }
           }
@@ -293,6 +315,15 @@ struct Lexer {
       }
     } while (pos < n && depth > 0);
     if (depth > 0) { unterminated = true; if (!unterm_close) unterm_close = ')'; }
+    // The substitution closed on the same line with here-documents still
+    // pending: carry them out so their bodies come from the lines after the
+    // full command (spliced back in before the closer), with bash's warning.
+    if (comsub_ctx && depth == 0 && !paren_heredocs.empty())
+      for (auto &hd : paren_heredocs)
+        // Only depth-1 pendings are real here-documents: a `<<' seen at
+        // depth 2 inside `$((...))' is the arithmetic left-shift.
+        if (hd.depth == 1)
+          comsub_carry.push_back({hd.delim, hd.strip, w.size() - 1});
   }
   void scan_brace(std::string &w, bool in_dq = false) {  // pos at '{'
     int depth = 0;
@@ -591,7 +622,7 @@ struct Lexer {
         if (pos + 1 < n && in[pos + 1] == '(') {
           w += '$';
           pos++;
-          scan_paren(w);
+          scan_paren(w, /*comsub_ctx=*/true);
           continue;
         }
         if (pos + 1 < n && in[pos + 1] == '{') {
@@ -733,6 +764,16 @@ struct Lexer {
         heredoc_eof_line = out[pd.index].line;
         heredoc_eof_quoted = pd.quoted;
       }
+      if (pd.comsub) {
+        // Splice the body (and its delimiter line) back into the word before
+        // the substitution's closer: the inner command reads it when it runs.
+        std::string ins = std::string(1, '\n') + body + pd.delim + '\n';
+        out[pd.index].text.insert(pd.splice_at, ins);
+        for (Pending &later : pending)
+          if (&later > &pd && later.comsub && later.index == pd.index)
+            later.splice_at += ins.size();
+        continue;
+      }
       out[pd.index].heredoc_body = body;
       out[pd.index].has_heredoc = true;
       out[pd.index].heredoc_quoted = pd.quoted;
@@ -791,6 +832,15 @@ struct Lexer {
       t.start = wstart;
       t.end = pos;
       out.push_back(t);
+      if (!comsub_carry.empty()) {
+        for (auto &ch : comsub_carry) {
+          pending.push_back({out.size() - 1, ch.delim, ch.strip, /*quoted=*/false,
+                             /*comsub=*/true, ch.splice_at});
+          comsub_unterm++;
+        }
+        comsub_unterm_line = t.line;
+        comsub_carry.clear();
+      }
       if (awaiting >= 0 && t.type == Tok::Word) {
         bool q = false;
         std::string d = dequote_delim(t.text, q);
@@ -815,6 +865,8 @@ struct Lexer {
     eof.heredoc_eof_delim = heredoc_eof_delim;
     eof.heredoc_eof_line = heredoc_eof_line;
     eof.heredoc_eof_quoted = heredoc_eof_quoted;
+    eof.comsub_unterm = comsub_unterm;
+    eof.comsub_unterm_line = comsub_unterm_line;
     out.push_back(eof);
   }
 };

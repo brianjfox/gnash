@@ -31,6 +31,10 @@ struct ParseResult {
   std::string heredoc_eof_delim;
   int heredoc_eof_line = 0;
   bool heredoc_eof_quoted = false;
+  // Here-documents left pending when a $(...) closed on the same line (bash
+  // warns `command substitution: N unterminated here-document').
+  int comsub_unterm = 0;
+  int comsub_unterm_line = 0;
 };
 
 // Parse a complete program.
