@@ -2215,12 +2215,49 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
       bool aok = true;
       long long idx = eval_arith_msg(sh, tsub, "", &aok);
       if (!aok) { sh.arith_error = true; return std::string(); }
+      // A negative index resolves against the highest set index; one still
+      // below zero is a bad subscript that aborts the command.  bash's length
+      // form names the bracketed raw text (`[-10]: bad array subscript'), the
+      // value form the base name (`c: bad array subscript').
+      if (idx < 0 && !sh.is_zsh()) {
+        long long maxi = -1;
+        if (vit != sh.vars.end() && vit->second.kind == VarKind::Indexed &&
+            !vit->second.idx.empty())
+          maxi = vit->second.idx.rbegin()->first;
+        else if (vit != sh.vars.end() && vit->second.kind == VarKind::Scalar &&
+                 !vit->second.value.empty())
+          maxi = 0;
+        idx += maxi + 1;
+        if (idx < 0) {
+          // The LENGTH form names the bracketed raw text and aborts the
+          // command; the VALUE form names the base and expands to empty with
+          // the command still running (`echo ${c[-4]}' prints a blank line).
+          if (length) {
+            std::fprintf(stderr, "%s[%s]: bad array subscript\n", sh.err_prefix().c_str(),
+                         sub.c_str());
+            sh.arith_error = true;
+          } else {
+            std::fprintf(stderr, "%s%s: bad array subscript\n", sh.err_prefix().c_str(),
+                         name.c_str());
+          }
+          return std::string();
+        }
+      }
       tsub = std::to_string(idx);
     }
     val = sh.array_get(name, tsub);
     // A defaulting/alternative operator on a single element (${a[i]-x}, ${a[i]=x},
     // ${a[i]+x}, ${a[i]?}) keys off whether THAT element is set, not the array.
     set = sh.array_elem_set(name, tsub);
+    // `set -u': an unset ELEMENT is an unbound-variable error naming the
+    // element (`narray[4]: unbound variable'), like param_value's for scalars.
+    if (!set && sh.opt_nounset && !defaulting_op && tsub != "@" && tsub != "*") {
+      std::fprintf(stderr, "%s%s[%s]: unbound variable\n", sh.err_prefix().c_str(),
+                   name.c_str(), tsub.c_str());
+      sh.exiting = true;
+      sh.exit_status = 127;
+      return std::string();
+    }
   } else {
     val = ex.param_value(name, set, defaulting_op);
   }
@@ -2627,7 +2664,16 @@ std::string Expander::expand_arith(const std::string &text) {
     mask += '0';
     i++;
   }
-  return out;
+  // `$@'/`$*' field markers become plain spaces in arithmetic -- `set -- 1 +
+  // 2' makes `$(( $@ ))' evaluate `1 + 2' (bash joins the positionals with
+  // spaces here, quoted or not) -- and the QNULL empty-field markers vanish.
+  std::string flat;
+  flat.reserve(out.size());
+  for (char ch : out) {
+    if (ch == FIELD_SEP) flat += ' ';
+    else if (ch != QNULL) flat += ch;
+  }
+  return flat;
 }
 
 std::string Expander::expand_dq_word(const std::string &w_in) {

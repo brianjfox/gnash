@@ -572,6 +572,14 @@ parse_array_elems(Shell &sh, Expander &ex, const std::string &name, bool integer
           if (!sh.array_expand_once_ok(name, sub)) break;  // diagnostic printed
           bool ok = true;
           long long k = eval_arith(sh, sub, &ok);
+          if (!ok) {
+            // Report with bash's subscript diagnostic and abort the whole
+            // assignment (the array keeps whatever was assigned so far).
+            eval_arith_msg(sh, sub, "", &ok);
+            out.clear();
+            break;
+          }
+          ok = true;
           if (ok && k < 0) k += maxidx + 1;  // resolve negative against running max
           if (ok && k < 0) {
             std::fprintf(stderr, "%s%s: bad array subscript\n",
@@ -623,10 +631,12 @@ namespace {
 
 void apply_array_assign(Shell &sh, Expander &ex, const Assign &a) {
   // Assigning to any part of a readonly array is an error (bash names the array,
-  // not the element).
+  // not the element).  For an ELEMENT assignment the subscript validates
+  // FIRST: `readonly -a c; c[-2]=4' is the bad-subscript error, so let
+  // array_set order the checks; only the compound form rejects here.
   {
     auto rit = sh.vars.find(sh.deref(a.name));
-    if (rit != sh.vars.end() && rit->second.readonly) {
+    if (!a.sub && rit != sh.vars.end() && rit->second.readonly) {
       std::fprintf(stderr, "%s%s: readonly variable\n", sh.err_prefix().c_str(),
                    a.name.c_str());
       sh.last_status = 1;
@@ -1275,6 +1285,10 @@ int Executor::run_simple(const SimpleCommand *c) {
     sh_.arith_error = false;
     return (sh_.last_status = 1);
   }
+  // An expansion that began the shell's exit (`set -u' unbound variable)
+  // suppresses the command itself: bash never runs the echo in
+  // `( echo ${#narray[4]} )'.
+  if (unwinding()) return sh_.last_status = sh_.exit_status;
 
   if (sh_.opt_xtrace) {
     // bash's xtrace prefix is $PS4 (default `+ '), decoded for prompt escapes
