@@ -2116,10 +2116,27 @@ int Shell::run_string(const std::string &script) {
     std::string pfx = shell_name + ": " + ctx + "line " +
                       std::to_string(lineno_base + (r.error_line > 0 ? r.error_line : 1)) +
                       ": ";
+    // An EOF-delimited here-document inside the failed construct still warns,
+    // before the syntax error (heredoc3.sub's `(cat <<EOF' at end of file).
+    if (r.heredoc_eof) {
+      int save_ln = cur_lineno;
+      int nlines = static_cast<int>(std::count(script.begin(), script.end(), '\n'));
+      cur_lineno = lineno_base + nlines;
+      std::fprintf(stderr,
+                   "%swarning: here-document at line %d delimited by end-of-file (wanted `%s')\n",
+                   err_prefix().c_str(), lineno_base + r.heredoc_eof_line,
+                   r.heredoc_eof_delim.c_str());
+      cur_lineno = save_ln;
+    }
     size_t p0 = 0;
     while (p0 <= r.error.size()) {
       size_t nl = r.error.find('\n', p0);
       std::string line = r.error.substr(p0, nl == std::string::npos ? std::string::npos : nl - p0);
+      // Rebase an embedded "... command on line N" to file coordinates.
+      size_t cp = line.rfind("' command on line ");
+      if (cp != std::string::npos && lineno_base > 0)
+        line = line.substr(0, cp + 18) +
+               std::to_string(lineno_base + std::atoi(line.c_str() + cp + 18));
       if (line.compare(0, 14, "unexpected EOF") == 0) {
         std::fprintf(stderr, "%s%s\n", pfx.c_str(), line.c_str());  // no `syntax error'
       } else {
@@ -2149,11 +2166,18 @@ int Shell::run_string(const std::string &script) {
     last_status = r.assign_error ? 1 : 2;
     return last_status;
   }
-  if (r.heredoc_eof)  // run anyway, with bash's warning
+  if (r.heredoc_eof) {  // run anyway, with bash's warning
+    // bash's warning prefix names the line where end-of-file was reached
+    // (one past the chunk's last line), not the here-document's start.
+    int save_ln = cur_lineno;
+    int nlines = static_cast<int>(std::count(script.begin(), script.end(), '\n'));
+    cur_lineno = lineno_base + nlines + 1;
     std::fprintf(stderr,
                  "%swarning: here-document at line %d delimited by end-of-file (wanted `%s')\n",
                  err_prefix().c_str(), lineno_base + r.heredoc_eof_line,
                  r.heredoc_eof_delim.c_str());
+    cur_lineno = save_ln;
+  }
   if (!r.command) { subshell_leaf = false; return last_status; }
   const Command *c = r.command.get();
   retained.push_back(std::move(r.command));
