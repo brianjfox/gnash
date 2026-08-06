@@ -2100,6 +2100,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
   // `+X' flags remove an attribute rather than adding it (`typeset +n foo').
   bool rm_integer = false, rm_readonly = false, rm_exported = false;
   bool rm_nameref = false, rm_lcase = false, rm_ucase = false, rm_capcase = false;
+  bool rm_array = false, rm_assoc = false;
   for (; i < argv.size(); i++) {
     const std::string &a = argv[i];
     if (a == "--") { i++; break; }  // end-of-options marker
@@ -2130,8 +2131,8 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
         switch (a[k]) {
           case 'f': funcs = true; break;
           case 'F': funcnames = true; break;
-          case 'a': mk_array = true; break;
-          case 'A': mk_assoc = true; break;
+          case 'a': (add ? mk_array : rm_array) = true; break;
+          case 'A': (add ? mk_assoc : rm_assoc) = true; break;
           case 'i': (add ? integer : rm_integer) = true; break;
           case 'r': (add ? readonly : rm_readonly) = true; break;
           case 'x': (add ? exported : rm_exported) = true; break;
@@ -2966,6 +2967,15 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     // variable as readonly and leaves the flag set (declare.def refuses to
     // turn off att_readonly).  Only declare/typeset/local reach here with a
     // removable readonly, and they carry the builtin-name prefix.
+    // `+a'/`+A' cannot remove the array nature of an existing array: bash
+    // reports `cannot destroy array variables in this way' and leaves it be
+    // (a `+a'/`+A' on a non-array is a harmless no-op).
+    if ((rm_assoc && v.kind == VarKind::Assoc) || (rm_array && v.kind == VarKind::Indexed)) {
+      std::fprintf(stderr, "%s%s: %s: cannot destroy array variables in this way\n",
+                   sh.err_prefix().c_str(), argv[0].c_str(), aname.c_str());
+      ret = 1;
+      continue;
+    }
     if (rm_readonly) {
       // `+r' on a readonly TARGETLESS nameref (`declare -rn r; declare +r r')
       // follows the reference to nothing, so it is a silent no-op rather than a
