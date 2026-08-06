@@ -1578,7 +1578,22 @@ int Executor::run_simple(const SimpleCommand *c) {
     std::string exec_file = argv[0];
     if (argv[0].find('/') == std::string::npos) {
       auto h = sh_.hashed.find(argv[0]);
-      if (h != sh_.hashed.end()) exec_file = h->second;
+      if (h != sh_.hashed.end()) {
+        exec_file = h->second;
+        // `shopt -s checkhash': verify the remembered path still names an
+        // executable before using it; a stale entry falls back to a fresh
+        // $PATH search and is re-remembered (bash).  Without checkhash the
+        // stale path is used -- and fails -- exactly as bash does.
+        auto ch = sh_.shopt_opts.find("checkhash");
+        if (ch != sh_.shopt_opts.end() && ch->second &&
+            access(exec_file.c_str(), X_OK) != 0) {
+          std::string fresh = find_in_path(sh_, argv[0]);
+          if (!fresh.empty()) {
+            exec_file = fresh;
+            sh_.hashed[argv[0]] = fresh;
+          }
+        }
+      }
     }
     // execvp searches $PATH for a name without `/', or uses a `/' path
     // directly; a hashed name execs its remembered value, and reports that

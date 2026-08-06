@@ -160,6 +160,13 @@ class Shell {
   // (the declare/local `-I' flag) was passed.
   bool make_local(const std::string &n, bool inherit_force = false);
   bool in_function() const { return !local_stack.empty(); }
+
+  // True once the `set' builtin replaces the positional parameters at top
+  // level (outside any function).  `.'-with-arguments checks it on return:
+  // bash restores the caller's saved parameters UNLESS the sourced script
+  // itself ran `set' (source.def uw_maybe_pop_dollar_vars / ARGS_SETBLTIN),
+  // and clears the flag after every such source.
+  bool params_set_builtin = false;
   std::vector<std::vector<std::pair<std::string, std::optional<Variable>>>> local_stack;
   // Per-scope saved getopt state, set when that scope localizes OPTIND.
   std::vector<std::optional<std::tuple<size_t, std::string, int>>> getopt_scope_saves;

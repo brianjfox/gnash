@@ -20,6 +20,10 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status);
 // interactive syntax highlighting.
 bool command_is_valid(Shell &sh, const std::string &name);
 
+// Full $PATH resolution of NAME (empty when not found); a NAME containing a
+// slash resolves to itself when executable.
+std::string find_in_path(Shell &sh, const std::string &name);
+
 // Every command name beginning with PREFIX -- shell keywords, aliases,
 // functions, builtins, and executables on $PATH -- sorted and de-duplicated.
 // Used for command-position tab completion.

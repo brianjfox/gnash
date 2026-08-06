@@ -850,6 +850,9 @@ int bi_dirs(Shell &sh, const std::vector<std::string> &argv) {
   std::string select;  // a +N / -N argument: print only that entry
   for (size_t i = 1; i < argv.size(); i++) {
     const std::string &a = argv[i];
+    // `--' ends option parsing; bash then ignores every remaining argument
+    // (`dirs -- +8' prints the whole stack).
+    if (a == "--") break;
     // A `+N' / `-N' selector (a dash/plus followed by a digit) is not an option.
     if (a.size() >= 2 && (a[0] == '+' || a[0] == '-') &&
         std::isdigit(static_cast<unsigned char>(a[1]))) {
@@ -916,9 +919,15 @@ int rot_index(const std::string &spec, size_t n) {
 int bi_pushd(Shell &sh, const std::vector<std::string> &argv) {
   // A leading `-n' suppresses the directory change (only the stack is touched).
   std::vector<std::string> a(argv.begin(), argv.end());
-  bool no_cd = false;
-  if (a.size() > 1 && a[1] == "-n") { no_cd = true; a.erase(a.begin() + 1); }
-  if (a.size() > 1 && (a[1][0] == '+' || a[1][0] == '-') && a[1].size() > 1 &&
+  bool no_cd = false, opts_end = false;
+  while (a.size() > 1) {
+    if (a[1] == "-n") { no_cd = true; a.erase(a.begin() + 1); }
+    else if (a[1] == "--") { opts_end = true; a.erase(a.begin() + 1); break; }
+    else break;
+  }
+  // After `--' the argument is a literal directory name, never a rotation:
+  // `pushd -- +1' is a chdir to `./+1' (bash).
+  if (!opts_end && a.size() > 1 && (a[1][0] == '+' || a[1][0] == '-') && a[1].size() > 1 &&
       std::isdigit(static_cast<unsigned char>(a[1][1]))) {
     // Rotate so the Nth entry becomes the top.
     std::vector<std::string> v = full_dirstack(sh);
@@ -932,7 +941,7 @@ int bi_pushd(Shell &sh, const std::vector<std::string> &argv) {
     return no_cd ? 0 : bi_dirs(sh, {"dirs"});
   }
   // A `+'/`-' argument that isn't a numeric index is a malformed rotation count.
-  if (a.size() > 1 && (a[1][0] == '+' || a[1][0] == '-')) {
+  if (!opts_end && a.size() > 1 && (a[1][0] == '+' || a[1][0] == '-')) {
     std::fprintf(stderr, "%spushd: %s: invalid number\n", sh.err_prefix().c_str(),
                  a[1].c_str());
     std::fprintf(stderr, "pushd: usage: pushd [-n] [+N | -N | dir]\n");
@@ -961,9 +970,15 @@ int bi_popd(Shell &sh, const std::vector<std::string> &argv) {
   // A leading `-n' suppresses the directory change (only the stack is touched);
   // it does not otherwise change which entry is removed.
   std::vector<std::string> a(argv.begin(), argv.end());
-  bool no_cd = false;
-  if (a.size() > 1 && a[1] == "-n") { no_cd = true; a.erase(a.begin() + 1); }
-  if (a.size() > 1 && (a[1][0] == '+' || a[1][0] == '-') && a[1].size() > 1 &&
+  bool no_cd = false, opts_end = false;
+  while (a.size() > 1) {
+    if (a[1] == "-n") { no_cd = true; a.erase(a.begin() + 1); }
+    else if (a[1] == "--") { opts_end = true; a.erase(a.begin() + 1); break; }
+    else break;
+  }
+  // After `--' bash ignores every remaining argument: `popd -- +8' acts as a
+  // plain `popd' (a quirk the test suite depends on).
+  if (!opts_end && a.size() > 1 && (a[1][0] == '+' || a[1][0] == '-') && a[1].size() > 1 &&
       std::isdigit(static_cast<unsigned char>(a[1][1]))) {
     std::vector<std::string> v = full_dirstack(sh);
     int idx = rot_index(a[1], v.size());
@@ -978,9 +993,17 @@ int bi_popd(Shell &sh, const std::vector<std::string> &argv) {
     }
     return bi_dirs(sh, {"dirs"});
   }
-  // A `+'/`-' argument that isn't a numeric index is a malformed number.
-  if (a.size() > 1 && (a[1][0] == '+' || a[1][0] == '-')) {
+  // A `+'/`-' argument that isn't a numeric index is a malformed number, and
+  // any other argument (without `--') is invalid outright -- popd takes no
+  // directory name.
+  if (!opts_end && a.size() > 1 && (a[1][0] == '+' || a[1][0] == '-')) {
     std::fprintf(stderr, "%spopd: %s: invalid number\n", sh.err_prefix().c_str(),
+                 a[1].c_str());
+    std::fprintf(stderr, "popd: usage: popd [-n] [+N | -N]\n");
+    return 2;
+  }
+  if (!opts_end && a.size() > 1) {
+    std::fprintf(stderr, "%spopd: %s: invalid argument\n", sh.err_prefix().c_str(),
                  a[1].c_str());
     std::fprintf(stderr, "popd: usage: popd [-n] [+N | -N]\n");
     return 2;
@@ -1612,7 +1635,11 @@ int bi_set(Shell &sh, const std::vector<std::string> &argv) {
             }
             break;
           case 'o': {
-            if (i + 1 >= argv.size()) {
+            // A missing argument -- or one that itself looks like an option
+            // (`set -o -B') -- means the bare-`-o' listing; the option word
+            // then gets parsed normally (bash).
+            if (i + 1 >= argv.size() ||
+                (!argv[i + 1].empty() && (argv[i + 1][0] == '-' || argv[i + 1][0] == '+'))) {
               // `set -o' lists states; `set +o' reproduces as commands.
               for (const auto &o : set_option_states(sh)) {
                 if (on) std::printf("%-15s\t%s\n", o.first.c_str(), o.second ? "on" : "off");
@@ -1646,7 +1673,10 @@ int bi_set(Shell &sh, const std::vector<std::string> &argv) {
       break;
     }
   }
-  if (positional_given) sh.positional.assign(argv.begin() + static_cast<long>(i), argv.end());
+  if (positional_given) {
+    sh.positional.assign(argv.begin() + static_cast<long>(i), argv.end());
+    if (!sh.in_function()) sh.params_set_builtin = true;
+  }
   return 0;
 }
 
@@ -2011,6 +2041,8 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
   return retval;
 }
 
+}  // namespace (close anon: find_in_path is used by the executor's checkhash path)
+
 std::string find_in_path(Shell &sh, const std::string &name) {
   if (name.find('/') != std::string::npos)
     return access(name.c_str(), X_OK) == 0 ? name : std::string();
@@ -2027,6 +2059,8 @@ std::string find_in_path(Shell &sh, const std::string &name) {
   }
   return std::string();
 }
+
+namespace {  // reopen the anonymous namespace
 
 static const char *const kBuiltinNames[] = {
     ":", "true", "false", "echo", "printf", "pwd", "cd", "export", "unset", "set",
@@ -3032,7 +3066,9 @@ int bi_type(Shell &sh, const std::vector<std::string> &argv) {
     if (aliases_on && sh.aliases.count(n)) locs.push_back({'a', sh.aliases.at(n)});
     if (is_reserved_word(n)) locs.push_back({'k', {}});
     if (!ff && sh.functions.count(n)) locs.push_back({'f', {}});
-    if (is_builtin_name(n)) locs.push_back({'b', {}});
+    // A builtin disabled with `enable -n' is invisible to type: lookup falls
+    // through to the $PATH files (bash).
+    if (is_builtin_name(n) && !sh.disabled_builtins.count(n)) locs.push_back({'b', {}});
     for (const std::string &f : find_all_in_path(sh, n)) locs.push_back({'F', f});
 
     if (locs.empty()) {
@@ -3734,9 +3770,17 @@ int bi_kill(Shell &sh, const std::vector<std::string> &argv) {
 }
 
 // ---- help (synopsis + short description derived from bash builtins/*.def) --
-struct BuiltinHelp { const char *name, *synopsis, *shortdoc; };
+// `body' is the full documentation (bash's long doc), printed by `help NAME',
+// `help -m NAME', and `NAME --help'; entries without one fall back to the
+// short doc.  Lines are separated by `\n'; a blank doc line prints as the
+// four-space indent alone, exactly as bash does.
+struct BuiltinHelp {
+  const char *name, *synopsis, *shortdoc;
+  const char *body = nullptr;
+};
 static const BuiltinHelp kBuiltinHelp[] = {
-    {":", ":", "Null command."},
+    {":", ":", "Null command.",
+     "Null command.\n\nNo effect; the command does nothing.\n\nExit Status:\nAlways succeeds."},
     {"true", "true", "Return a successful result."},
     {"false", "false", "Return an unsuccessful result."},
     {"echo", "echo [-neE] [arg ...]", "Write arguments to the standard output."},
@@ -3748,7 +3792,10 @@ static const BuiltinHelp kBuiltinHelp[] = {
     {"set", "set [-abefhkmnptuvxBCEHPT] [-o option-name] [--] [-] [arg ...]", "Set or unset values of shell options and positional parameters."},
     {"read", "read [-Eers] [-a array] [-d delim] [-i text] [-n nchars] [-N nchars] [-p prompt] [-t timeout] [-u fd] [name ...]", "Read a line from the standard input and split it into fields."},
     {"test", "test [expr]", "Evaluate conditional expression."},
-    {"shift", "shift [n]", "Shift positional parameters."},
+    {"shift", "shift [n]", "Shift positional parameters.",
+     "Shift positional parameters.\n\nRename the positional parameters $N+1,$N+2 ... to $1,$2 ...  If N is\n"
+     "not given, it is assumed to be 1.\n\nExit Status:\n"
+     "Returns success unless N is negative or greater than $#."},
     {"exit", "exit [n]", "Exit the shell."},
     {"return", "return [n]", "Return from a shell function."},
     {"break", "break [n]", "Exit for, while, or until loops."},
@@ -3818,8 +3865,32 @@ static const BuiltinHelp kBuiltinHelp[] = {
     {"while", "while COMMANDS; do COMMANDS-2; done", "Execute commands as long as a test succeeds."},
 };
 
+// The long documentation body, indented four spaces per line (a blank doc
+// line is the indent alone); entries without a body use the short doc.
+static void help_print_body(const BuiltinHelp &h) {
+  const char *doc = h.body ? h.body : h.shortdoc;
+  const char *p = doc;
+  for (;;) {
+    const char *nl = std::strchr(p, '\n');
+    size_t len = nl ? static_cast<size_t>(nl - p) : std::strlen(p);
+    std::printf("    %.*s\n", static_cast<int>(len), p);
+    if (!nl) break;
+    p = nl + 1;
+  }
+}
+
+// `help NAME' / `NAME --help': "name: synopsis" then the indented body.
+void help_print_full(const std::string &name) {
+  for (const auto &h : kBuiltinHelp)
+    if (name == h.name) {
+      std::printf("%s: %s\n", h.name, h.synopsis);
+      help_print_body(h);
+      return;
+    }
+}
+
 int bi_help(Shell &sh, const std::vector<std::string> &argv) {
-  bool dflag = false, sflag = false;
+  bool dflag = false, sflag = false, mflag = false;
   size_t i = 1;
   for (; i < argv.size(); i++) {
     const std::string &a = argv[i];
@@ -3828,7 +3899,7 @@ int bi_help(Shell &sh, const std::vector<std::string> &argv) {
     for (size_t k = 1; k < a.size(); k++) {
       if (a[k] == 'd') dflag = true;
       else if (a[k] == 's') sflag = true;
-      else if (a[k] == 'm') { /* man format: accepted */ }
+      else if (a[k] == 'm') mflag = true;
       else {
         std::fflush(stdout);
         std::fprintf(stderr, "%shelp: -%c: invalid option\n", sh.err_prefix().c_str(), a[k]);
@@ -3947,7 +4018,25 @@ int bi_help(Shell &sh, const std::vector<std::string> &argv) {
     for (const BuiltinHelp *h : hits) {
       if (sflag) std::printf("%s: %s\n", h->name, h->synopsis);
       else if (dflag) std::printf("%s - %s\n", h->name, h->shortdoc);
-      else std::printf("%s: %s\n    %s\n", h->name, h->synopsis, h->shortdoc);
+      else if (mflag) {
+        // Man-page layout (help.def show_manpage).  The IMPLEMENTATION
+        // section reproduces bash's version/copyright/license block; the
+        // version lines carry the word `version' (the test filters on it).
+        std::printf("NAME\n    %s - %s\n\n", h->name, h->shortdoc);
+        std::printf("SYNOPSIS\n    %s\n\n", h->synopsis);
+        std::printf("DESCRIPTION\n");
+        help_print_body(*h);
+        std::printf("\nSEE ALSO\n    bash(1)\n\n");
+        std::printf("IMPLEMENTATION\n");
+        std::printf("    GNU bash, version %s (%s)\n", sh.get("BASH_VERSION").c_str(),
+                    sh.get("MACHTYPE").c_str());
+        std::printf("    Copyright (C) 2025 Free Software Foundation, Inc.\n");
+        std::printf("    License GPLv3+: GNU GPL version 3 or later "
+                    "<http://gnu.org/licenses/gpl.html>\n\n");
+      } else {
+        std::printf("%s: %s\n", h->name, h->synopsis);
+        help_print_body(*h);
+      }
     }
   }
   return st;
@@ -4040,6 +4129,14 @@ int bi_hash(Shell &sh, const std::vector<std::string> &argv) {
                      ppath.c_str());
       return 1;
     }
+    // A pathname naming a directory is rejected; a nonexistent file is NOT --
+    // `hash -p /nosuchfile cat' stores the bogus path silently (bash).
+    struct stat pst;
+    if (stat(ppath.c_str(), &pst) == 0 && S_ISDIR(pst.st_mode)) {
+      std::fprintf(stderr, "%shash: %s: Is a directory\n", sh.err_prefix().c_str(),
+                   ppath.c_str());
+      return 1;
+    }
     sh.hashed[argv[i]] = ppath;
     return 0;
   }
@@ -4071,8 +4168,11 @@ int bi_hash(Shell &sh, const std::vector<std::string> &argv) {
     }
     if (print_t) {
       auto it = sh.hashed.find(n);
-      if (it != sh.hashed.end()) std::printf("%s\n", it->second.c_str());
-      else { std::fflush(stdout); std::fprintf(stderr, "%shash: %s: not found\n", sh.err_prefix().c_str(), n.c_str()); st = 1; }
+      // With -l too, -t prints the reusable form (`hash -lt cat' ->
+      // `builtin hash -p /path cat'), as bash does.
+      if (it == sh.hashed.end()) { std::fflush(stdout); std::fprintf(stderr, "%shash: %s: not found\n", sh.err_prefix().c_str(), n.c_str()); st = 1; }
+      else if (list_l) std::printf("builtin hash -p %s %s\n", it->second.c_str(), n.c_str());
+      else std::printf("%s\n", it->second.c_str());
       continue;
     }
     std::string p = find_in_path(sh, n);
@@ -4274,7 +4374,11 @@ int bi_ulimit(Shell &sh, const std::vector<std::string> &argv) {
     }
   }
   if (i < argv.size()) value = argv[i];
-  if (!hard && !soft) soft = true;  // default acts on the soft limit
+  // Reporting defaults to the soft limit; SETTING with neither -S nor -H
+  // changes BOTH limits (bash: `ulimit -c 0' zeroes hard and soft).
+  bool set_both = !hard && !soft && !value.empty();
+  if (set_both) hard = soft = true;
+  if (!hard && !soft) soft = true;  // default reports the soft limit
 
   if (all) {
     for (const auto &r : kUlimits) ulimit_print_one(r, hard, true);
@@ -4287,7 +4391,11 @@ int bi_ulimit(Shell &sh, const std::vector<std::string> &argv) {
   for (char o : reqs) {
     const UlimitRes *r = nullptr;
     for (const auto &e : kUlimits) if (e.opt == o) { r = &e; break; }
-    if (!r) { std::fprintf(stderr, "%sulimit: -%c: invalid option\n", sh.err_prefix().c_str(), o); return 2; }
+    if (!r) {
+      std::fprintf(stderr, "%sulimit: -%c: invalid option\n", sh.err_prefix().c_str(), o);
+      std::fprintf(stderr, "ulimit: usage: ulimit [-SHabcdefiklmnpqrstuvxPRT] [limit]\n");
+      return 2;
+    }
     rs.push_back(r);
   }
 
@@ -4295,6 +4403,17 @@ int bi_ulimit(Shell &sh, const std::vector<std::string> &argv) {
     bool labeled = rs.size() > 1;
     for (const UlimitRes *r : rs) ulimit_print_one(*r, hard, labeled);
     return 0;
+  }
+  // The value must be `unlimited', `soft', `hard', or an unsigned number --
+  // bash rejects a leading `+' or `-' ("maybe someday the leading `+' will
+  // be accepted, but not today").
+  if (value != "unlimited" && value != "hard" && value != "soft") {
+    for (char c : value)
+      if (c < '0' || c > '9') {
+        std::fprintf(stderr, "%sulimit: %s: invalid number\n", sh.err_prefix().c_str(),
+                     value.c_str());
+        return 1;
+      }
   }
   // Set the given value on each requested resource.
   for (const UlimitRes *r : rs) {
@@ -4309,7 +4428,10 @@ int bi_ulimit(Shell &sh, const std::vector<std::string> &argv) {
     if (hard) rl.rlim_max = nv;
     if (soft) rl.rlim_cur = nv;
     if (setrlimit(r->res, &rl) != 0) {
-      std::fprintf(stderr, "%sulimit: %s\n", sh.err_prefix().c_str(), std::strerror(errno));
+      // bash names the resource: `ulimit: max user processes: cannot modify
+      // limit: Operation not permitted'.
+      std::fprintf(stderr, "%sulimit: %s: cannot modify limit: %s\n",
+                   sh.err_prefix().c_str(), r->desc, std::strerror(errno));
       return 1;
     }
   }
@@ -4323,7 +4445,7 @@ int bi_enable(Shell &sh, const std::vector<std::string> &argv) {
       ".",      ":",    "break", "continue", "eval",  "exec",
       "exit",   "export", "readonly", "return", "set", "shift",
       "source", "times", "trap",  "unset"};
-  bool disable = false, all = false, special = false;
+  bool disable = false, all = false, special = false, del = false;
   size_t i = 1;
   for (; i < argv.size(); i++) {
     const std::string &a = argv[i];
@@ -4333,6 +4455,7 @@ int bi_enable(Shell &sh, const std::vector<std::string> &argv) {
       if (a[k] == 'n') disable = true;
       else if (a[k] == 'a') all = true;
       else if (a[k] == 's') special = true;
+      else if (a[k] == 'd') del = true;
       else if (a[k] == 'p') { /* posix reusable list: like default */ }
     }
   }
@@ -4351,6 +4474,15 @@ int bi_enable(Shell &sh, const std::vector<std::string> &argv) {
     const std::string &n = argv[i];
     if (!is_builtin_name(n)) {
       std::fprintf(stderr, "%senable: %s: not a shell builtin\n", sh.err_prefix().c_str(), n.c_str());
+      st = 1;
+      continue;
+    }
+    // `enable -d' removes a builtin loaded with `enable -f'; every gnash
+    // builtin is static, so the request always fails as bash's does for a
+    // compiled-in builtin.
+    if (del) {
+      std::fprintf(stderr, "%senable: %s: not dynamically loaded\n", sh.err_prefix().c_str(),
+                   n.c_str());
       st = 1;
       continue;
     }
@@ -5436,6 +5568,17 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
   // external command of the same name runs instead.
   if (sh.disabled_builtins.count(cmd) && cmd != "enable") return false;
 
+  // Every builtin accepts `--help' and prints its long documentation with
+  // status 2, EXCEPT the ones for which the word is ordinary data: echo
+  // prints it, test/[ treat it as an operand, and :/true/false ignore it.
+  if (argv.size() > 1 && argv[1] == "--help" && is_builtin_name(cmd) &&
+      cmd != "echo" && cmd != "test" && cmd != "[" && cmd != ":" &&
+      cmd != "true" && cmd != "false") {
+    help_print_full(cmd);
+    if (status) *status = 2;
+    return true;
+  }
+
   // In zsh persona, accept common zsh-only builtins as no-ops so zsh startup
   // files (including the system /etc/zshrc) run without "command not found".
   if (sh.persona == Shell::Persona::Zsh) {
@@ -5509,12 +5652,27 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
       }
     }
   } else if (cmd == "exit") {
-    sh.exiting = true;
-    sh.exit_status = argv.size() > 1 ? (std::atoi(argv[1].c_str()) & 0xff) : sh.last_status;
-    st = sh.exit_status;
-    // `exit' inside a function runs the EXIT trap with that function's frame
-    // still active ($FUNCNAME), so snapshot the call stack before it unwinds.
-    if (sh.in_function()) { sh.exit_src_frames = sh.src_frames; sh.have_exit_frames = true; }
+    size_t ci = 1;
+    if (ci < argv.size() && argv[ci] == "--") ci++;
+    const std::string a = ci < argv.size() ? argv[ci] : std::string();
+    char *end = nullptr;
+    long v = a.empty() ? sh.last_status : std::strtol(a.c_str(), &end, 10);
+    if (!a.empty() && (end == a.c_str() || *end != '\0')) {
+      // A non-numeric argument is no longer a fatal error: bash reports it
+      // and the shell CONTINUES with status 2 (posix mode still treats the
+      // special-builtin error as fatal).
+      std::fprintf(stderr, "%sexit: %s: numeric argument required\n",
+                   sh.err_prefix().c_str(), a.c_str());
+      st = 2;
+      sh.posix_special_builtin_error(st);
+    } else {
+      sh.exiting = true;
+      sh.exit_status = static_cast<int>(v) & 0xff;
+      st = sh.exit_status;
+      // `exit' inside a function runs the EXIT trap with that function's frame
+      // still active ($FUNCNAME), so snapshot the call stack before it unwinds.
+      if (sh.in_function()) { sh.exit_src_frames = sh.src_frames; sh.have_exit_frames = true; }
+    }
   } else if (cmd == "return") {
     // `return' is only meaningful in a function or a sourced script; elsewhere
     // it is an error and must not unwind the current input (bash).
@@ -5673,9 +5831,11 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
         // (`. file a b'); with none, it inherits the caller's positionals.
         std::vector<std::string> saved_pos;
         bool set_pos = argv.size() > ai + 1;
+        bool saved_params_flag = sh.params_set_builtin;
         if (set_pos) {
           saved_pos = sh.positional;
           sh.positional.assign(argv.begin() + ai + 1, argv.end());
+          sh.params_set_builtin = false;
         }
         // A sourced file becomes the innermost BASH_SOURCE frame; use the
         // resolved path (bash records the PATH-found path, not the bare name),
@@ -5695,7 +5855,12 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
         // shell (bash semantics; e.g. /etc/bashrc does `[ -z "$PS1" ] && return').
         if (sh.returning) { sh.returning = false; st = sh.exit_status; }
         sh.pop_src_frame();
-        if (set_pos) sh.positional = saved_pos;
+        // Restore the caller's parameters UNLESS the sourced script ran the
+        // `set' builtin at top level -- then its parameters stick (bash).
+        if (set_pos) {
+          if (!(!sh.in_function() && sh.params_set_builtin)) sh.positional = saved_pos;
+          sh.params_set_builtin = saved_params_flag;
+        }
       } else {
         std::fprintf(stderr, "%s%s: %s\n", sh.err_prefix().c_str(),
                      fname.c_str(), std::strerror(errno));
