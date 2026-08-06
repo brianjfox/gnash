@@ -35,15 +35,35 @@ permissions:
   pull-requests: write
   statuses: write
 
+# One run per PR at a time: a new push supersedes the queued run instead of
+# piling up behind it.
+concurrency:
+  group: cla-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   cla:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
+      # Fast path: the maintainer's own pull requests (and bots') never need a
+      # signature -- succeed immediately instead of exercising the full CLA
+      # action, whose slow/failing runs were leaving the required `cla' status
+      # unreported and pull requests stuck at "expected".
+      - name: Maintainer fast-path
+        if: >-
+          github.event_name == 'pull_request_target' &&
+          (github.event.pull_request.user.login == 'brianjfox' ||
+           endsWith(github.event.pull_request.user.login, '[bot]'))
+        run: echo "Maintainer/bot pull request -- CLA not required."
       - name: CLA Assistant
         if: >-
-          (github.event.comment.body == 'recreate-signatures' ||
-           github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA') ||
-          github.event_name == 'pull_request_target'
+          ((github.event.comment.body == 'recreate-signatures' ||
+            github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA') ||
+           github.event_name == 'pull_request_target') &&
+          !(github.event_name == 'pull_request_target' &&
+            (github.event.pull_request.user.login == 'brianjfox' ||
+             endsWith(github.event.pull_request.user.login, '[bot]')))
         # Pin to the latest release of contributor-assistant/github-action.
         uses: contributor-assistant/github-action@v2.6.1
         env:
