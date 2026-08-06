@@ -7,6 +7,8 @@
 #include "gnash/core/subscript.hpp"
 
 #include <cctype>
+#include <cstdlib>
+#include <cwchar>
 
 namespace gnash::core {
 
@@ -428,12 +430,32 @@ struct Lexer {
            c == ';' || c == '(' || c == ')' || c == '<' || c == '>';
   }
 
+  // Bytes of the multibyte character starting at `pos' (1 for ASCII, invalid
+  // sequences, or single-byte locales).  In charsets like Big5 a trail byte
+  // can be `\' or a metacharacter value, so word scanning must consume a
+  // multibyte character atomically or the trail byte is misread as syntax.
+  std::size_t mb_len() const {
+    if (static_cast<unsigned char>(in[pos]) < 0x80 || MB_CUR_MAX <= 1) return 1;
+    wchar_t wc;
+    std::mbstate_t st{};
+    std::size_t r = std::mbrtowc(&wc, in.data() + pos, n - pos, &st);
+    return (r == static_cast<std::size_t>(-1) || r == static_cast<std::size_t>(-2) || r == 0)
+               ? 1
+               : r;
+  }
+
   Token read_word() {
     std::string w;
     bool quoted = false;
     while (pos < n) {
       char c = in[pos];
       if (c == ' ' || c == '\t' || c == '\n') break;
+      if (static_cast<unsigned char>(c) >= 0x80) {
+        std::size_t l = mb_len();
+        w.append(in, pos, l);
+        pos += l;
+        continue;
+      }
       if ((c == '<' || c == '>') && pos + 1 < n && in[pos + 1] == '(') {
         w += c;
         pos++;
