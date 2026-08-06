@@ -1370,6 +1370,11 @@ int Executor::run_simple(const SimpleCommand *c) {
   // Builtins and functions run in-process (with redirects applied/restored).
   auto fit = sh_.functions.find(argv[0]);
   bool is_func = !skip_functions && fit != sh_.functions.end();
+  // Posix command search order finds special builtins BEFORE functions: with
+  // a `break' function defined, posix-mode `break' runs the builtin.
+  if (is_func && sh_.opt_posix && is_special_builtin_name(argv[0]) &&
+      !sh_.disabled_builtins.count(argv[0]))
+    is_func = false;
   int dummy = 0;
   bool builtin = false;
   {

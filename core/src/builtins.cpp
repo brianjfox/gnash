@@ -3015,6 +3015,12 @@ static bool is_special_builtin(const std::string &n) {
   return kSpecial.count(n) != 0;
 }
 
+}  // namespace (close anon: the executor's posix lookup order needs this)
+
+bool is_special_builtin_name(const std::string &n) { return is_special_builtin(n); }
+
+namespace {  // reopen the anonymous namespace
+
 int bi_type(Shell &sh, const std::vector<std::string> &argv) {
   bool ft = false, fp = false, fP = false, fa = false, ff = false;
   size_t i = 1;
@@ -3067,8 +3073,13 @@ int bi_type(Shell &sh, const std::vector<std::string> &argv) {
     if (is_reserved_word(n)) locs.push_back({'k', {}});
     if (!ff && sh.functions.count(n)) locs.push_back({'f', {}});
     // A builtin disabled with `enable -n' is invisible to type: lookup falls
-    // through to the $PATH files (bash).
-    if (is_builtin_name(n) && !sh.disabled_builtins.count(n)) locs.push_back({'b', {}});
+    // through to the $PATH files (bash).  In posix mode a SPECIAL builtin is
+    // found before any function of the same name (posix command search order).
+    bool have_b = is_builtin_name(n) && !sh.disabled_builtins.count(n);
+    if (have_b && sh.opt_posix && is_special_builtin(n))
+      locs.insert(locs.end() - ((!ff && sh.functions.count(n)) ? 1 : 0), {'b', {}});
+    else if (have_b)
+      locs.push_back({'b', {}});
     for (const std::string &f : find_all_in_path(sh, n)) locs.push_back({'F', f});
 
     if (locs.empty()) {
