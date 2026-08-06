@@ -797,20 +797,22 @@ void Shell::array_set(const std::string &n_in, const std::string &sub, const std
     return;
   }
   Variable &v = vars[n];
-  if (v.readonly) return;
-  v.invisible = false;  // an assignment makes a declared-but-unset array visible
   // `declare -u'/`-l'/`-c' fold the case of each element value on assignment,
   // exactly as Shell::set does for scalars.
   std::string fv = fold_case(val, v.ucase, v.lcase, v.capcase);
   if (v.kind == VarKind::Assoc) {
+    if (v.readonly) {
+      std::fprintf(stderr, "%s%s: readonly variable\n", err_prefix().c_str(), n.c_str());
+      last_status = 1;
+      return;
+    }
+    v.invisible = false;  // an assignment makes a declared-but-unset array visible
     assoc_put(v, sub, fv);
     return;
   }
-  // A subscripted assignment to an existing scalar promotes it to an indexed
-  // array, keeping the old value as element 0 (`a=abcde; a[2]=x' yields
-  // ([0]=abcde [2]=x)), matching bash.
-  if (v.kind == VarKind::Scalar && !v.value.empty() && v.idx.empty()) v.idx[0] = v.value;
-  v.kind = VarKind::Indexed;
+  // The subscript is validated BEFORE the readonly attribute is consulted:
+  // `readonly -a c; c[-2]=4' reports the bad subscript, not the readonly
+  // violation (bash), and the error unwinds the current command list.
   bool ok = true;
   long long k = eval_arith(*this, sub, &ok);
   if (!ok) {
@@ -824,16 +826,33 @@ void Shell::array_set(const std::string &n_in, const std::string &sub, const std
     return;
   }
   // A negative index counts back from the highest set index; one that resolves
-  // below zero is a bad subscript (bash errors and leaves the array unchanged).
-  // Under zsh the subscript was already translated by zsh_subscript.
+  // below zero is a bad subscript (bash errors, leaves the array unchanged, and
+  // unwinds the command list).  Under zsh the subscript was already translated.
   if (k < 0 && !is_zsh()) {
-    if (!v.idx.empty()) k += v.idx.rbegin()->first + 1;
+    // A set scalar counts as its would-be element 0 (`a=abcde; a[-1]=z').
+    long long maxi = !v.idx.empty() ? v.idx.rbegin()->first
+                    : (v.kind == VarKind::Scalar && !v.value.empty()) ? 0
+                                                                      : -1;
+    k += maxi + 1;
     if (k < 0) {
       std::fprintf(stderr, "%s%s[%s]: bad array subscript\n", err_prefix().c_str(),
                    n.c_str(), sub.c_str());
+      arith_abort = true;
+      last_status = 1;
       return;
     }
   }
+  if (v.readonly) {
+    std::fprintf(stderr, "%s%s: readonly variable\n", err_prefix().c_str(), n.c_str());
+    last_status = 1;
+    return;
+  }
+  v.invisible = false;  // an assignment makes a declared-but-unset array visible
+  // A subscripted assignment to an existing scalar promotes it to an indexed
+  // array, keeping the old value as element 0 (`a=abcde; a[2]=x' yields
+  // ([0]=abcde [2]=x)), matching bash.
+  if (v.kind == VarKind::Scalar && !v.value.empty() && v.idx.empty()) v.idx[0] = v.value;
+  v.kind = VarKind::Indexed;
   v.idx[k] = fv;
   if (k == 0) v.value = fv;
 }
@@ -1440,6 +1459,13 @@ bool Shell::set(const std::string &n_in, const std::string &v,
   if (is_locale_var(n)) apply_ctype_locale(*this);
   // `declare -u' / `-l' / `-c' fold the value's case on every assignment.
   var.value = fold_case(var.value, var.ucase, var.lcase, var.capcase);
+  // A scalar assignment to an ARRAY variable writes element 0 (`declare -a x;
+  // read x' stores x[0]; `declare -A x; x=v' keys "0"), as bash does.
+  if (var.kind == VarKind::Indexed) var.idx[0] = var.value;
+  else if (var.kind == VarKind::Assoc) {
+    if (!var.assoc.count("0")) var.assoc_seq.push_back("0");
+    var.assoc["0"] = var.value;
+  }
   // Assigning HISTSIZE re-stifles the loaded history list, as bash does; a
   // non-numeric or empty value leaves the list unbounded.
   if (n == "HISTSIZE" && history_loaded) {
