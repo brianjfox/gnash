@@ -54,6 +54,23 @@ bool has_magic(const std::string &s) {
   return false;
 }
 
+// Remove backslash quoting from a pattern component that will be used as a
+// literal pathname: `t\mp' names the directory `tmp', `tmp\' (a backslash
+// that quoted the following `/' before the pattern was split) names `tmp'.
+// bash dequotes every non-pattern component the same way (glob.c:glob_filename
+// via dequote_pathname).
+std::string dequote(const std::string &s) {
+  std::string out;
+  for (size_t i = 0; i < s.size(); i++) {
+    if (s[i] == '\\') {
+      if (i + 1 < s.size()) out += s[++i];
+      continue;  // a trailing backslash quotes nothing and disappears
+    }
+    out += s[i];
+  }
+  return out;
+}
+
 bool sm_match(const std::string &pat, const std::string &name, int smflags) {
   std::string p = pat, n = name;
   return strmatch(p.data(), n.data(), smflags) == 0;
@@ -179,7 +196,7 @@ void glob_recurse(const std::string &dir, const std::string &pat, int smflags, b
   }
 
   if (!has_magic(head)) {
-    std::string next = dir + head;
+    std::string next = dir + dequote(head);
     if (last) {
       if (path_exists(next)) results.push_back(next);
     } else if (is_dir(next)) {
