@@ -1155,6 +1155,14 @@ struct Parser {
       res.incomplete = incomplete;
       res.assign_error = assign_error;
       res.command.reset();
+      // A here-document delimited by end of input still warns even when the
+      // surrounding construct failed to parse (`(cat <<EOF' at end of file).
+      if (!toks.empty() && toks.back().heredoc_eof) {
+        res.heredoc_eof = true;
+        res.heredoc_eof_delim = toks.back().heredoc_eof_delim;
+        res.heredoc_eof_line = toks.back().heredoc_eof_line;
+        res.heredoc_eof_quoted = toks.back().heredoc_eof_quoted;
+      }
       return res;
     }
     // A here-document delimited by end of input: runnable, but incomplete for
@@ -1165,6 +1173,10 @@ struct Parser {
       res.heredoc_eof_delim = toks.back().heredoc_eof_delim;
       res.heredoc_eof_line = toks.back().heredoc_eof_line;
       res.heredoc_eof_quoted = toks.back().heredoc_eof_quoted;
+    }
+    if (!toks.empty() && toks.back().comsub_unterm) {
+      res.comsub_unterm = toks.back().comsub_unterm;
+      res.comsub_unterm_line = toks.back().comsub_unterm_line;
     }
     return res;
   }

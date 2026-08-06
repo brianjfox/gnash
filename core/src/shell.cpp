@@ -2121,7 +2121,8 @@ int Shell::run_string(const std::string &script) {
     if (r.heredoc_eof) {
       int save_ln = cur_lineno;
       int nlines = static_cast<int>(std::count(script.begin(), script.end(), '\n'));
-      cur_lineno = lineno_base + nlines;
+      cur_lineno = lineno_base + nlines +
+                   ((!script.empty() && script.back() == '\n') ? 0 : 1);
       std::fprintf(stderr,
                    "%swarning: here-document at line %d delimited by end-of-file (wanted `%s')\n",
                    err_prefix().c_str(), lineno_base + r.heredoc_eof_line,
@@ -2166,12 +2167,23 @@ int Shell::run_string(const std::string &script) {
     last_status = r.assign_error ? 1 : 2;
     return last_status;
   }
+  if (r.comsub_unterm) {
+    int save_ln = cur_lineno;
+    cur_lineno = lineno_base + r.comsub_unterm_line;
+    std::fprintf(stderr, "%swarning: command substitution: %d unterminated here-document%s\n",
+                 err_prefix().c_str(), r.comsub_unterm, r.comsub_unterm > 1 ? "s" : "");
+    cur_lineno = save_ln;
+  }
   if (r.heredoc_eof) {  // run anyway, with bash's warning
     // bash's warning prefix names the line where end-of-file was reached
     // (one past the chunk's last line), not the here-document's start.
     int save_ln = cur_lineno;
     int nlines = static_cast<int>(std::count(script.begin(), script.end(), '\n'));
-    cur_lineno = lineno_base + nlines + 1;
+    // Where end-of-file was reached: input ending mid-line counts the partial
+    // line (a comsub's `EOF)' final line); a trailing newline does not start
+    // a new one (a file's last line is the EOF line).
+    cur_lineno = lineno_base + nlines +
+                 ((!script.empty() && script.back() == '\n') ? 0 : 1);
     std::fprintf(stderr,
                  "%swarning: here-document at line %d delimited by end-of-file (wanted `%s')\n",
                  err_prefix().c_str(), lineno_base + r.heredoc_eof_line,
