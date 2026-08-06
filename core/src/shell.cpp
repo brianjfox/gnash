@@ -1651,7 +1651,10 @@ void Shell::set_personality(const std::string &name) {
   } else if (persona == Persona::Ksh) {
     set("KSH_VERSION", "Version AJM 93u+ 2012-08-01");
   } else if (persona == Persona::Ash) {
-    // ash is minimal: it advertises no BASH_/ZSH_ identity variables.
+    // ash is minimal: it advertises no BASH_/ZSH_ identity variables.  A
+    // shell invoked as `sh' runs with POSIX semantics, exactly as bash does
+    // (expansion errors are fatal to a non-interactive shell, etc).
+    opt_posix = true;
   } else if (persona == Persona::Csh) {
     set("shell", exec_path);
   } else {
