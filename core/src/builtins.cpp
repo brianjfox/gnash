@@ -2041,6 +2041,8 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
   return retval;
 }
 
+}  // namespace (close anon: find_in_path is used by the executor's checkhash path)
+
 std::string find_in_path(Shell &sh, const std::string &name) {
   if (name.find('/') != std::string::npos)
     return access(name.c_str(), X_OK) == 0 ? name : std::string();
@@ -2057,6 +2059,8 @@ std::string find_in_path(Shell &sh, const std::string &name) {
   }
   return std::string();
 }
+
+namespace {  // reopen the anonymous namespace
 
 static const char *const kBuiltinNames[] = {
     ":", "true", "false", "echo", "printf", "pwd", "cd", "export", "unset", "set",
@@ -4072,6 +4076,14 @@ int bi_hash(Shell &sh, const std::vector<std::string> &argv) {
                      ppath.c_str());
       return 1;
     }
+    // A pathname naming a directory is rejected; a nonexistent file is NOT --
+    // `hash -p /nosuchfile cat' stores the bogus path silently (bash).
+    struct stat pst;
+    if (stat(ppath.c_str(), &pst) == 0 && S_ISDIR(pst.st_mode)) {
+      std::fprintf(stderr, "%shash: %s: Is a directory\n", sh.err_prefix().c_str(),
+                   ppath.c_str());
+      return 1;
+    }
     sh.hashed[argv[i]] = ppath;
     return 0;
   }
@@ -4103,8 +4115,11 @@ int bi_hash(Shell &sh, const std::vector<std::string> &argv) {
     }
     if (print_t) {
       auto it = sh.hashed.find(n);
-      if (it != sh.hashed.end()) std::printf("%s\n", it->second.c_str());
-      else { std::fflush(stdout); std::fprintf(stderr, "%shash: %s: not found\n", sh.err_prefix().c_str(), n.c_str()); st = 1; }
+      // With -l too, -t prints the reusable form (`hash -lt cat' ->
+      // `builtin hash -p /path cat'), as bash does.
+      if (it == sh.hashed.end()) { std::fflush(stdout); std::fprintf(stderr, "%shash: %s: not found\n", sh.err_prefix().c_str(), n.c_str()); st = 1; }
+      else if (list_l) std::printf("builtin hash -p %s %s\n", it->second.c_str(), n.c_str());
+      else std::printf("%s\n", it->second.c_str());
       continue;
     }
     std::string p = find_in_path(sh, n);
