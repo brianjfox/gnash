@@ -3770,9 +3770,17 @@ int bi_kill(Shell &sh, const std::vector<std::string> &argv) {
 }
 
 // ---- help (synopsis + short description derived from bash builtins/*.def) --
-struct BuiltinHelp { const char *name, *synopsis, *shortdoc; };
+// `body' is the full documentation (bash's long doc), printed by `help NAME',
+// `help -m NAME', and `NAME --help'; entries without one fall back to the
+// short doc.  Lines are separated by `\n'; a blank doc line prints as the
+// four-space indent alone, exactly as bash does.
+struct BuiltinHelp {
+  const char *name, *synopsis, *shortdoc;
+  const char *body = nullptr;
+};
 static const BuiltinHelp kBuiltinHelp[] = {
-    {":", ":", "Null command."},
+    {":", ":", "Null command.",
+     "Null command.\n\nNo effect; the command does nothing.\n\nExit Status:\nAlways succeeds."},
     {"true", "true", "Return a successful result."},
     {"false", "false", "Return an unsuccessful result."},
     {"echo", "echo [-neE] [arg ...]", "Write arguments to the standard output."},
@@ -3784,7 +3792,10 @@ static const BuiltinHelp kBuiltinHelp[] = {
     {"set", "set [-abefhkmnptuvxBCEHPT] [-o option-name] [--] [-] [arg ...]", "Set or unset values of shell options and positional parameters."},
     {"read", "read [-Eers] [-a array] [-d delim] [-i text] [-n nchars] [-N nchars] [-p prompt] [-t timeout] [-u fd] [name ...]", "Read a line from the standard input and split it into fields."},
     {"test", "test [expr]", "Evaluate conditional expression."},
-    {"shift", "shift [n]", "Shift positional parameters."},
+    {"shift", "shift [n]", "Shift positional parameters.",
+     "Shift positional parameters.\n\nRename the positional parameters $N+1,$N+2 ... to $1,$2 ...  If N is\n"
+     "not given, it is assumed to be 1.\n\nExit Status:\n"
+     "Returns success unless N is negative or greater than $#."},
     {"exit", "exit [n]", "Exit the shell."},
     {"return", "return [n]", "Return from a shell function."},
     {"break", "break [n]", "Exit for, while, or until loops."},
@@ -3854,8 +3865,32 @@ static const BuiltinHelp kBuiltinHelp[] = {
     {"while", "while COMMANDS; do COMMANDS-2; done", "Execute commands as long as a test succeeds."},
 };
 
+// The long documentation body, indented four spaces per line (a blank doc
+// line is the indent alone); entries without a body use the short doc.
+static void help_print_body(const BuiltinHelp &h) {
+  const char *doc = h.body ? h.body : h.shortdoc;
+  const char *p = doc;
+  for (;;) {
+    const char *nl = std::strchr(p, '\n');
+    size_t len = nl ? static_cast<size_t>(nl - p) : std::strlen(p);
+    std::printf("    %.*s\n", static_cast<int>(len), p);
+    if (!nl) break;
+    p = nl + 1;
+  }
+}
+
+// `help NAME' / `NAME --help': "name: synopsis" then the indented body.
+void help_print_full(const std::string &name) {
+  for (const auto &h : kBuiltinHelp)
+    if (name == h.name) {
+      std::printf("%s: %s\n", h.name, h.synopsis);
+      help_print_body(h);
+      return;
+    }
+}
+
 int bi_help(Shell &sh, const std::vector<std::string> &argv) {
-  bool dflag = false, sflag = false;
+  bool dflag = false, sflag = false, mflag = false;
   size_t i = 1;
   for (; i < argv.size(); i++) {
     const std::string &a = argv[i];
@@ -3864,7 +3899,7 @@ int bi_help(Shell &sh, const std::vector<std::string> &argv) {
     for (size_t k = 1; k < a.size(); k++) {
       if (a[k] == 'd') dflag = true;
       else if (a[k] == 's') sflag = true;
-      else if (a[k] == 'm') { /* man format: accepted */ }
+      else if (a[k] == 'm') mflag = true;
       else {
         std::fflush(stdout);
         std::fprintf(stderr, "%shelp: -%c: invalid option\n", sh.err_prefix().c_str(), a[k]);
@@ -3983,7 +4018,25 @@ int bi_help(Shell &sh, const std::vector<std::string> &argv) {
     for (const BuiltinHelp *h : hits) {
       if (sflag) std::printf("%s: %s\n", h->name, h->synopsis);
       else if (dflag) std::printf("%s - %s\n", h->name, h->shortdoc);
-      else std::printf("%s: %s\n    %s\n", h->name, h->synopsis, h->shortdoc);
+      else if (mflag) {
+        // Man-page layout (help.def show_manpage).  The IMPLEMENTATION
+        // section reproduces bash's version/copyright/license block; the
+        // version lines carry the word `version' (the test filters on it).
+        std::printf("NAME\n    %s - %s\n\n", h->name, h->shortdoc);
+        std::printf("SYNOPSIS\n    %s\n\n", h->synopsis);
+        std::printf("DESCRIPTION\n");
+        help_print_body(*h);
+        std::printf("\nSEE ALSO\n    bash(1)\n\n");
+        std::printf("IMPLEMENTATION\n");
+        std::printf("    GNU bash, version %s (%s)\n", sh.get("BASH_VERSION").c_str(),
+                    sh.get("MACHTYPE").c_str());
+        std::printf("    Copyright (C) 2025 Free Software Foundation, Inc.\n");
+        std::printf("    License GPLv3+: GNU GPL version 3 or later "
+                    "<http://gnu.org/licenses/gpl.html>\n\n");
+      } else {
+        std::printf("%s: %s\n", h->name, h->synopsis);
+        help_print_body(*h);
+      }
     }
   }
   return st;
@@ -5514,6 +5567,17 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
   // A builtin disabled with `enable -n' is treated as not a builtin, so an
   // external command of the same name runs instead.
   if (sh.disabled_builtins.count(cmd) && cmd != "enable") return false;
+
+  // Every builtin accepts `--help' and prints its long documentation with
+  // status 2, EXCEPT the ones for which the word is ordinary data: echo
+  // prints it, test/[ treat it as an operand, and :/true/false ignore it.
+  if (argv.size() > 1 && argv[1] == "--help" && is_builtin_name(cmd) &&
+      cmd != "echo" && cmd != "test" && cmd != "[" && cmd != ":" &&
+      cmd != "true" && cmd != "false") {
+    help_print_full(cmd);
+    if (status) *status = 2;
+    return true;
+  }
 
   // In zsh persona, accept common zsh-only builtins as no-ops so zsh startup
   // files (including the system /etc/zshrc) run without "command not found".
