@@ -1569,21 +1569,27 @@ int Executor::run_simple(const SimpleCommand *c) {
         if (argv[k].find('x') != std::string::npos ||
             argv[k].find('r') != std::string::npos) { persist = true; break; }
     }
+    bool special_persist = false;
     if (!persist && sh_.opt_posix) {
       static const std::set<std::string> kSpecial = {
           ":",      ".",     "break", "continue", "eval",  "exec",
           "exit",   "export", "readonly", "return", "set", "shift",
           "source", "times", "trap",  "unset"};
-      if (kSpecial.count(argv[0])) persist = true;
+      if (kSpecial.count(argv[0])) persist = special_persist = true;
     }
     if (persist) {
-      // A name also bound by an ENCLOSING temporary environment (depth >= 2:
-      // ours plus at least one outer) persists through it -- mark it so the
-      // outer undo keeps the value this builtin set.
-      for (const auto &a : assigns) {
-        auto d = sh_.temp_env_depth.find(a.first);
-        if (d != sh_.temp_env_depth.end() && d->second >= 2) sh_.temp_persist.insert(a.first);
-      }
+      // Under the POSIX-special rule only: a name also bound by an ENCLOSING
+      // temporary environment (depth >= 2: ours plus at least one outer)
+      // persists through it -- mark it so the outer undo keeps the value this
+      // builtin set (`var=30 func' + `var=20 return').  The export/readonly
+      // promotion path must NOT punch through: default-mode `a=7 f1' where f1
+      // runs `a=3 readonly a' restores the caller's a (and its attributes)
+      // at return (varenv23.sub).
+      if (special_persist)
+        for (const auto &a : assigns) {
+          auto d = sh_.temp_env_depth.find(a.first);
+          if (d != sh_.temp_env_depth.end() && d->second >= 2) sh_.temp_persist.insert(a.first);
+        }
       restore.clear();
     }
     undo_temp();
