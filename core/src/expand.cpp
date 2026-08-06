@@ -16,10 +16,12 @@
 #include <climits>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <cwchar>
 #include <cwctype>
 #include <functional>
 #include <pwd.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <sys/wait.h>
 
@@ -2782,6 +2784,111 @@ static bool opens_bracket(const std::string &field, const std::string &mask, siz
   return false;
 }
 
+// $GLOBSORT (bash 5.3, pathexp.c setup_globsort): an optional leading `+'
+// (ignored) or `-' (reverse), then one of name/size/mtime/atime/ctime/blocks/
+// numeric/nosort.  Unset, empty, or an unrecognized keyword mean the default
+// name sort in ascending order (an unknown keyword also drops the `-').  Ties
+// under the stat-based sorts fall back to the name comparison, which itself
+// honors the reverse flag ("secondary sorting preserves reverse ordering").
+static void globsort_results(Shell &sh, std::vector<std::string> &v) {
+  enum SortType { S_NAME, S_SIZE, S_MTIME, S_ATIME, S_CTIME, S_BLOCKS, S_NUMERIC, S_NOSORT };
+  std::string spec = sh.get("GLOBSORT");
+  size_t p = 0;
+  while (p < spec.size() && (spec[p] == ' ' || spec[p] == '\t')) p++;
+  bool rev = false;
+  if (p < spec.size() && (spec[p] == '+' || spec[p] == '-')) rev = (spec[p++] == '-');
+  std::string t = spec.substr(p);
+  SortType type;
+  if (spec.empty()) type = S_NAME;                       // unset/empty: default
+  else if (t.empty()) type = S_NAME;                     // bare `+' / `-'
+  else if (t == "name") type = S_NAME;
+  else if (t == "size") type = S_SIZE;
+  else if (t == "mtime") type = S_MTIME;
+  else if (t == "atime") type = S_ATIME;
+  else if (t == "ctime") type = S_CTIME;
+  else if (t == "blocks") type = S_BLOCKS;
+  else if (t == "numeric") type = S_NUMERIC;
+  else if (t == "nosort") type = S_NOSORT;
+  else { type = S_NAME; rev = false; }                   // unknown: historical
+  if (type == S_NOSORT) return;
+  auto namecmp = [rev](const std::string &a, const std::string &b) {
+    return rev ? b.compare(a) : a.compare(b);
+  };
+  if (type == S_NAME) {
+    std::sort(v.begin(), v.end(),
+              [&](const std::string &a, const std::string &b) { return namecmp(a, b) < 0; });
+    return;
+  }
+  struct Ent {
+    std::string name;
+    bool statted;
+    struct stat st;
+  };
+  std::vector<Ent> ents(v.size());
+  for (size_t i = 0; i < v.size(); i++) {
+    ents[i].name = v[i];
+    ents[i].statted = stat(v[i].c_str(), &ents[i].st) == 0;
+    if (!ents[i].statted) std::memset(&ents[i].st, 0, sizeof(ents[i].st));
+  }
+#ifdef __APPLE__
+#define GN_ST_MTIM st_mtimespec
+#define GN_ST_ATIM st_atimespec
+#define GN_ST_CTIM st_ctimespec
+#else
+#define GN_ST_MTIM st_mtim
+#define GN_ST_ATIM st_atim
+#define GN_ST_CTIM st_ctim
+#endif
+  auto gencmp = [](long long a, long long b) { return (a > b) - (a < b); };
+  auto cmp = [&](const Ent &a, const Ent &b) {
+    int x = 0;
+    switch (type) {
+      case S_SIZE:
+        x = gencmp(a.st.st_size, b.st.st_size);
+        break;
+      case S_BLOCKS:
+        x = gencmp(a.st.st_blocks, b.st.st_blocks);
+        break;
+      case S_MTIME:
+      case S_ATIME:
+      case S_CTIME: {
+        struct timespec ta, tb;
+        if (type == S_MTIME) { ta = a.st.GN_ST_MTIM; tb = b.st.GN_ST_MTIM; }
+        else if (type == S_ATIME) { ta = a.st.GN_ST_ATIM; tb = b.st.GN_ST_ATIM; }
+        else { ta = a.st.GN_ST_CTIM; tb = b.st.GN_ST_CTIM; }
+        x = gencmp(ta.tv_sec, tb.tv_sec);
+        if (x == 0) x = gencmp(ta.tv_nsec, tb.tv_nsec);
+        break;
+      }
+      case S_NUMERIC: {
+        // Names that are all digits compare as numbers; a numeric name sorts
+        // before a non-numeric one; two non-numeric names compare as names
+        // (and that comparison needs no reverse-tiebreak special case).
+        auto num = [](const std::string &s, long long &out) {
+          if (s.empty()) return false;
+          for (char c : s)
+            if (c < '0' || c > '9') return false;
+          out = std::strtoll(s.c_str(), nullptr, 10);
+          return true;
+        };
+        long long ia = 0, ib = 0;
+        bool va = num(a.name, ia), vb = num(b.name, ib);
+        if (va && vb) x = gencmp(ia, ib);
+        else if (!va && !vb) return namecmp(a.name, b.name) < 0;
+        else x = va ? -1 : 1;
+        break;
+      }
+      default:
+        break;
+    }
+    if (rev) x = -x;
+    if (x != 0) return x < 0;
+    return namecmp(a.name, b.name) < 0;
+  };
+  std::sort(ents.begin(), ents.end(), cmp);
+  for (size_t i = 0; i < v.size(); i++) v[i] = std::move(ents[i].name);
+}
+
 std::vector<std::string> Expander::glob_field(const std::string &field, const std::string &mask) {
   // Build a glob pattern: unquoted metacharacters stay special, quoted ones are
   // backslash-escaped; also produce the literal (quotes already removed).
@@ -2865,6 +2972,7 @@ std::vector<std::string> Expander::glob_field(const std::string &field, const st
     if (it != sh_.shopt_opts.end() && it->second) return {};  // nullglob: remove word
     return {field};  // default: keep the pattern literally
   }
+  globsort_results(sh_, matches);
   return matches;
 }
 
