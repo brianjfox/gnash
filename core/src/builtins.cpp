@@ -338,6 +338,26 @@ static bool lenient_element_target(Shell &sh, size_t argv_idx) {
   return lb != std::string::npos && lb > 0 && r.text.back() == ']';
 }
 
+// Without assoc_expand_once, a `name[sub]' builtin target's subscript gets
+// expanded AGAIN by the assignment; a quote the first expansion left behind
+// (`a[80's]' from `a[$b]', b="80's") makes that re-expansion fail, so bash
+// rejects the whole word as not a valid identifier (assoc9.sub).  True when
+// the target either needs no re-expansion or its quotes are balanced.
+static bool subscript_reexpands(Shell &sh, const std::string &target) {
+  if (expand_once_on(sh)) return true;
+  size_t lb = target.find('[');
+  if (lb == std::string::npos || target.empty() || target.back() != ']') return true;
+  std::string sub = target.substr(lb + 1, target.size() - lb - 2);
+  bool sq = false, dq = false;
+  for (size_t i = 0; i < sub.size(); i++) {
+    char c = sub[i];
+    if (!sq && c == '\\') { i++; continue; }
+    if (!dq && c == '\'') sq = !sq;
+    else if (!sq && c == '"') dq = !dq;
+  }
+  return !sq && !dq;
+}
+
 bool well_formed_element(const std::string &s, bool allow_empty = false) {
   size_t lb = s.find('[');
   if (lb == std::string::npos) return s.find(']') == std::string::npos;
@@ -479,8 +499,9 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
 
   if (to_var) {
     auto lb = vname.find('[');
-    if (lb != std::string::npos && !lenient_element_target(sh, vname_idx) &&
-        !well_formed_element(vname)) {
+    if (lb != std::string::npos &&
+        ((!lenient_element_target(sh, vname_idx) && !well_formed_element(vname)) ||
+         !subscript_reexpands(sh, vname))) {
       std::fprintf(stderr, "%sprintf: `%s': not a valid identifier\n",
                    sh.err_prefix().c_str(), vname.c_str());
       return 1;
@@ -1848,7 +1869,7 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
   for (size_t ni = 0; ni < names.size(); ni++) {
     const std::string &nm = names[ni];
     if (lenient_element_target(sh, ni < name_idx.size() ? name_idx[ni] : SIZE_MAX)) continue;
-    if (!valid_read_target(nm)) {
+    if (!valid_read_target(nm) || !subscript_reexpands(sh, nm)) {
       std::fprintf(stderr, "%sread: `%s': not a valid identifier\n", sh.err_prefix().c_str(),
                    nm.c_str());
       return 1;
