@@ -2183,6 +2183,18 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
       } else {
         // `declare -p' with attribute flags (`-pa', `-pi', `-pr', ...) lists
         // only the variables carrying those attributes, not every variable.
+        // SHELLOPTS is a real readonly variable in bash's table; gnash keeps
+        // it dynamic, so a readonly listing splices it in at its sorted spot
+        // (`readonly -p | grep SHELLOPTS').
+        bool need_shellopts = readonly && !nameref && !integer && !exported && !mk_array &&
+                              !mk_assoc && !lcase && !ucase && !capcase && !sh.is_zsh();
+        auto emit_shellopts = [&]() {
+          if (!need_shellopts) return;
+          std::string sv;
+          if (sh.dynamic_var("SHELLOPTS", sv))
+            std::printf("declare -r SHELLOPTS=\"%s\"\n", sv.c_str());
+          need_shellopts = false;
+        };
         for (const auto &kv : sh.vars) {
           const std::string &nm = kv.first;
           if (nm.empty() || !(std::isalpha(static_cast<unsigned char>(nm[0])) || nm[0] == '_'))
@@ -2197,8 +2209,10 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
           if (lcase && !v.lcase) continue;
           if (ucase && !v.ucase) continue;
           if (capcase && !v.capcase) continue;
+          if (need_shellopts && nm > "SHELLOPTS") emit_shellopts();
           declare_print_var(kv.first, v, argv[0], sh.opt_posix);
         }
+        emit_shellopts();
       }
     } else {
       // `local -p NAME' reports only variables local to the CURRENT function
@@ -2302,6 +2316,18 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
   if (i >= argv.size() &&
       (nameref || readonly || integer || exported || mk_array || mk_assoc ||
        lcase || ucase || capcase)) {
+    // SHELLOPTS is a real readonly variable in bash's table; gnash keeps it
+    // dynamic, so a readonly listing must splice it in at its sorted spot
+    // (`readonly -p | grep SHELLOPTS' -- varenv.tests).
+    bool need_shellopts = readonly && !nameref && !integer && !exported && !mk_array &&
+                          !mk_assoc && !lcase && !ucase && !capcase && !sh.is_zsh();
+    auto emit_shellopts = [&]() {
+      if (!need_shellopts) return;
+      std::string sv;
+      if (sh.dynamic_var("SHELLOPTS", sv))
+        std::printf("declare -r SHELLOPTS=\"%s\"\n", sv.c_str());
+      need_shellopts = false;
+    };
     for (const auto &kv : sh.vars) {
       const std::string &nm = kv.first;
       if (nm.empty() || !(std::isalpha(static_cast<unsigned char>(nm[0])) || nm[0] == '_'))
@@ -2316,7 +2342,29 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
       if (lcase && !v.lcase) continue;
       if (ucase && !v.ucase) continue;
       if (capcase && !v.capcase) continue;
+      if (need_shellopts && nm > "SHELLOPTS") emit_shellopts();
       declare_print_var(kv.first, v, argv[0], sh.opt_posix);
+    }
+    emit_shellopts();
+    return 0;
+  }
+
+  // Bare `local' inside a function lists the current scope's local variables
+  // in declare form (`declare -a avar=(...)', `declare -- z="yy"'), sorted.
+  if (local && !global && i >= argv.size()) {
+    if (!sh.local_stack.empty()) {
+      std::vector<std::string> names;
+      for (const auto &e : sh.local_stack.back()) {
+        const std::string &nm = e.first;
+        if (nm.empty() || !(std::isalpha(static_cast<unsigned char>(nm[0])) || nm[0] == '_'))
+          continue;  // skip the `-' set -o snapshot and other markers
+        if (std::find(names.begin(), names.end(), nm) == names.end()) names.push_back(nm);
+      }
+      std::sort(names.begin(), names.end());
+      for (const auto &nm : names) {
+        auto vit = sh.vars.find(nm);
+        if (vit != sh.vars.end()) declare_print_var(nm, vit->second, "declare", sh.opt_posix);
+      }
     }
     return 0;
   }
