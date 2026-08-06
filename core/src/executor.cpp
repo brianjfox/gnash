@@ -1125,6 +1125,7 @@ int Executor::run_simple(const SimpleCommand *c) {
   } psg{sh_, sh_.procsubs.size()};
   std::vector<std::pair<std::string, std::string>> assigns;
   std::vector<std::string> argv;
+  std::vector<Shell::RawArg> raw_prov;
   // Pre-formatted `set -x' trace lines for the assignment words, in source
   // order: a scalar assignment as NAME=<quoted-value> (or NAME+=...), an array
   // compound assignment as its verbatim source word, so xtrace matches bash even
@@ -1221,10 +1222,17 @@ int Executor::run_simple(const SimpleCommand *c) {
       // argument is an assignment word: pass it through raw so it is neither
       // word-split nor globbed and array literals survive; the builtin expands
       // and parses it itself.
-      if (!argv.empty() && is_assignment_builtin(argv[0]) && is_assignment_word_text(w.text))
+      if (!argv.empty() && is_assignment_builtin(argv[0]) && is_assignment_word_text(w.text)) {
         argv.push_back(w.text);
-      else
+        raw_prov.push_back({w.text, (w.flags & W_QUOTED) != 0});
+      } else {
+        size_t before = argv.size();
         for (const std::string &f : ex.expand_args({w})) argv.push_back(f);
+        // Provenance only survives a 1:1 word->field expansion.
+        if (argv.size() == before + 1)
+          raw_prov.push_back({w.text, (w.flags & W_QUOTED) != 0});
+        raw_prov.resize(argv.size());
+      }
     }
   }
 
@@ -1290,6 +1298,8 @@ int Executor::run_simple(const SimpleCommand *c) {
     }
     if (describe || bad) break;  // -v/-V/invalid: dispatch to the `command' builtin
     argv.erase(argv.begin(), argv.begin() + k);  // strip `command' and its options
+    raw_prov.erase(raw_prov.begin(),
+                   raw_prov.begin() + std::min(k, raw_prov.size()));
     skip_functions = true;
     if (argv.empty()) return (sh_.last_status = 0);  // bare `command'
   }
@@ -1486,7 +1496,9 @@ int Executor::run_simple(const SimpleCommand *c) {
                // `command' strips the POSIX special-builtin exit property: a
                // failing `command . nofile' does not end a posix-mode shell.
                sh_.posix_builtin_shield = skip_functions;
+               sh_.raw_args = std::move(raw_prov);
                bool b = run_builtin(sh_, argv, &status);
+               sh_.raw_args.clear();
                sh_.posix_builtin_shield = false;
                return b;
              }())) {

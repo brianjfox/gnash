@@ -1204,6 +1204,25 @@ static void apply_ctype_locale(Shell &sh) {
 
 bool Shell::set(const std::string &n_in, const std::string &v,
                 const char *nameref_ctx) {
+  // A DIRECT element reference (`A[sub]', e.g. a `read A[k]' target) writes
+  // through to the array element -- previously this silently created a shadow
+  // variable literally named "A[sub]".  The subscript spans to the LAST
+  // bracket, so a lenient assoc_expand_once target (`A[]]') keys on `]'.
+  {
+    size_t lb = n_in.find('[');
+    if (lb != std::string::npos && lb > 0 && n_in.back() == ']') {
+      std::string base = n_in.substr(0, lb);
+      std::string sub = n_in.substr(lb + 1, n_in.size() - lb - 2);
+      auto bit = vars.find(deref(base));
+      if (bit != vars.end() && bit->second.readonly) {
+        std::fprintf(stderr, "%s%s: readonly variable\n", err_prefix().c_str(),
+                     base.c_str());
+        return false;
+      }
+      array_set(base, sub, v);
+      return true;
+    }
+  }
   // A nameref whose target is an array element (`declare -n r=a[2]'): write
   // through to that element.  array_set enforces the target's readonly flag.
   {

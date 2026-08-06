@@ -650,7 +650,7 @@ long long eval_string(Shell &sh, const std::string &str, int depth, bool *ok) {
 // evaluated here (the numeric result re-evaluates idempotently in
 // array_get/array_set, which still apply negative-index resolution); an
 // associative key passes through untouched.
-static bool resolve_sub(const Node *n, Ctx &ctx, std::string &out) {
+static bool resolve_sub(const Node *n, Ctx &ctx, std::string &out, bool writing = false) {
   out = n->sub;
   auto kind_of = [&]() {
     auto it = ctx.sh.vars.find(ctx.sh.deref(n->name));
@@ -724,7 +724,15 @@ static bool resolve_sub(const Node *n, Ctx &ctx, std::string &out) {
   // diagnostic naming the SUBSCRIPT.
   if (out.empty()) {
     ctx.ok = false;
-    ctx.full_msg = "`" + n->name + "[]': not a valid identifier";
+    if (writing) {
+      // `(( a[""]=24 ))' -- an assignment target: `a[]': not a valid
+      // identifier (with the command prefix).
+      ctx.full_msg = "`" + n->name + "[]': not a valid identifier";
+    } else {
+      // `(( y[$none] ))' -- a read: y[]: bad array subscript (bare).
+      ctx.full_msg = n->name + "[]: bad array subscript";
+      ctx.full_msg_bare = true;
+    }
     return false;
   }
   if (out == "@" || out == "*") {
@@ -824,7 +832,7 @@ void ref_set(const Node *n, long long val, Ctx &ctx, const std::string *rsub = n
       return;
     }
     std::string rs;
-    if (!resolve_sub(n, ctx, rs)) return;
+    if (!resolve_sub(n, ctx, rs, /*writing=*/true)) return;
     ctx.sh.array_set(n->name, rs, std::to_string(val));
     return;
   }
@@ -856,7 +864,7 @@ long long eval_node(const Node *n, Ctx &ctx) {
       // not run again for the write back).
       std::string rs;
       const std::string *rp = nullptr;
-      if (n->has_sub) { if (!resolve_sub(n, ctx, rs)) return 0; rp = &rs; }
+      if (n->has_sub) { if (!resolve_sub(n, ctx, rs, /*writing=*/true)) return 0; rp = &rs; }
       long long cur = ref_get(n, ctx, rp);
       long long d = (n->k == K::PreInc || n->k == K::PostInc) ? 1 : -1;
       ref_set(n, cur + d, ctx, rp);
@@ -901,7 +909,7 @@ long long eval_node(const Node *n, Ctx &ctx) {
       // write back (`d[x++]+=2' bumps x a single time, as bash).
       std::string rs;
       const std::string *rp = nullptr;
-      if (o != "=" && n->has_sub) { if (!resolve_sub(n, ctx, rs)) return 0; rp = &rs; }
+      if (o != "=" && n->has_sub) { if (!resolve_sub(n, ctx, rs, /*writing=*/true)) return 0; rp = &rs; }
       if (o != "=") {
         long long cur = ref_get(n, ctx, rp);
         if (o == "+=") res = cur + rhs;
