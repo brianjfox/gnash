@@ -513,9 +513,20 @@ int main(int argc, char **argv) {
     }
     sh.init_job_control(false);
     read_startup_files(sh, startup_prefix, login, false, sopts);
-    std::ostringstream ss;
-    ss << std::cin.rdbuf();
-    sh.run_script_lines(ss.str());
+    for (;;) {
+      // Raw read(2): std::cin's stdio buffering would not follow an
+      // `exec 0< file' rebinding of fd 0.
+      std::string buf;
+      char tmp[4096];
+      ssize_t n;
+      while ((n = ::read(0, tmp, sizeof tmp)) > 0) buf.append(tmp, static_cast<size_t>(n));
+      sh.run_script_lines(buf);
+      if (sh.stdin_source_changed && !sh.exiting) {
+        sh.stdin_source_changed = false;  // continue from the rebound fd 0
+        continue;
+      }
+      break;
+    }
   }
 
   int rc = sh.exiting ? sh.exit_status : sh.last_status;
