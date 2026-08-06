@@ -2453,16 +2453,38 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
           a_display = elem + (eq == std::string::npos ? std::string() : a.substr(append ? eq - 1 : eq));
         }
       }
+      // Under `shopt -s assoc_expand_once' an ASSOCIATIVE subscript is a
+      // literal key spanning to the last `]': `declare x["a[b"]=1' keys on
+      // `a[b' (an unclosed `[' is fine), but a `]' BEFORE the final one still
+      // rejects the word (`foo["foo]bar"]=bax' -- assoc9.sub).
+      bool assoc_literal = false;
+      {
+        size_t elb2 = elem.find('[');
+        auto dbit = sh.vars.find(sh.deref(elem.substr(0, elb2)));
+        if (expand_once_on(sh) && dbit != sh.vars.end() &&
+            dbit->second.kind == VarKind::Assoc && elem.back() == ']' &&
+            elb2 + 1 < elem.size() - 1) {
+          std::string inner = elem.substr(elb2 + 1, elem.size() - elb2 - 2);
+          if (inner.find(']') != std::string::npos) {
+            std::fprintf(stderr, "%s%s: `%s': not a valid identifier\n",
+                         sh.err_prefix().c_str(), argv[0].c_str(), a_display.c_str());
+            ret = 1;
+            continue;
+          }
+          assoc_literal = true;
+        }
+      }
       // An empty or invalid BASE name (`declare []=asdf') is the
       // invalid-identifier error, not a subscript diagnostic.
-      if (!valid_identifier(elem.substr(0, elem.find('['))) ||
-          !well_formed_element(elem, /*allow_empty=*/true)) {
+      if (!assoc_literal &&
+          (!valid_identifier(elem.substr(0, elem.find('['))) ||
+           !well_formed_element(elem, /*allow_empty=*/true))) {
         std::fprintf(stderr, "%s%s: `%s': not a valid identifier\n", sh.err_prefix().c_str(),
                      argv[0].c_str(), a_display.c_str());
         ret = 1;
         continue;
       }
-      if (!well_formed_element(elem)) {  // balanced but empty: a[]
+      if (!assoc_literal && !well_formed_element(elem)) {  // balanced but empty: a[]
         std::fprintf(stderr, "%s%s: bad array subscript\n", sh.err_prefix().c_str(),
                      elem.c_str());
         ret = 1;
