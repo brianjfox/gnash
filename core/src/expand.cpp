@@ -2968,6 +2968,17 @@ std::vector<std::string> Expander::glob_field(const std::string &field, const st
                   matches.end());
   }
   if (matches.empty()) {
+    // `shopt -s failglob': a pattern with no matches is an error that aborts
+    // the whole command (bash longjmps with DISCARD; status 1).  Only the
+    // first failing pattern reports -- bash never expands the rest.
+    auto fg = sh_.shopt_opts.find("failglob");
+    if (fg != sh_.shopt_opts.end() && fg->second) {
+      if (!sh_.arith_error) {
+        std::fprintf(stderr, "%sno match: %s\n", sh_.err_prefix().c_str(), field.c_str());
+        sh_.arith_error = true;
+      }
+      return {};
+    }
     auto it = sh_.shopt_opts.find("nullglob");
     if (it != sh_.shopt_opts.end() && it->second) return {};  // nullglob: remove word
     return {field};  // default: keep the pattern literally
