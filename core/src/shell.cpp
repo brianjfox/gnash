@@ -1500,6 +1500,18 @@ void Shell::unset(const std::string &n_in, bool force, bool noref) {
       for (auto fit = std::next(local_stack.rbegin()); fit != local_stack.rend(); ++fit) {
         for (auto e = fit->begin(); e != fit->end(); ++e) {
           if (e->first != n) continue;
+          // `shopt -s localvar_unset': treat the enclosing scope's local as
+          // if unset THERE (ash semantics, varenv24.sub) -- it stays a local,
+          // now-unset binding until its frame returns -- instead of popping
+          // the cell to expose what lies beneath.
+          auto lvu = shopt_opts.find("localvar_unset");
+          if (lvu != shopt_opts.end() && lvu->second) {
+            Variable v;
+            v.invisible = true;
+            v.exported = it->second.exported;
+            vars[n] = v;
+            return;
+          }
           if (e->second) vars[n] = *e->second;
           else vars.erase(n);
           fit->erase(e);
