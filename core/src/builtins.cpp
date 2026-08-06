@@ -2519,7 +2519,12 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
             std::fprintf(stderr, "%s%s: cannot convert %s array\n", pfx.c_str(),
                          name.c_str(), cvt_dir);
           } else {
-            if (global)
+            // The function-name line also appears when a localvar_inherit'd
+            // (or -I'd) local copied the mismatched enclosing array AND the
+            // word carries an assignment: `declare -A var+=(...)' reports the
+            // failed make-local conversion first, a bare `declare -A var'
+            // only the builtin's own line (varenv14.sub lines 31 vs 77).
+            if (global || (inherited_local && eq != std::string::npos))
               std::fprintf(stderr, "%s%s: %s: cannot convert %s array\n", pfx.c_str(),
                            funcname.c_str(), name.c_str(), cvt_dir);
             std::fprintf(stderr, "%s%s: %s: cannot convert %s array\n", pfx.c_str(),
