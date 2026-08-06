@@ -563,7 +563,20 @@ std::string Expander::param_value(const std::string &name, bool &set, bool defau
   set = true;
   if (name == "?") return std::to_string(sh_.last_status);
   if (name == "$") return sh_.get("$");
-  if (name == "!") return std::to_string(sh_.last_bg_pid);
+  if (name == "!") {
+    // $! is UNSET until an asynchronous job has run: `set -u; echo $!' is an
+    // unbound-variable error (posixexp1.sub), and ${!-word} substitutes.
+    if (sh_.last_bg_pid == 0) {
+      set = false;
+      if (sh_.opt_nounset && !defaulting_op) {
+        std::fprintf(stderr, "%s!: unbound variable\n", sh_.err_prefix().c_str());
+        sh_.exiting = true;
+        sh_.exit_status = 127;
+      }
+      return std::string();
+    }
+    return std::to_string(sh_.last_bg_pid);
+  }
   if (name == "#") return std::to_string(sh_.positional.size());
   if (name == "0") return sh_.arg0;
   if (name == "-") {
@@ -606,6 +619,13 @@ std::string Expander::param_value(const std::string &name, bool &set, bool defau
     size_t idx = static_cast<size_t>(std::atoi(name.c_str()));
     if (idx >= 1 && idx <= sh_.positional.size()) return sh_.positional[idx - 1];
     set = false;
+    // `set -u': an unset positional is an unbound-variable error too
+    // (`sh -uc 'echo $1'' -- posixexp1.sub).
+    if (sh_.opt_nounset && !defaulting_op) {
+      std::fprintf(stderr, "%s$%s: unbound variable\n", sh_.err_prefix().c_str(), name.c_str());
+      sh_.exiting = true;
+      sh_.exit_status = 127;
+    }
     return std::string();
   }
   std::string v;
@@ -1055,7 +1075,21 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
       std::string expr = t.substr(i + 3, (end - 1) - (i + 3));
       bool ok = true;
       long long v = eval_arith_msg(sh_, expand_arith(expr), "", &ok, /*expand_subs=*/1);
-      if (!ok) { sh_.arith_error = true; i = end + 1; return; }
+      // A $((...)) syntax error unwinds the whole command LIST (bash's
+      // DISCARD longjmp): `-c 'echo $((x+)); exit 0'' exits 1 without
+      // running the exit -- while a file reader continues at the next line.
+      // In POSIX mode the expansion error is fatal to a non-interactive
+      // shell outright (bash exits 127 -- posixexp2.sub test 15).
+      if (!ok) {
+        sh_.arith_abort = true;
+        sh_.last_status = 1;
+        if (sh_.opt_posix && !sh_.interactive) {
+          sh_.exiting = true;
+          sh_.exit_status = 127;
+        }
+        i = end + 1;
+        return;
+      }
       std::string s = std::to_string(v);
       for (char c : s) { out += c; mask += qm; }
       i = end + 1;
@@ -1069,7 +1103,21 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
       std::string expr = t.substr(i + 2, end - (i + 2));
       bool ok = true;
       long long v = eval_arith_msg(sh_, expand_arith(expr), "", &ok, /*expand_subs=*/1);
-      if (!ok) { sh_.arith_error = true; i = end + 1; return; }
+      // A $((...)) syntax error unwinds the whole command LIST (bash's
+      // DISCARD longjmp): `-c 'echo $((x+)); exit 0'' exits 1 without
+      // running the exit -- while a file reader continues at the next line.
+      // In POSIX mode the expansion error is fatal to a non-interactive
+      // shell outright (bash exits 127 -- posixexp2.sub test 15).
+      if (!ok) {
+        sh_.arith_abort = true;
+        sh_.last_status = 1;
+        if (sh_.opt_posix && !sh_.interactive) {
+          sh_.exiting = true;
+          sh_.exit_status = 127;
+        }
+        i = end + 1;
+        return;
+      }
       std::string s = std::to_string(v);
       for (char c : s) { out += c; mask += qm; }
       i = end + 1;
@@ -1216,18 +1264,40 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
               if (dq && !sh_.is_zsh() && !has_at) {
                 std::string ex = expand_dq_word(word);
                 for (char c : ex) { out += c; mask += '1'; }
+              } else if (heredoc) {
+                // Inside ${...} in a here-document, DOUBLE quotes and
+                // backslash escapes are active (`${P+\"$P\"}' emits `"A"',
+                // `${P+"$P"}' emits `A') while single quotes and $'...'
+                // stay literal (bash).  Neutralize the `$''/`$"' forms and
+                // process as an unquoted word with literal single quotes.
+                std::string w = expand_leading_tilde(sh_, word);
+                std::string w2;
+                for (size_t k = 0; k < w.size(); k++) {
+                  if (w[k] == '\\' && k + 1 < w.size()) {
+                    w2 += w[k];
+                    w2 += w[k + 1];
+                    k++;
+                    continue;
+                  }
+                  if (w[k] == '$' && k + 1 < w.size() && (w[k + 1] == '\'' || w[k + 1] == '"')) {
+                    w2 += "\\$";
+                    continue;
+                  }
+                  w2 += w[k];
+                }
+                // Wrap in double quotes: backslash then behaves as in
+                // dquotes (escaping only \ $ \` "), inner quotes toggle out
+                // and vanish, and nothing word-splits -- the heredoc rules.
+                process("\"" + w2 + "\"", out, mask, false, false);
               } else {
                 // Unquoted default word: a leading `~' tilde-expands (bash).
-                // In a here-document the word keeps here-document quoting
-                // (e.g. $'...' stays literal), so pass the flag through.
                 size_t m0 = mask.size();
-                process(expand_leading_tilde(sh_, word), out, mask, false, heredoc);
+                process(expand_leading_tilde(sh_, word), out, mask, false, false);
                 // The replacement is EXPANSION OUTPUT: its unquoted literal
                 // text IFS-splits like a parameter's value (`${IFS+foo 'b c'
                 // baz}' is three fields, the middle protected by its quotes).
-                if (!heredoc)
-                  for (size_t mk = m0; mk < mask.size(); mk++)
-                    if (mask[mk] == '2') mask[mk] = '0';
+                for (size_t mk = m0; mk < mask.size(); mk++)
+                  if (mask[mk] == '2') mask[mk] = '0';
               }
               i = end + 1;
               return;
@@ -2133,7 +2203,32 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
 
   size_t p = 0;
   std::string name;
-  if (p < b.size() && (b[p] == '@' || b[p] == '*' || b[p] == '?' || b[p] == '$' ||
+  bool named_by_quote = false;
+  // extquote: a $'...' in parameter-NAME position decodes to the name
+  // (`${$'x1'%$'t'}' is `${x1%t}' -- posixexp7.sub); a BARE-quoted name is
+  // bash's `bad substitution' error, and the command aborts.
+  if (b.size() >= 3 && b[0] == '$' && b[1] == '\'') {
+    size_t qe = b.find('\'', 2);
+    if (qe != std::string::npos) {
+      name = ansi_c(b.substr(2, qe - 2));
+      p = qe + 1;
+      named_by_quote = true;
+    }
+  } else if (!b.empty() && (b[0] == '\'' || b[0] == '"')) {
+    // bash's diagnostic shows the body with $'...' forms DEQUOTED to plain
+    // quotes (`${'x1'%$'t'}' reports as `${'x1'%'t'}').
+    std::string mb;
+    for (size_t k = 0; k < b.size(); k++) {
+      if (b[k] == '$' && k + 1 < b.size() && b[k + 1] == '\'') continue;
+      mb += b[k];
+    }
+    std::fprintf(stderr, "%s${%s}: bad substitution\n", sh.err_prefix().c_str(), mb.c_str());
+    sh.arith_error = true;
+    return std::string();
+  }
+  if (named_by_quote) {
+    // fall through to the subscript/operator handling below with NAME set
+  } else if (p < b.size() && (b[p] == '@' || b[p] == '*' || b[p] == '?' || b[p] == '$' ||
                        b[p] == '!' || b[p] == '#' || b[p] == '-')) {
     name = b.substr(0, 1);
     p = 1;
@@ -2219,13 +2314,14 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
       // below zero is a bad subscript that aborts the command.  bash's length
       // form names the bracketed raw text (`[-10]: bad array subscript'), the
       // value form the base name (`c: bad array subscript').
-      if (idx < 0 && !sh.is_zsh()) {
+      if (idx < 0 && !sh.is_zsh() && vit != sh.vars.end()) {
+        // A wholly UNSET variable never errors here: bash's ${#unset[-10]}
+        // is 0 and ${unset[-10]} empty (posixexp coverage); only an existing
+        // variable with too few elements reports.
         long long maxi = -1;
-        if (vit != sh.vars.end() && vit->second.kind == VarKind::Indexed &&
-            !vit->second.idx.empty())
+        if (vit->second.kind == VarKind::Indexed && !vit->second.idx.empty())
           maxi = vit->second.idx.rbegin()->first;
-        else if (vit != sh.vars.end() && vit->second.kind == VarKind::Scalar &&
-                 !vit->second.value.empty())
+        else if (vit->second.kind == VarKind::Scalar && !vit->second.value.empty())
           maxi = 0;
         idx += maxi + 1;
         if (idx < 0) {
