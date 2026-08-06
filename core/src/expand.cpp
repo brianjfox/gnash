@@ -63,6 +63,7 @@ size_t scan_balanced(const std::string &t, size_t i, char open, char close,
   const bool case_aware = (open == '(');
   bool cmd_pos = true;
   std::vector<int> case_stack;
+  std::vector<std::pair<std::string, bool>> heredocs;  // pending <<delim, <<-
   std::string word;
   bool word_plain = true;
   bool saw_word = false;
@@ -81,6 +82,68 @@ size_t scan_balanced(const std::string &t, size_t i, char open, char close,
   auto contaminate = [&]() { if (case_aware) { saw_word = true; word_plain = false; } };
   for (; i < t.size(); i++) {
     char c = t[i];
+    if (case_aware && c == '<' && i + 1 < t.size() && t[i + 1] == '<' &&
+        !(i + 2 < t.size() && t[i + 2] == '<')) {
+      // Remember a here-document delimiter; its body lines are skipped
+      // verbatim at the next newline (a `)' in them is not the closer).
+      i += 2;
+      bool strip_tabs = i < t.size() && t[i] == '-';
+      if (strip_tabs) i++;
+      while (i < t.size() && (t[i] == ' ' || t[i] == '\t')) i++;
+      std::string delim;
+      while (i < t.size() && !std::isspace(static_cast<unsigned char>(t[i])) &&
+             !std::strchr(";&|()<>", t[i])) {
+        char dc = t[i];
+        if (dc == '\'' || dc == '"') {
+          char q = dc;
+          i++;
+          while (i < t.size() && t[i] != q) delim += t[i++];
+          if (i < t.size()) i++;
+          continue;
+        }
+        if (dc == '\\' && i + 1 < t.size()) { i++; dc = t[i]; }
+        delim += dc;
+        i++;
+      }
+      i--;  // loop increment
+      if (!delim.empty()) heredocs.push_back({delim, strip_tabs});
+      contaminate();
+      wasdol = false;
+      continue;
+    }
+    if (case_aware && c == '\n' && !heredocs.empty()) {
+      i++;  // past the newline
+      bool closing = false;
+      for (auto &hd : heredocs) {
+        if (closing) break;
+        while (i < t.size()) {
+          size_t ls = i;
+          while (i < t.size() && t[i] != '\n') i++;
+          std::string line = t.substr(ls, i - ls);
+          bool had_nl = i < t.size();
+          std::string cmp = line;
+          size_t tt = 0;
+          if (hd.second)
+            while (tt < cmp.size() && cmp[tt] == '\t') tt++;
+          cmp = cmp.substr(tt);
+          // `EOF)': the closer may abut the delimiter -- resume at the `)'.
+          if (cmp.compare(0, hd.first.size(), hd.first) == 0 &&
+              cmp.size() > hd.first.size() && cmp[hd.first.size()] == ')') {
+            i = ls + tt + hd.first.size();
+            closing = true;
+            break;
+          }
+          if (had_nl) i++;
+          if (cmp == hd.first || !had_nl) break;
+        }
+      }
+      heredocs.clear();
+      i--;  // loop increment
+      if (case_aware) boundary();
+      cmd_pos = true;
+      wasdol = false;
+      continue;
+    }
     if (c == '\\') { contaminate(); i++; wasdol = false; continue; }
     if (c == '$' && i + 1 < t.size() && t[i + 1] == '\'') {
       // $'...': ANSI-C quoting, where a backslash escapes the next character
@@ -918,15 +981,25 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
     }
   };
 
-  // $((expr))
+  // $((expr)) -- but `$((cmd);(cmd))' is the command substitution `$( (...)':
+  // it is ARITHMETIC only when the paren depth never falls below 2 before the
+  // closing `))', i.e. no top-level `)' appears inside (bash's rule; probe:
+  // `$((echo a);(echo b))' runs the subshells, `$((echo hi))' is an
+  // arithmetic syntax error).
   if (n1 == '(' && i + 2 < t.size() && t[i + 2] == '(') {
     size_t p = i + 3;
     int depth = 2;
     size_t end = std::string::npos;
+    bool cmd_sub = false;
     for (; p < t.size(); p++) {
       if (t[p] == '(') depth++;
-      else if (t[p] == ')') { if (--depth == 0) { end = p; break; } }
+      else if (t[p] == ')') {
+        if (--depth == 0) { end = p; break; }
+        if (depth == 1 && !(p + 1 < t.size() && t[p + 1] == ')'))
+          cmd_sub = true;  // a top-level `)' not immediately closing the whole span
+      }
     }
+    if (cmd_sub) end = std::string::npos;  // fall through to the $(cmd) branch
     if (end != std::string::npos) {
       std::string expr = t.substr(i + 3, (end - 1) - (i + 3));
       bool ok = true;

@@ -142,6 +142,7 @@ struct Lexer {
   }
   void scan_paren(std::string &w) {  // pos at '('
     int depth = 0;
+    std::vector<std::pair<std::string, bool>> paren_heredocs;  // delim, <<-
     // A `)' that terminates a `case' pattern (`case x in x)') must not be
     // mistaken for the substitution's closing paren.  Track the paren depth of
     // each active (command-position) `case' body; a `)' at that depth is a
@@ -184,11 +185,75 @@ struct Lexer {
           pos++;
         }
         cmd_pos = true;
+      } else if (c == '<' && pos + 1 < n && in[pos + 1] == '<' &&
+                 !(pos + 2 < n && in[pos + 2] == '<')) {
+        // A here-document inside the substitution: remember its delimiter so
+        // the body lines (which may contain `)') are skipped verbatim at the
+        // next newline.
+        bool strip_tabs = pos + 2 < n && in[pos + 2] == '-';
+        w += "<<";
+        pos += 2;
+        if (strip_tabs) { w += '-'; pos++; }
+        while (pos < n && (in[pos] == ' ' || in[pos] == '\t')) { w += in[pos]; pos++; }
+        std::string delim;
+        while (pos < n && !std::isspace(static_cast<unsigned char>(in[pos])) &&
+               !std::strchr(";&|()<>", in[pos])) {
+          char dc = in[pos];
+          if (dc == '\'' || dc == '"') {
+            char q = dc;
+            w += in[pos++];
+            while (pos < n && in[pos] != q) { delim += in[pos]; w += in[pos]; pos++; }
+            if (pos < n) { w += in[pos]; pos++; }
+            continue;
+          }
+          if (dc == '\\' && pos + 1 < n) { w += dc; pos++; dc = in[pos]; }
+          delim += dc;
+          w += dc;
+          pos++;
+        }
+        if (!delim.empty()) paren_heredocs.push_back({delim, strip_tabs});
+        saw_word = true;
+        word_plain = false;
       } else if (c == ';' || c == '&' || c == '|' || c == '\n') {
         boundary();
+        bool was_nl = c == '\n';
         w += c;
         pos++;
         cmd_pos = true;
+        if (was_nl && !paren_heredocs.empty()) {
+          // Copy each pending here-document body up to its delimiter line;
+          // nothing in it (parens, quotes, comments) is structural.
+          bool closing = false;
+          for (auto &hd : paren_heredocs) {
+            if (closing) break;
+            while (pos < n) {
+              size_t ls = pos;
+              while (pos < n && in[pos] != '\n') pos++;
+              std::string line = in.substr(ls, pos - ls);
+              bool had_nl = pos < n;
+              std::string cmp = line;
+              size_t tt = 0;
+              if (hd.second)
+                while (tt < cmp.size() && cmp[tt] == '\t') tt++;
+              cmp = cmp.substr(tt);
+              // `EOF)': the substitution's closer may abut the delimiter --
+              // consume the delimiter and resume at the `)' (bash warns and
+              // ends the here-document at the end of the span).
+              if (cmp.compare(0, hd.first.size(), hd.first) == 0 &&
+                  cmp.size() > hd.first.size() && cmp[hd.first.size()] == ')') {
+                w += line.substr(0, tt + hd.first.size());
+                pos = ls + tt + hd.first.size();
+                closing = true;
+                break;
+              }
+              w += line;
+              if (had_nl) { w += '\n'; pos++; }
+              if (cmp == hd.first) break;
+              if (!had_nl) break;
+            }
+          }
+          paren_heredocs.clear();
+        }
       } else if (c == ' ' || c == '\t') {
         boundary();
         w += c;
@@ -561,7 +626,19 @@ struct Lexer {
           cmp = cmp.substr(t);
           stored = cmp;
         }
-        if (cmp == pd.delim) { found = true; break; }  // terminator line
+        std::string want = pd.delim;
+        if (pd.strip) {  // `<<-' tab-strips the delimiter as well (`<<-'\tEND'')
+          std::size_t t = 0;
+          while (t < want.size() && want[t] == '\t') t++;
+          want = want.substr(t);
+        }
+        if (cmp == want) {
+          // A delimiter with no trailing newline (`...\nEOF' at the end of a
+          // command substitution) ends the body but bash still reports it as
+          // delimited by end-of-file.
+          if (had_nl) found = true;
+          break;
+        }
         body += stored;
         body += '\n';
         if (!had_nl) break;  // EOF before delimiter
