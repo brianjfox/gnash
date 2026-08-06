@@ -313,7 +313,6 @@ int Shell::wait_next(const std::vector<int> &ids, long *finished_pid, bool *foun
 }
 
 int Shell::wait_all() {
-  int st = 0;
   // Block until every background job has terminated, reaping whichever child
   // changes state first (not job-by-job in order, so one job finishing early
   // is observed immediately).  A trapped signal interrupts the wait: bash's
@@ -354,7 +353,6 @@ int Shell::wait_all() {
       owner->done = true;
       owner->running = false;
       owner->status = rc;
-      st = rc;
     }
   }
   int wst;
@@ -362,7 +360,9 @@ int Shell::wait_all() {
   end_interruptible_wait();
   // bash's `wait' with no operands removes every terminated job it reaped.
   remove_jobs_if([](const Job &j) { return j.done; });
-  return st;
+  // `wait' with no operands always returns 0 (`f1 & wait' is 0 even though
+  // f1 exited 5); only a trap interruption above returns 128+signal.
+  return 0;
 }
 
 // Reap any finished/stopped children (non-blocking) and update the job table.

@@ -1370,6 +1370,11 @@ int Executor::run_simple(const SimpleCommand *c) {
   // Builtins and functions run in-process (with redirects applied/restored).
   auto fit = sh_.functions.find(argv[0]);
   bool is_func = !skip_functions && fit != sh_.functions.end();
+  // Posix command search order finds special builtins BEFORE functions: with
+  // a `break' function defined, posix-mode `break' runs the builtin.
+  if (is_func && sh_.opt_posix && is_special_builtin_name(argv[0]) &&
+      !sh_.disabled_builtins.count(argv[0]))
+    is_func = false;
   int dummy = 0;
   bool builtin = false;
   {
@@ -1391,6 +1396,7 @@ int Executor::run_simple(const SimpleCommand *c) {
   auto apply_temp = [&]() {
     for (const auto &a : assigns) {
       sh_.temp_env_active.insert(a.first);  // let a called function's `local' inherit it
+      sh_.temp_env_depth[a.first]++;
       auto it = sh_.vars.find(a.first);
       restore.push_back({a.first,
                          it == sh_.vars.end() ? std::nullopt : std::optional<Variable>(it->second)});
@@ -1417,6 +1423,12 @@ int Executor::run_simple(const SimpleCommand *c) {
   auto undo_temp = [&]() {
     for (auto it = restore.rbegin(); it != restore.rend(); ++it) {
       if (sh_.temp_consumed.count(it->first)) continue;  // localized: frame owns it
+      // A posix special builtin persisted this binding through us: keep the
+      // value it set and consume the mark (`var=30 func' + `var=20 return').
+      if (sh_.temp_persist.count(it->first)) {
+        sh_.temp_persist.erase(it->first);
+        continue;
+      }
       if (it->second) sh_.vars[it->first] = *it->second;
       else sh_.vars.erase(it->first);
     }
@@ -1425,6 +1437,8 @@ int Executor::run_simple(const SimpleCommand *c) {
       sh_.temp_env_active.erase(a.first);
       sh_.temp_prior.erase(a.first);
       sh_.temp_consumed.erase(a.first);
+      auto d = sh_.temp_env_depth.find(a.first);
+      if (d != sh_.temp_env_depth.end() && --d->second <= 0) sh_.temp_env_depth.erase(d);
     }
   };
 
@@ -1555,14 +1569,29 @@ int Executor::run_simple(const SimpleCommand *c) {
         if (argv[k].find('x') != std::string::npos ||
             argv[k].find('r') != std::string::npos) { persist = true; break; }
     }
+    bool special_persist = false;
     if (!persist && sh_.opt_posix) {
       static const std::set<std::string> kSpecial = {
           ":",      ".",     "break", "continue", "eval",  "exec",
           "exit",   "export", "readonly", "return", "set", "shift",
           "source", "times", "trap",  "unset"};
-      if (kSpecial.count(argv[0])) persist = true;
+      if (kSpecial.count(argv[0])) persist = special_persist = true;
     }
-    if (persist) restore.clear();
+    if (persist) {
+      // Under the POSIX-special rule only: a name also bound by an ENCLOSING
+      // temporary environment (depth >= 2: ours plus at least one outer)
+      // persists through it -- mark it so the outer undo keeps the value this
+      // builtin set (`var=30 func' + `var=20 return').  The export/readonly
+      // promotion path must NOT punch through: default-mode `a=7 f1' where f1
+      // runs `a=3 readonly a' restores the caller's a (and its attributes)
+      // at return (varenv23.sub).
+      if (special_persist)
+        for (const auto &a : assigns) {
+          auto d = sh_.temp_env_depth.find(a.first);
+          if (d != sh_.temp_env_depth.end() && d->second >= 2) sh_.temp_persist.insert(a.first);
+        }
+      restore.clear();
+    }
     undo_temp();
     // A builtin that performs an internal assignment (e.g. `declare -i a[$bad]=x'
     // under array_expand_once) can raise the arithmetic-error flag from deep in
@@ -2197,10 +2226,28 @@ int Executor::run_funcdef(const FunctionDef *c) {
   // bash rejects a function name that contained an unquoted `$' expansion
   // (W_HASDOLLAR) -- e.g. `function sys$read' -- or any quoting (`'a b c' ()')
   // as not a valid identifier; the raw word, quotes included, is echoed.
-  if (c->name.find_first_of("$'\"\\") != std::string::npos) {
+  if (c->name.find_first_of("$'\"\\") != std::string::npos ||
+      // A process-substitution-shaped name (`<(:) ()') is likewise rejected.
+      ((c->name[0] == '<' || c->name[0] == '>') && c->name.size() > 1 && c->name[1] == '(')) {
     std::fprintf(stderr, "%s`%s': not a valid identifier\n",
                  sh_.err_prefix().c_str(), c->name.c_str());
     return (sh_.last_status = 1);
+  }
+  // Posix interpretation 383: a function may not have the name of a special
+  // builtin.  bash reports it and aborts a non-interactive shell outright
+  // (jump_to_top_level(ERREXIT) with EX_BADUSAGE).
+  if (sh_.opt_posix) {
+    static const std::set<std::string> kSpecialB = {
+        ":",      ".",     "break", "continue", "eval",  "exec",
+        "exit",   "export", "readonly", "return", "set", "shift",
+        "source", "times", "trap",  "unset"};
+    if (kSpecialB.count(c->name)) {
+      std::fprintf(stderr, "%s`%s': is a special builtin\n", sh_.err_prefix().c_str(),
+                   c->name.c_str());
+      sh_.last_status = 2;
+      if (!sh_.interactive) { sh_.exiting = true; sh_.exit_status = 2; }
+      return 2;
+    }
   }
   // A readonly function cannot be redefined.
   if (sh_.readonly_functions.count(c->name)) {

@@ -174,6 +174,12 @@ class Shell {
   // `local'/`declare' during the command (see executor apply_temp/undo_temp).
   std::map<std::string, std::optional<Variable>> temp_prior;
   std::set<std::string> temp_consumed;
+  // Per-name nesting count of active temporary bindings, and names whose value
+  // a posix special builtin persisted THROUGH an enclosing temporary binding:
+  // `var=30 func' where func runs `var=20 return' keeps 20 after the call (the
+  // outer undo skips the restore and consumes the mark).
+  std::map<std::string, int> temp_env_depth;
+  std::set<std::string> temp_persist;
   // Names currently bound by a `VAR=val cmd' temporary environment.  make_local
   // inherits such a variable's value/attributes when a called function localizes
   // it (`v=t f; f(){ local v; }' -> the local is `v=t', exported), matching bash.

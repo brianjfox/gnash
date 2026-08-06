@@ -24,6 +24,10 @@ bool command_is_valid(Shell &sh, const std::string &name);
 // slash resolves to itself when executable.
 std::string find_in_path(Shell &sh, const std::string &name);
 
+// True for the POSIX special builtins (break, return, set, ...): posix-mode
+// command lookup finds them before functions.
+bool is_special_builtin_name(const std::string &n);
+
 // Every command name beginning with PREFIX -- shell keywords, aliases,
 // functions, builtins, and executables on $PATH -- sorted and de-duplicated.
 // Used for command-position tab completion.
