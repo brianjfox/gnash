@@ -1533,21 +1533,28 @@ std::string Shell::ifs() const {
 std::vector<std::string> Shell::environ_block() const {
   std::vector<std::string> out;
   for (const auto &kv : vars) {
-    if (!kv.second.exported) continue;
     std::string val = kv.second.value;
-    // An INVISIBLE exported local (`export V=abc; f(){ local V; }') passes
-    // the SHADOWED value to children until the local is assigned (bash).
+    bool emit = kv.second.exported;
+    // An INVISIBLE local passes the SHADOWED exported value to children until
+    // it is assigned (bash): `export V=abc; f(){ local V; }' keeps V=abc in
+    // the environment, and so does `typeset +x V' (an unexported invisible
+    // local does not block the exported global underneath -- varenv12.sub).
     if (kv.second.invisible) {
       bool found = false;
       for (auto fit = local_stack.rbegin(); fit != local_stack.rend() && !found; ++fit)
         for (const auto &e : *fit)
           if (e.first == kv.first) {
-            if (e.second && !e.second->invisible && e.second->exported) val = e.second->value;
-            else val.clear();
+            if (e.second && !e.second->invisible && e.second->exported) {
+              val = e.second->value;
+              emit = true;
+            } else {
+              val.clear();
+            }
             found = true;
             break;
           }
     }
+    if (!emit) continue;
     out.push_back(kv.first + "=" + val);
   }
   // Exported functions travel as BASH_FUNC_<name>%%=() {  body  }, which a
