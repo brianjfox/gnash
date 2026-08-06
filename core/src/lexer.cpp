@@ -166,6 +166,8 @@ struct Lexer {
     // pattern terminator, not the closer.  Keyword recognition is gated on
     // command position so a `case'/`esac' used as an argument is unaffected.
     bool cmd_pos = true;          // next plain word starts a command
+    bool after_pipe = false;      // the previous separator was `|' (a pattern
+                                  // alternative: `in|esac)' keeps its case open)
     std::vector<int> case_stack;  // paren depths of open `case' bodies
     std::string word;             // current unquoted identifier word
     bool word_plain = true;       // word is only identifier chars (a keyword?)
@@ -173,7 +175,12 @@ struct Lexer {
     auto boundary = [&]() {
       if (saw_word) {
         if (cmd_pos && word_plain && word == "case") case_stack.push_back(depth);
-        else if (cmd_pos && word_plain && word == "esac" && !case_stack.empty())
+        else if (word_plain && word == "esac" && !case_stack.empty() && !after_pipe)
+          // `esac' closes the case even out of command position: after a
+          // stray `done' (`$(case x in x) ;; x) done esac)') bash's scanner
+          // still ends the case body and finds the substitution's closer,
+          // leaving the grammar to report the real error.  A pattern
+          // ALTERNATIVE (`in|esac)') stays open.
           case_stack.pop_back();
         // Most words consume the command slot; a few reopen command position.
         cmd_pos = word_plain && (word == "then" || word == "do" ||
@@ -182,6 +189,7 @@ struct Lexer {
       word.clear();
       word_plain = true;
       saw_word = false;
+      after_pipe = false;
     };
     do {
       char c = in[pos];
@@ -236,11 +244,14 @@ struct Lexer {
           w += dc;
           pos++;
         }
-        if (!delim.empty()) paren_heredocs.push_back({delim, strip_tabs, depth});
+        // Only depth 1 is a real here-document: `<<'/`>>' at depth 2 inside
+        // `$((...))' are the arithmetic shifts (multiline $(( )) bodies).
+        if (!delim.empty() && depth == 1) paren_heredocs.push_back({delim, strip_tabs, depth});
         saw_word = true;
         word_plain = false;
       } else if (c == ';' || c == '&' || c == '|' || c == '\n') {
         boundary();
+        after_pipe = (c == '|');
         bool was_nl = c == '\n';
         w += c;
         pos++;
@@ -872,6 +883,18 @@ struct Lexer {
 };
 
 }  // namespace
+
+// Offset of the character just past the `)' closing the substitution whose
+// `(' is at OPEN_POS (quote-, case-pattern-, comment-, and heredoc-aware --
+// the lexer's own scanner).  npos when unterminated.
+std::size_t comsub_span_end(const std::string &text, std::size_t open_pos) {
+  Lexer lx{text};
+  lx.pos = open_pos;
+  std::string dummy;
+  lx.scan_paren(dummy);
+  return lx.unterminated ? std::string::npos : lx.pos;
+}
+
 
 std::vector<Token> tokenize(const std::string &input, bool posix_mode) {
   Lexer lx(input);
