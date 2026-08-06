@@ -488,6 +488,16 @@ class Shell {
   // Alias expansion applies: interactive or `shopt -s expand_aliases', and at
   // least one alias table is non-empty.
   bool aliases_active() const;
+  // Raw (pre-expansion) provenance for the CURRENT builtin's argv: the source
+  // word text and whether it was quoted; text is empty when a word produced
+  // multiple or zero fields.  Consumed at builtin ENTRY (read/printf apply
+  // bash's assoc_expand_once target rules, which depend on the original
+  // quoting); cleared after the builtin returns.
+  struct RawArg {
+    std::string text;
+    bool quoted = false;
+  };
+  std::vector<RawArg> raw_args;
   // bash valid_alias_name: no shell metacharacters, blanks, quoting
   // characters, `$', or `/' anywhere in the name.
   static bool valid_alias_name(const std::string &name);

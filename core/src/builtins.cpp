@@ -311,6 +311,28 @@ bool append_formatted(std::string &out, const std::string &spec, T value) {
 // A well-formed `NAME[subscript]' element reference: the bracket span is
 // balanced, ENDS at the final character, and is non-empty -- `A[]]' and
 // `A[]' are invalid identifiers, as bash reports for read/printf/declare.
+// assoc_expand_once (synonym array_expand_once) set?
+static bool expand_once_on(Shell &sh) {
+  auto o = [&](const char *nm) {
+    auto it = sh.shopt_opts.find(nm);
+    return it != sh.shopt_opts.end() && it->second;
+  };
+  return o("assoc_expand_once") || o("array_expand_once");
+}
+
+// Under assoc_expand_once, an UNQUOTED source word of the form `NAME[...]'
+// takes bash's lenient target parsing (subscript to the LAST bracket), so
+// `read A[$k]' with k=']' stores the key `]' -- while the QUOTED form
+// `read "A[$k]"' is still rejected as `A[]]'.  Decided from the RAW word's
+// provenance (Shell::raw_args), captured before expansion.
+static bool lenient_element_target(Shell &sh, size_t argv_idx) {
+  if (!expand_once_on(sh) || argv_idx >= sh.raw_args.size()) return false;
+  const Shell::RawArg &r = sh.raw_args[argv_idx];
+  if (r.text.empty() || r.quoted) return false;
+  size_t lb = r.text.find('[');
+  return lb != std::string::npos && lb > 0 && r.text.back() == ']';
+}
+
 bool well_formed_element(const std::string &s, bool allow_empty = false) {
   size_t lb = s.find('[');
   if (lb == std::string::npos) return s.find(']') == std::string::npos;
@@ -342,11 +364,13 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
   size_t ai = 1;
   bool to_var = false;
   std::string vname;
+  size_t vname_idx = SIZE_MAX;
   while (ai < argv.size() && argv[ai].size() >= 2 && argv[ai][0] == '-') {
     if (argv[ai] == "--") { ai++; break; }
     if (argv[ai] == "-v" && ai + 1 < argv.size()) {
       to_var = true;
       vname = argv[ai + 1];
+      vname_idx = ai + 1;
       ai += 2;
       continue;
     }
@@ -450,7 +474,8 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
 
   if (to_var) {
     auto lb = vname.find('[');
-    if (lb != std::string::npos && !well_formed_element(vname)) {
+    if (lb != std::string::npos && !lenient_element_target(sh, vname_idx) &&
+        !well_formed_element(vname)) {
       std::fprintf(stderr, "%sprintf: `%s': not a valid identifier\n",
                    sh.err_prefix().c_str(), vname.c_str());
       return 1;
@@ -1211,7 +1236,8 @@ int bi_unset(Shell &sh, const std::vector<std::string> &argv) {
     // A malformed element reference (an unbalanced bracket from word
     // splitting, e.g. `unset a[$(echo' + `foo)]') is a SILENT no-op in bash.
     size_t lb = argv[i].find('[');
-    if (!noref && (lb != std::string::npos || argv[i].find(']') != std::string::npos) &&
+    if (!noref && !expand_once_on(sh) &&
+        (lb != std::string::npos || argv[i].find(']') != std::string::npos) &&
         !well_formed_element(argv[i], /*allow_empty=*/true)) {
       continue;
     }
@@ -1626,10 +1652,14 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
   double timeout = 0.0;
   bool edit = false;                // -e: read with readline
   std::vector<std::string> names;
+  std::vector<size_t> name_idx;  // argv index of each name, for raw provenance
 
   for (size_t i = 1; i < argv.size(); i++) {
     const std::string &a = argv[i];
-    if (a == "--") { for (size_t j = i + 1; j < argv.size(); j++) names.push_back(argv[j]); break; }
+    if (a == "--") {
+      for (size_t j = i + 1; j < argv.size(); j++) { names.push_back(argv[j]); name_idx.push_back(j); }
+      break;
+    }
     if (a.size() >= 2 && a[0] == '-' && a != "-") {
       for (size_t k = 1; k < a.size(); k++) {
         char o = a[k];
@@ -1695,6 +1725,7 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
       }
     } else {
       names.push_back(a);
+      name_idx.push_back(i);
     }
   }
 
@@ -1741,12 +1772,15 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
       return 1;
     }
   }
-  for (const std::string &nm : names)
+  for (size_t ni = 0; ni < names.size(); ni++) {
+    const std::string &nm = names[ni];
+    if (lenient_element_target(sh, ni < name_idx.size() ? name_idx[ni] : SIZE_MAX)) continue;
     if (!valid_read_target(nm)) {
       std::fprintf(stderr, "%sread: `%s': not a valid identifier\n", sh.err_prefix().c_str(),
                    nm.c_str());
       return 1;
     }
+  }
 
   // $TMOUT is the default timeout, but only when reading from a terminal.
   if (!have_t && isatty(fd)) {
@@ -2214,6 +2248,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
   int ret = 0;
   for (; i < argv.size(); i++) {
     const std::string &a = argv[i];
+    std::string a_display = a;  // error display; subscript shown expanded
     size_t nend = a.find_first_of("[=");
     std::string name = (nend == std::string::npos) ? a : a.substr(0, nend);
     size_t eq = a.find('=');
@@ -2232,12 +2267,25 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     // subscript is `a[]: bad array subscript' with no builtin prefix (bash).
     if (subscript0 && !sh.is_zsh()) {
       std::string elem = (eq == std::string::npos) ? a : a.substr(0, append ? eq - 1 : eq);
+      // Validate the EXPANDED subscript: `declare A[$k]=X' with k=']' is the
+      // post-expansion `A[]]=X' error, even for the raw pass-through form.
+      {
+        size_t elb = elem.find('[');
+        if (elb != std::string::npos && elem.back() == ']' &&
+            elem.find_first_of("$`'\"\\", elb) != std::string::npos) {
+          Expander dex(sh);
+          std::string esub =
+              dex.expand_no_split(elem.substr(elb + 1, elem.size() - elb - 2));
+          elem = elem.substr(0, elb) + "[" + esub + "]";
+          a_display = elem + (eq == std::string::npos ? std::string() : a.substr(append ? eq - 1 : eq));
+        }
+      }
       // An empty or invalid BASE name (`declare []=asdf') is the
       // invalid-identifier error, not a subscript diagnostic.
       if (!valid_identifier(elem.substr(0, elem.find('['))) ||
           !well_formed_element(elem, /*allow_empty=*/true)) {
         std::fprintf(stderr, "%s%s: `%s': not a valid identifier\n", sh.err_prefix().c_str(),
-                     argv[0].c_str(), a.c_str());
+                     argv[0].c_str(), a_display.c_str());
         ret = 1;
         continue;
       }
