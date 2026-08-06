@@ -3062,7 +3062,9 @@ int bi_type(Shell &sh, const std::vector<std::string> &argv) {
     if (aliases_on && sh.aliases.count(n)) locs.push_back({'a', sh.aliases.at(n)});
     if (is_reserved_word(n)) locs.push_back({'k', {}});
     if (!ff && sh.functions.count(n)) locs.push_back({'f', {}});
-    if (is_builtin_name(n)) locs.push_back({'b', {}});
+    // A builtin disabled with `enable -n' is invisible to type: lookup falls
+    // through to the $PATH files (bash).
+    if (is_builtin_name(n) && !sh.disabled_builtins.count(n)) locs.push_back({'b', {}});
     for (const std::string &f : find_all_in_path(sh, n)) locs.push_back({'F', f});
 
     if (locs.empty()) {
@@ -4353,7 +4355,7 @@ int bi_enable(Shell &sh, const std::vector<std::string> &argv) {
       ".",      ":",    "break", "continue", "eval",  "exec",
       "exit",   "export", "readonly", "return", "set", "shift",
       "source", "times", "trap",  "unset"};
-  bool disable = false, all = false, special = false;
+  bool disable = false, all = false, special = false, del = false;
   size_t i = 1;
   for (; i < argv.size(); i++) {
     const std::string &a = argv[i];
@@ -4363,6 +4365,7 @@ int bi_enable(Shell &sh, const std::vector<std::string> &argv) {
       if (a[k] == 'n') disable = true;
       else if (a[k] == 'a') all = true;
       else if (a[k] == 's') special = true;
+      else if (a[k] == 'd') del = true;
       else if (a[k] == 'p') { /* posix reusable list: like default */ }
     }
   }
@@ -4381,6 +4384,15 @@ int bi_enable(Shell &sh, const std::vector<std::string> &argv) {
     const std::string &n = argv[i];
     if (!is_builtin_name(n)) {
       std::fprintf(stderr, "%senable: %s: not a shell builtin\n", sh.err_prefix().c_str(), n.c_str());
+      st = 1;
+      continue;
+    }
+    // `enable -d' removes a builtin loaded with `enable -f'; every gnash
+    // builtin is static, so the request always fails as bash's does for a
+    // compiled-in builtin.
+    if (del) {
+      std::fprintf(stderr, "%senable: %s: not dynamically loaded\n", sh.err_prefix().c_str(),
+                   n.c_str());
       st = 1;
       continue;
     }
