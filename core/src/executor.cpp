@@ -496,6 +496,8 @@ bool parse_assign(const std::string &w, Assign &a) {
   return true;
 }
 
+}  // namespace (parse_array_elems is shared with bi_declare)
+
 std::vector<std::pair<std::optional<std::string>, std::string>>
 parse_array_elems(Shell &sh, Expander &ex, const std::string &name, bool integer,
                   bool whole_append, const std::string &parenval) {
@@ -608,6 +610,8 @@ parse_array_elems(Shell &sh, Expander &ex, const std::string &name, bool integer
   }
   return out;
 }
+
+namespace {
 
 void apply_array_assign(Shell &sh, Expander &ex, const Assign &a) {
   // Assigning to any part of a readonly array is an error (bash names the array,
@@ -1124,6 +1128,7 @@ int Executor::run_simple(const SimpleCommand *c) {
     ~ProcsubGuard() { s.reap_procsubs(base); }
   } psg{sh_, sh_.procsubs.size()};
   std::vector<std::pair<std::string, std::string>> assigns;
+  std::vector<Assign> pending_elem;  // subscripted prefix assigns, decided below
   std::vector<std::string> argv;
   std::vector<Shell::RawArg> raw_prov;
   // Pre-formatted `set -x' trace lines for the assignment words, in source
@@ -1145,12 +1150,17 @@ int Executor::run_simple(const SimpleCommand *c) {
     if (assign_here) {
       Assign a;
       parse_assign(w.text, a);
-      if (a.sub || a.is_array) {
+      if (a.sub) {
+        // A SUBSCRIPTED prefix assignment is only valid when no command word
+        // follows; decided after the loop (`var[0]=X f' is rejected, bare
+        // `var[0]=X' assigns).
+        pending_elem.push_back(a);
+      } else if (a.is_array) {
         // NOTE: an array/element assignment is not xtrace'd here -- bash prints it
         // via its compound-assignment word-list deparser (each element expanded
         // then re-quoted, e.g. source `$'\t'' -> `'<tab>''), which gnash does not
         // reproduce; tracing the verbatim source word would not match.  Deferred.
-        apply_array_assign(sh_, ex, a);  // array element / literal: applied now
+        apply_array_assign(sh_, ex, a);  // array literal: applied now
       } else {
         auto vit = sh_.vars.find(a.name);
         // A value assigned to a targetless nameref becomes its referent NAME,
@@ -1233,6 +1243,20 @@ int Executor::run_simple(const SimpleCommand *c) {
           raw_prov.push_back({w.text, (w.flags & W_QUOTED) != 0});
         raw_prov.resize(argv.size());
       }
+    }
+  }
+
+  // Subscripted assignments in a temporary environment are invalid: with a
+  // command word present bash rejects each (`var[0]=X f' prints `var[0]':
+  // not a valid identifier) and runs the command without them; with no
+  // command word they are ordinary element assignments.
+  for (const Assign &a : pending_elem) {
+    if (!argv.empty()) {
+      std::string disp = a.name + "[" + (a.sub ? *a.sub : std::string()) + "]";
+      std::fprintf(stderr, "%s`%s': not a valid identifier\n", sh_.err_prefix().c_str(),
+                   disp.c_str());
+    } else {
+      apply_array_assign(sh_, ex, a);
     }
   }
 
@@ -1370,6 +1394,11 @@ int Executor::run_simple(const SimpleCommand *c) {
       auto it = sh_.vars.find(a.first);
       restore.push_back({a.first,
                          it == sh_.vars.end() ? std::nullopt : std::optional<Variable>(it->second)});
+      // Record the pre-temp binding: a `local'/`declare' created during the
+      // command CONSUMES the temp layer (make_local), taking this as its
+      // frame-restore point so `v=t declare -x v' in a function leaves the
+      // caller's v untouched while the local keeps t until return.
+      sh_.temp_prior[a.first] = restore.back().second;
       if (it != sh_.vars.end() && it->second.nameref) {
         // A temporary assignment to a nameref shadows it with a plain binding
         // for the duration of the command; it does not write through to the
@@ -1387,11 +1416,16 @@ int Executor::run_simple(const SimpleCommand *c) {
   };
   auto undo_temp = [&]() {
     for (auto it = restore.rbegin(); it != restore.rend(); ++it) {
+      if (sh_.temp_consumed.count(it->first)) continue;  // localized: frame owns it
       if (it->second) sh_.vars[it->first] = *it->second;
       else sh_.vars.erase(it->first);
     }
     restore.clear();
-    for (const auto &a : assigns) sh_.temp_env_active.erase(a.first);
+    for (const auto &a : assigns) {
+      sh_.temp_env_active.erase(a.first);
+      sh_.temp_prior.erase(a.first);
+      sh_.temp_consumed.erase(a.first);
+    }
   };
 
   int status = 0;
@@ -1489,8 +1523,9 @@ int Executor::run_simple(const SimpleCommand *c) {
     sh_.call_stack.pop_back();
     sh_.positional = saved_pos;
     if (sh_.returning) { sh_.returning = false; status = sh_.exit_status; }
-    // In posix mode, assignments preceding a function call persist.
-    if (sh_.opt_posix) restore.clear();
+    // Assignments preceding a function call are UNDONE at return, in posix
+    // mode too: bash no longer propagates `var=two func' to the caller, even
+    // when the function export/readonly-marks the temporary (varenv12.sub).
     undo_temp();
   } else if ((apply_temp(), [&] {
                // `command' strips the POSIX special-builtin exit property: a
@@ -1511,7 +1546,11 @@ int Executor::run_simple(const SimpleCommand *c) {
     // mode all the POSIX special builtins persist too.
     builtin = true;
     bool persist = argv[0] == "export" || argv[0] == "readonly";
-    if (!persist && (argv[0] == "declare" || argv[0] == "typeset")) {
+    if (!persist && !sh_.in_function() &&
+        (argv[0] == "declare" || argv[0] == "typeset")) {
+      // Inside a function, `v=t declare -x v' needs no promotion: declare
+      // creates a LOCAL that inherits the temp-env value, and it unwinds at
+      // return leaving the caller's binding untouched (varenv12.sub).
       for (size_t k = 1; k < argv.size() && argv[k].size() > 1 && argv[k][0] == '-'; k++)
         if (argv[k].find('x') != std::string::npos ||
             argv[k].find('r') != std::string::npos) { persist = true; break; }

@@ -31,6 +31,8 @@ extern "C" char **environ;
 
 namespace gnash::core {
 
+bool apply_set_o_option(Shell &sh, const std::string &o, bool on);
+
 namespace { const char *signum_to_trapname(int sig); }
 
 Shell::Shell() {
@@ -1073,6 +1075,20 @@ void Shell::pop_scope() {
   if (local_stack.empty()) return;
   auto &scope = local_stack.back();
   for (auto it = scope.rbegin(); it != scope.rend(); ++it) {
+    // `local -': the entry holds a set -o option snapshot, not a variable.
+    if (it->first == "-" && it->second &&
+        it->second->value.compare(0, 9, "\x01SETOPTS:") == 0) {
+      const std::string &sv = it->second->value;
+      size_t p = 9;
+      while (p < sv.size()) {
+        size_t eq = sv.find('=', p), sc = sv.find(';', p);
+        if (eq == std::string::npos || sc == std::string::npos) break;
+        if (sv.compare(p, eq - p, "restricted") != 0)  // cannot be cleared
+          apply_set_o_option(*this, sv.substr(p, eq - p), sv[eq + 1] == '1');
+        p = sc + 1;
+      }
+      continue;
+    }
     if (it->second)
       vars[it->first] = *it->second;
     else
@@ -1096,7 +1112,17 @@ bool Shell::make_local(const std::string &n, bool inherit_force) {
   for (auto &e : scope)
     if (e.first == n) return false;  // already made local in this scope
   auto it = vars.find(n);
-  scope.emplace_back(n, it == vars.end() ? std::nullopt : std::optional<Variable>(it->second));
+  // Under an active temp env (`v=t declare -x v'), the new local CONSUMES the
+  // temp layer: its frame-restore point is the PRE-temp binding (so the
+  // caller's v is restored at return), and the command's temp undo skips it.
+  auto tp = temp_prior.find(n);
+  if (tp != temp_prior.end() && temp_env_active.count(n)) {
+    scope.emplace_back(n, tp->second);
+    temp_consumed.insert(n);
+    temp_prior.erase(tp);
+  } else {
+    scope.emplace_back(n, it == vars.end() ? std::nullopt : std::optional<Variable>(it->second));
+  }
   // A fresh local inherits the value and attributes of the nearest enclosing
   // variable of the same name rather than starting unset when `-I' was given or
   // `shopt -s localvar_inherit' is set (bash); a later `=value' on the local
@@ -1113,10 +1139,13 @@ bool Shell::make_local(const std::string &n, bool inherit_force) {
   if (!inherit) {
     // A local of an exported variable stays exported even without inheriting
     // its value, so the environment the function passes to child processes is
-    // unchanged (bash): `export V; f(){ local V; }' keeps V in the environment,
-    // and a temp-env `V=x f' makes the local `V' exported too.
+    // unchanged (bash): `export V; f(){ local V; }' keeps V in the environment
+    // WITH the enclosing value (environ_block falls through the invisible
+    // local to the shadowed binding), and a temp-env `V=x f' makes the local
+    // `V' exported too.
     bool was_exported = it != vars.end() && it->second.exported;
     vars[n] = Variable{};  // fresh (unset) local
+    vars[n].invisible = true;
     vars[n].exported = was_exported;
   }
   // Localizing OPTIND saves and resets the getopts scan state (bash restores
@@ -1400,8 +1429,33 @@ void Shell::unset(const std::string &n_in, bool force, bool noref) {
     if (!force && !local_stack.empty())
       for (auto &e : local_stack.back())
         if (e.first == n) { cur_local = true; break; }
-    if (cur_local) { Variable v; v.invisible = true; vars[n] = v; }
-    else vars.erase(it);
+    if (cur_local) {
+      Variable v;
+      v.invisible = true;
+      // The declared-but-unset placeholder keeps the export attribute (a
+      // temp-env-inherited local stays `declare -x v' after unset, bash).
+      v.exported = it->second.exported;
+      vars[n] = v;
+      return;
+    }
+    // Unsetting a variable that is local to an ENCLOSING function scope POPS
+    // that local cell (bash's value-stack semantics): the binding beneath it
+    // -- an outer local or the global -- becomes visible immediately, at
+    // every scope, and the popped frame entry must not restore it again at
+    // return.  `outer(){ local r; inner; echo $r; }; inner(){ unset r; }'
+    // exposes the global r inside BOTH inner and outer (varenv10.sub).
+    if (!force && local_stack.size() > 1) {
+      for (auto fit = std::next(local_stack.rbegin()); fit != local_stack.rend(); ++fit) {
+        for (auto e = fit->begin(); e != fit->end(); ++e) {
+          if (e->first != n) continue;
+          if (e->second) vars[n] = *e->second;
+          else vars.erase(n);
+          fit->erase(e);
+          return;
+        }
+      }
+    }
+    vars.erase(it);
   }
 }
 
@@ -1412,8 +1466,24 @@ std::string Shell::ifs() const {
 
 std::vector<std::string> Shell::environ_block() const {
   std::vector<std::string> out;
-  for (const auto &kv : vars)
-    if (kv.second.exported) out.push_back(kv.first + "=" + kv.second.value);
+  for (const auto &kv : vars) {
+    if (!kv.second.exported) continue;
+    std::string val = kv.second.value;
+    // An INVISIBLE exported local (`export V=abc; f(){ local V; }') passes
+    // the SHADOWED value to children until the local is assigned (bash).
+    if (kv.second.invisible) {
+      bool found = false;
+      for (auto fit = local_stack.rbegin(); fit != local_stack.rend() && !found; ++fit)
+        for (const auto &e : *fit)
+          if (e.first == kv.first) {
+            if (e.second && !e.second->invisible && e.second->exported) val = e.second->value;
+            else val.clear();
+            found = true;
+            break;
+          }
+    }
+    out.push_back(kv.first + "=" + val);
+  }
   // Exported functions travel as BASH_FUNC_<name>%%=() {  body  }, which a
   // child bash/gnash re-imports at startup.
   for (const auto &name : exported_functions) {
