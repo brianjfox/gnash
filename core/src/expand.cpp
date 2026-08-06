@@ -2391,6 +2391,28 @@ void Expander::process_dq(const std::string &text, size_t &i, std::string &out,
 // double-quote characters are removed but single quotes stay ORDINARY
 // characters, so `$(( "1+1" ))' is 2 while `$(( 'foo' ))' is the arithmetic
 // syntax error bash reports (expr.c never sees quoting).
+// Mark characters of arithmetic-expansion OUTPUT that are special to the
+// arithmetic scanner with a \x04 display-escape byte: the scanner treats the
+// pair structurally-neutral or strips it, and error messages render it as a
+// backslash (`((: 'assoc[x\],b\[\$(echo uname >&2)]++' : ...`, as bash).
+static void arith_escape(std::string &out, std::string &mask, size_t from) {
+  std::string o, m;
+  o.reserve(out.size() - from + 8);
+  for (size_t k = from; k < out.size(); k++) {
+    char c = out[k];
+    if (c == '[' || c == ']' || c == '$' || c == '\\' || c == '`') {
+      o += '\x04';
+      m += k < mask.size() ? mask[k] : '1';
+    }
+    o += c;
+    m += k < mask.size() ? mask[k] : '1';
+  }
+  out.resize(from);
+  mask.resize(from < mask.size() ? from : mask.size());
+  out += o;
+  mask += m;
+}
+
 std::string Expander::expand_arith(const std::string &text) {
   std::string out, mask;
   size_t i = 0;
@@ -2400,8 +2422,18 @@ std::string Expander::expand_arith(const std::string &text) {
     // expands it exactly once itself (bash expands subscripts at evaluation,
     // so `(( assoc[$key]++ ))' with `]'/`$(' in $key's VALUE keys on the
     // literal value and never re-scans or executes it).
+    bool sub_ctx = false;
     if (c == '[' && !out.empty() &&
         (std::isalnum(static_cast<unsigned char>(out.back())) || out.back() == '_')) {
+      // Walk back over the name: a quote directly before it (`'assoc[$k]++'`)
+      // means this is quoted DATA, not an array reference -- expand normally
+      // so the error text shows the expansion, escaped.
+      size_t nb = out.size();
+      while (nb > 0 && (std::isalnum(static_cast<unsigned char>(out[nb - 1])) || out[nb - 1] == '_'))
+        nb--;
+      sub_ctx = nb == 0 || (out[nb - 1] != '\'' && out[nb - 1] != '"');
+    }
+    if (sub_ctx) {
       int bd = 0;
       size_t j = i;
       for (; j < text.size(); j++) {
@@ -2430,7 +2462,12 @@ std::string Expander::expand_arith(const std::string &text) {
       i += 2;
       continue;
     }
-    if (c == '$') { expand_dollar(text, i, true, out, mask); continue; }
+    if (c == '$') {
+      size_t o0 = out.size();
+      expand_dollar(text, i, true, out, mask);
+      arith_escape(out, mask, o0);
+      continue;
+    }
     if (c == '`') {
       size_t j = i + 1;
       std::string inner;
@@ -2446,7 +2483,9 @@ std::string Expander::expand_arith(const std::string &text) {
       int st = 0;
       std::string res = sh_.run_and_capture(inner, &st);
       sh_.note_cmdsub(st);
+      size_t o0 = out.size();
       for (char ch : res) { out += ch; mask += '1'; }
+      arith_escape(out, mask, o0);
       i = (j < text.size()) ? j + 1 : j;
       continue;
     }

@@ -308,6 +308,22 @@ bool append_formatted(std::string &out, const std::string &spec, T value) {
   return true;
 }
 
+// A well-formed `NAME[subscript]' element reference: the bracket span is
+// balanced, ENDS at the final character, and is non-empty -- `A[]]' and
+// `A[]' are invalid identifiers, as bash reports for read/printf/declare.
+bool well_formed_element(const std::string &s, bool allow_empty = false) {
+  size_t lb = s.find('[');
+  if (lb == std::string::npos) return s.find(']') == std::string::npos;
+  if (s.back() != ']') return false;
+  int d = 0;
+  size_t i = lb;
+  for (; i < s.size(); i++) {
+    if (s[i] == '[') d++;
+    else if (s[i] == ']' && --d == 0) break;
+  }
+  return d == 0 && i == s.size() - 1 && (allow_empty || i > lb + 1);
+}
+
 // Apply Shell::array_expand_once_ok to a full `name[sub]' target (e.g. a `read'
 // variable), rewriting the subscript to its resolved index; false (diagnostic
 // printed) on rejection.
@@ -434,9 +450,22 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
 
   if (to_var) {
     auto lb = vname.find('[');
+    if (lb != std::string::npos && !well_formed_element(vname)) {
+      std::fprintf(stderr, "%sprintf: `%s': not a valid identifier\n",
+                   sh.err_prefix().c_str(), vname.c_str());
+      return 1;
+    }
     if (lb != std::string::npos && !vname.empty() && vname.back() == ']') {
       std::string base = vname.substr(0, lb);
       std::string sub = vname.substr(lb + 1, vname.size() - lb - 2);
+      // `printf -v array[@]' is a bad array subscript for an INDEXED array.
+      auto pvit = sh.vars.find(sh.deref(base));
+      bool pv_assoc = pvit != sh.vars.end() && pvit->second.kind == VarKind::Assoc;
+      if (!pv_assoc && (sub == "@" || sub == "*")) {
+        std::fprintf(stderr, "%s%s: bad array subscript\n", sh.err_prefix().c_str(),
+                     vname.c_str());
+        return 1;
+      }
       if (!sh.array_expand_once_ok(base, sub)) return 1;
       sh.array_set(base, sub, out);
     } else if (!sh.set(vname, out, "printf")) {
@@ -498,7 +527,11 @@ struct TestEval {
       std::string nm = arg.substr(0, br);
       std::string sub = arg.substr(br + 1, arg.size() - br - 2);
       if (!sh.array_expand_once_ok(nm, sub)) { ok = false; return false; }
-      if (sub == "@" || sub == "*") return sh.array_count(nm) > 0;
+      // For an INDEXED array `@'/`*' means "any element set"; an ASSOCIATIVE
+      // array treats them as ordinary literal keys (bash).
+      auto vit = sh.vars.find(sh.deref(nm));
+      bool assoc = vit != sh.vars.end() && vit->second.kind == VarKind::Assoc;
+      if (!assoc && (sub == "@" || sub == "*")) return sh.array_count(nm) > 0;
       for (const std::string &k : sh.array_keys(nm)) if (k == sub) return true;
       return false;
     }
@@ -1175,13 +1208,31 @@ int bi_unset(Shell &sh, const std::vector<std::string> &argv) {
       ret = 1;
       continue;
     }
+    // A malformed element reference (an unbalanced bracket from word
+    // splitting, e.g. `unset a[$(echo' + `foo)]') is a SILENT no-op in bash.
+    size_t lb = argv[i].find('[');
+    if (!noref && (lb != std::string::npos || argv[i].find(']') != std::string::npos) &&
+        !well_formed_element(argv[i], /*allow_empty=*/true)) {
+      continue;
+    }
     // `unset name[sub]' removes a single array element (or the whole array for
     // a `@'/`*' subscript), not a variable literally named "name[sub]".
-    size_t lb = argv[i].find('[');
     if (!noref && lb != std::string::npos && !argv[i].empty() &&
         argv[i].back() == ']') {
       std::string base = argv[i].substr(0, lb);
       std::string sub = argv[i].substr(lb + 1, argv[i].size() - lb - 2);
+      // Under BASH_COMPAT <= 51, `unset array[@]' removes the whole VARIABLE
+      // (later bash clears the elements but keeps the array).
+      if (sub == "@" || sub == "*") {
+        auto cvit = sh.vars.find(sh.deref(base));
+        bool c_assoc = cvit != sh.vars.end() && cvit->second.kind == VarKind::Assoc;
+        std::string compat = sh.get("BASH_COMPAT");
+        long cv = compat.empty() ? 99 : std::strtol(compat.c_str(), nullptr, 10);
+        if (!c_assoc && cv > 0 && cv <= 51) {
+          sh.unset(base, false, false);
+          continue;
+        }
+      }
       std::string bd = sh.deref(base);
       auto bit = sh.vars.find(bd);
       // Unset of an element only evaluates the subscript when the array exists;
@@ -1663,7 +1714,11 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
       if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '_')) return false;
     return true;
   };
-  if (!arrayname.empty() && !valid_read_name(arrayname)) {
+  auto valid_read_target = [&](const std::string &s2) {
+    if (!valid_read_name(s2)) return false;
+    return well_formed_element(s2);  // `A[]]' is not a valid identifier
+  };
+  if (!arrayname.empty() && !valid_read_target(arrayname)) {
     std::fprintf(stderr, "%sread: `%s': not a valid identifier\n", sh.err_prefix().c_str(),
                  arrayname.c_str());
     return 1;
@@ -1687,7 +1742,7 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
     }
   }
   for (const std::string &nm : names)
-    if (!valid_read_name(nm)) {
+    if (!valid_read_target(nm)) {
       std::fprintf(stderr, "%sread: `%s': not a valid identifier\n", sh.err_prefix().c_str(),
                    nm.c_str());
       return 1;
@@ -2172,6 +2227,27 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     bool arraylit0 = eq != std::string::npos && a.size() > eq + 2 &&
                      a[eq + 1] == '(' && a.back() == ')';
     bool subscript0 = nend != std::string::npos && a[nend] == '[';
+    // A malformed element reference: `declare A[]]=X' is rejected with the
+    // WHOLE argument (`declare: \`A[]]=X': not a valid identifier'); an EMPTY
+    // subscript is `a[]: bad array subscript' with no builtin prefix (bash).
+    if (subscript0 && !sh.is_zsh()) {
+      std::string elem = (eq == std::string::npos) ? a : a.substr(0, append ? eq - 1 : eq);
+      // An empty or invalid BASE name (`declare []=asdf') is the
+      // invalid-identifier error, not a subscript diagnostic.
+      if (!valid_identifier(elem.substr(0, elem.find('['))) ||
+          !well_formed_element(elem, /*allow_empty=*/true)) {
+        std::fprintf(stderr, "%s%s: `%s': not a valid identifier\n", sh.err_prefix().c_str(),
+                     argv[0].c_str(), a.c_str());
+        ret = 1;
+        continue;
+      }
+      if (!well_formed_element(elem)) {  // balanced but empty: a[]
+        std::fprintf(stderr, "%s%s: bad array subscript\n", sh.err_prefix().c_str(),
+                     elem.c_str());
+        ret = 1;
+        continue;
+      }
+    }
     // `readonly'/`export' cannot target a single array element (`readonly a[5]')
     // -- bash reports it as an invalid identifier; declare/typeset/local can.
     // (zsh's array/readonly rules differ, so leave that personality alone.)
@@ -6026,7 +6102,9 @@ struct CondEval {
 
   std::string expand(const std::string &s) {
     Expander ex(sh);
-    return ex.expand_no_split(s);
+    // No process substitution inside [[: `index[7<(4+2)]' is an arithmetic
+    // comparison, not `<(cmd)' (bash).
+    return ex.expand_no_split(s, false, /*do_procsub=*/false);
   }
   // A `=='/`!=' right-hand side is a pattern: quoted/backslash-escaped glob
   // metacharacters must match literally (bash quotes them before matching), so

@@ -69,6 +69,7 @@ constexpr const char *kRecursion = "expression recursion level exceeded";
 constexpr const char *kBadOp = "arithmetic syntax error: invalid arithmetic operator";
 }  // namespace arith_err
 
+
 NodeP mk(K k) { auto n = std::make_unique<Node>(); n->k = k; return n; }
 
 // Digit value of C in the given BASE for bash's `base#digits' notation, or -1 if
@@ -186,6 +187,9 @@ struct Parser {
     last_tok = start;
     n.src = start;
     skip();
+    // A \x04 display-escape before `[' still opens a subscript (expansion
+    // output at expression level arrives escaped: `a\x04[\x04$k\x04]').
+    if (pos + 1 < s.size() && s[pos] == '\x04' && s[pos + 1] == '[') pos++;
     if (pos < s.size() && s[pos] == '[') {
       pos++;
       int bdepth = 1;
@@ -194,16 +198,30 @@ struct Parser {
       // balance, so `assoc['$k']' and `a[$(cmd)]' span correctly.
       while (pos < s.size() && bdepth > 0) {
         char c2 = s[pos];
+        if (c2 == '\x04' && pos + 1 < s.size()) {
+          // Display-escaped brackets stay structural; other escaped chars are
+          // carried (the escape is stripped again before expansion).
+          if (s[pos + 1] == '[') { bdepth++; n.sub += '['; pos += 2; continue; }
+          if (s[pos + 1] == ']') {
+            if (--bdepth == 0) { pos += 2; break; }
+            n.sub += ']';
+            pos += 2;
+            continue;
+          }
+          n.sub += c2; n.sub += s[pos + 1]; pos += 2; continue;
+        }
         if (c2 == '\\' && pos + 1 < s.size()) {
           n.sub += c2; n.sub += s[pos + 1]; pos += 2; continue;
         }
-        if (c2 == '\'') {
+        if (c2 == '\'' && s.find('\'', pos + 1) != std::string::npos) {
+          // A PAIRED quote is a span (`assoc['$k']'); a lone one is data
+          // (`a[80's]').
           n.sub += c2;
           while (++pos < s.size() && s[pos] != '\'') n.sub += s[pos];
           if (pos < s.size()) { n.sub += '\''; pos++; }
           continue;
         }
-        if (c2 == '"') {
+        if (c2 == '"' && s.find('"', pos + 1) != std::string::npos) {
           n.sub += c2;
           while (++pos < s.size() && s[pos] != '"') {
             if (s[pos] == '\\' && pos + 1 < s.size()) n.sub += s[pos++];
@@ -229,6 +247,9 @@ struct Parser {
         if (bdepth > 0) n.sub += c2;
         pos++;
       }
+      // An unterminated subscript (`b[$(echo' after word splitting) is
+      // bash's "bad array subscript", blaming the reference.
+      if (bdepth > 0) note("bad array subscript", start);
       n.has_sub = true;
     }
     return true;
@@ -669,42 +690,68 @@ static bool resolve_sub(const Node *n, Ctx &ctx, std::string &out) {
   // does at evaluation: `assoc[$key]' keys on $key's VALUE, `assoc['$key']'
   // on the literal string $key -- and the result is never re-scanned, so a
   // `]' or `$(' in a value is inert data.
-  if (ctx.expand_subs == 1 && out.find_first_of("$`'\"\\") != std::string::npos) {
+  // Strip the preprocessor's \x04 display escapes: the escaped text is the
+  // real subscript.
+  std::string raw;
+  for (size_t k = 0; k < out.size(); k++) {
+    if (out[k] == '\x04' && k + 1 < out.size()) continue;
+    raw += out[k];
+  }
+  if (ctx.expand_subs == 1 && raw.find_first_of("$`'\"\\") != std::string::npos) {
     Expander ex(ctx.sh);
-    out = ex.expand_no_split(out);
+    out = ex.expand_no_split(raw, false, /*do_procsub=*/false);
+  } else {
+    out = raw;
   }
   out = ctx.sh.zsh_subscript(n->name, out);
-  if (!kind_of()) {
-    // An indexed (or undeclared) target: an EMPTY word-expanded subscript is
-    // bash's `a[]': not a valid identifier; otherwise double-quote CHARS are
-    // removed (arithmetic expansion treats them as removable quoting, so
-    // `a[\" \"]' indexes 0) and the result is arith-evaluated.  A malformed
-    // subscript aborts with bash's diagnostic naming the SUBSCRIPT.
-    if (out.empty()) {
+  if (kind_of()) {
+    // An associative key: the once-expanded text is the key, verbatim for the
+    // arithmetic-source mode (`(( a[\" \"]=11 ))' keys on the literal `" "');
+    // let's pre-expanded text drops its removable double-quote characters
+    // (`let 'a[" "]=11'` keys on the space).
+    if (ctx.expand_subs == 2) {
+      std::string k2;
+      for (char c : out)
+        if (c != '"') k2 += c;
+      out = k2;
+    }
+    return true;
+  }
+  // An indexed (or undeclared) target: an EMPTY word-expanded subscript is
+  // bash's `a[]': not a valid identifier; `@'/`*' is a bad array subscript;
+  // otherwise double-quote CHARS are removable arithmetic quoting and the
+  // result is arith-evaluated, a malformed one aborting with bash's
+  // diagnostic naming the SUBSCRIPT.
+  if (out.empty()) {
+    ctx.ok = false;
+    ctx.full_msg = "`" + n->name + "[]': not a valid identifier";
+    return false;
+  }
+  if (out == "@" || out == "*") {
+    ctx.ok = false;
+    ctx.full_msg = n->name + "[" + out + "]: bad array subscript";
+    ctx.full_msg_bare = true;
+    return false;
+  }
+  std::string ev;
+  for (char c : out)
+    if (c != '"') ev += c;
+  if (blank_expr(ev)) { out = "0"; return true; }
+  long long k;
+  if (!try_int(ev, k)) {
+    Parsed p = parse_cached(ev);
+    Ctx sc{ctx.sh, p.ok, ctx.depth + 1, p.err_pos, p.err_msg, ctx.cmd_name, {}, false, ctx.expand_subs};
+    k = eval_node(p.root.get(), sc);
+    if (!sc.ok) {
       ctx.ok = false;
-      ctx.full_msg = "`" + n->name + "[]': not a valid identifier";
+      ctx.full_msg = !sc.full_msg.empty()
+                         ? sc.full_msg
+                         : format_arith_err(ev, sc.err_msg, sc.err_pos);
+      ctx.full_msg_bare = true;
       return false;
     }
-    std::string ev;
-    for (char c : out)
-      if (c != '"') ev += c;
-    if (blank_expr(ev)) { out = "0"; return true; }
-    long long k;
-    if (!try_int(ev, k)) {
-      Parsed p = parse_cached(ev);
-      Ctx sc{ctx.sh, p.ok, ctx.depth + 1, p.err_pos, p.err_msg, ctx.cmd_name, {}, false, ctx.expand_subs};
-      k = eval_node(p.root.get(), sc);
-      if (!sc.ok) {
-        ctx.ok = false;
-        ctx.full_msg = !sc.full_msg.empty()
-                           ? sc.full_msg
-                           : format_arith_err(ev, sc.err_msg, sc.err_pos);
-        ctx.full_msg_bare = true;
-        return false;
-      }
-    }
-    out = std::to_string(k);
   }
+  out = std::to_string(k);
   return true;
 }
 
@@ -890,19 +937,37 @@ long long eval_arith_msg(Shell &sh, const std::string &expr, const char *cmd_nam
   if (blank_expr(expr)) { if (ok) *ok = true; return 0; }
   if (try_int(expr, iv)) { if (ok) *ok = true; return iv; }
   Parsed p = parse_cached(expr);
+  bool parse_failed = !p.ok;
   Ctx ctx{sh, p.ok, 0, p.err_pos, p.err_msg, cmd_name, {}, false, expand_subs};
   long long v = eval_node(p.root.get(), ctx);
   if (ok) *ok = ctx.ok;
+  // A PARSE error outranks an evaluation-side diagnostic (`let 'a[x],b[$(e'
+  // reports the bad subscript found at parse, not the doomed evaluation).
+  if (parse_failed) ctx.full_msg.clear();
   std::string prefix = (cmd_name && cmd_name[0]) ? std::string(cmd_name) + ": " : "";
+  // \x04 display-escape markers in expansion output: the (( )) command's
+  // diagnostics render them as backslashes (`'assoc[x\],b\[\$(...)]++'`);
+  // $(( )) diagnostics drop them (`$( echo >&2 foo ) : ...`), as bash.
+  auto rendere = [&](std::string t) {
+    std::string r;
+    for (char c : t) {
+      if (c == '\x04') {
+        if (cmd_name && cmd_name[0]) r += '\\';
+        continue;
+      }
+      r += c;
+    }
+    return r;
+  };
   if (!ctx.ok && !ctx.full_msg.empty()) {
     // A nested value-evaluation failure carries its own fully formatted
     // diagnostic naming the VALUE as the expression; a subscript failure
     // prints bare (no `((: ' prefix), as bash's array layer does.
     std::fprintf(stderr, "%s%s%s\n", sh.err_prefix().c_str(),
-                 ctx.full_msg_bare ? "" : prefix.c_str(), ctx.full_msg.c_str());
+                 ctx.full_msg_bare ? "" : prefix.c_str(), rendere(ctx.full_msg).c_str());
   } else if (!ctx.ok && ctx.err_pos != std::string::npos && ctx.err_pos <= expr.size()) {
     std::fprintf(stderr, "%s%s%s\n", sh.err_prefix().c_str(), prefix.c_str(),
-                 format_arith_err(expr, ctx.err_msg, ctx.err_pos).c_str());
+                 rendere(format_arith_err(expr, ctx.err_msg, ctx.err_pos)).c_str());
   }
   return v;
 }
