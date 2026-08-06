@@ -481,6 +481,10 @@ class Shell {
   // source, traps -- do not leak theirs).  A non-interactive line reader stops
   // reading its input when set, as bash does after a top-level syntax error.
   bool had_parse_error = false;
+  // A fatal arithmetic error in an assignment subscript unwinds the CURRENT
+  // top-level command list (bash's longjmp to the command loop) -- the next
+  // line still runs.  Cleared by run_string after each list.
+  bool arith_abort = false;
   // Alias expansion applies: interactive or `shopt -s expand_aliases', and at
   // least one alias table is non-empty.
   bool aliases_active() const;
@@ -506,7 +510,8 @@ class Shell {
 long long eval_arith(Shell &sh, const std::string &expr, bool *ok);
 // eval_arith plus bash's error diagnostics; cmd_name selects the prefix:
 // "" for $((...)), "((" for the (( )) command, "let" for the let builtin.
-long long eval_arith_msg(Shell &sh, const std::string &expr, const char *cmd_name, bool *ok);
+long long eval_arith_msg(Shell &sh, const std::string &expr, const char *cmd_name, bool *ok,
+                         int expand_subs = 0);
 
 // Expand a PS1/PS2-style prompt string (prompt.cpp).
 std::string expand_prompt(Shell &sh, const std::string &ps);

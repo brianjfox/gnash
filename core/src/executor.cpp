@@ -2172,7 +2172,7 @@ int Executor::run_arith(const ArithCommand *c) {
   if (sh_.opt_xtrace) std::fprintf(stderr, "+ (( %s ))\n", e.c_str());
   // The `(( ))' command reports an arithmetic error (bad token, division by
   // zero) with bash's `((: EXPR: ...' diagnostic, unlike bare $(( )).
-  long long v = eval_arith_msg(sh_, e, "((", &ok);
+  long long v = eval_arith_msg(sh_, e, "((", &ok, /*expand_subs=*/1);
   if (!ok) return 1;
   return v != 0 ? 0 : 1;
 }

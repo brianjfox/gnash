@@ -2725,7 +2725,10 @@ int bi_let(Shell &sh, const std::vector<std::string> &argv) {
   bool ok = true;
   // bash stops at the first expression that fails to evaluate (later ones, and
   // their side effects, are skipped) and returns failure.
-  for (size_t i = start; i < argv.size() && ok; i++) last = eval_arith_msg(sh, argv[i], "let", &ok);
+  // let arguments are full arithmetic contexts: subscripts expand with
+  // arithmetic quote semantics (`let 'a[" "]=5'` indexes 0), like (( )).
+  for (size_t i = start; i < argv.size() && ok; i++)
+    last = eval_arith_msg(sh, argv[i], "let", &ok, /*expand_subs=*/2);
   return (ok && last != 0) ? 0 : 1;
 }
 
@@ -6148,8 +6151,10 @@ struct CondEval {
         // expression (so `-eq 4+3' means 7), reporting a malformed one with
         // bash's `[[: EXPR: ...' diagnostic rather than silently reading 0.
         bool aok = true;
-        long l = static_cast<long>(eval_arith_msg(sh, lhs, "[[", &aok));
-        long r = static_cast<long>(eval_arith_msg(sh, expand(rhs_raw), "[[", &aok));
+        // A malformed [[ arithmetic operand is SILENT in bash (the failed
+        // side compares as 0): `[[ assoc[$badkey] -eq ... ]]' prints nothing.
+        long l = static_cast<long>(eval_arith(sh, lhs, &aok));
+        long r = static_cast<long>(eval_arith(sh, expand(rhs_raw), &aok));
         return int_cmp(op, l, r);
       }
     }

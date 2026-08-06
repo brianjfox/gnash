@@ -783,7 +783,16 @@ void Shell::array_set(const std::string &n_in, const std::string &sub, const std
   v.kind = VarKind::Indexed;
   bool ok = true;
   long long k = eval_arith(*this, sub, &ok);
-  if (!ok) k = 0;
+  if (!ok) {
+    // A malformed subscript reports bash's arithmetic diagnostic (naming the
+    // subscript text), assigns nothing, and unwinds the current command list
+    // (bash longjmps to the command loop; the enclosing subshell dies, but
+    // the reader continues with the next line).
+    eval_arith_msg(*this, sub, "", &ok);
+    arith_abort = true;
+    last_status = 1;
+    return;
+  }
   // A negative index counts back from the highest set index; one that resolves
   // below zero is a bad subscript (bash errors and leaves the array unchanged).
   // Under zsh the subscript was already translated by zsh_subscript.
@@ -1952,6 +1961,7 @@ int Shell::run_string(const std::string &script) {
   last_status = st;
   run_pending_traps();  // deliver signals received during the final command
   last_status = st;
+  arith_abort = false;  // the unwind ends with this command list
   // had_parse_error reports THIS string's parse only: a syntax error inside a
   // nested run (eval, source, a trap body) does not abort the caller's reader
   // -- bash keeps going after `eval "do"' but stops its own input after a
