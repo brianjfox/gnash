@@ -671,17 +671,11 @@ static bool func_name_is_assignment(const std::string &s) {
 std::string named_function_string(const std::string &name, const Command *body,
                                   bool posix) {
   MPrinter p;
-  // bash prefixes `function ' to a name that is not a valid function name: in
-  // the default mode that means an assignment-shaped name (`a=2'); under posix
-  // it also covers all-digit names and non-identifiers.
+  // bash prefixes `function ' only to an assignment-shaped name (`a=2' would
+  // reparse as an assignment without it); an all-digit or otherwise funky name
+  // prints bare in BOTH modes (`11111 () ', even under posix).
+  (void)posix;
   bool prefix = func_name_is_assignment(name);
-  if (posix && !prefix) {
-    bool all_digits = !name.empty();
-    for (char c : name) if (!std::isdigit((unsigned char)c)) { all_digits = false; break; }
-    bool ident = !name.empty() && (std::isalpha((unsigned char)name[0]) || name[0] == '_');
-    for (char c : name) if (!std::isalnum((unsigned char)c) && c != '_') { ident = false; break; }
-    if (all_digits || !ident) prefix = true;
-  }
   p.out = (prefix ? "function " : "") + name + " () ";
   p.out += '\n';
   p.print_func_body(body, 0);
