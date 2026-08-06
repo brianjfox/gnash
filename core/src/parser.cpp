@@ -1464,8 +1464,61 @@ static AliasExpansion alias_splice_text(const std::string &input,
   return ax;
 }
 
+// bash parses command-substitution content recursively at PARSE time, so a
+// construct left open inside `$( )' is a syntax error of the OUTER parse:
+// `echo $( if x; then echo foo )' reports "near unexpected token `)'", and a
+// definite inner error appends "while looking for matching `)'" (`: $(case x
+// in x) ;; x) done esac)' -> "near unexpected token `done' while ...").
+// Spans starting `$((' are skipped (arithmetic or `$( (subshell' -- both
+// validated elsewhere); quoted (') and escaped `$(' are literal.
+static bool validate_comsubs(const std::vector<Token> &toks, bool posix_mode,
+                             ParseResult &res, int depth) {
+  if (depth > 16) return true;
+  for (const Token &t : toks) {
+    if (t.type != Tok::Word) continue;
+    const std::string &w = t.text;
+    bool sq = false;
+    for (size_t i = 0; i + 1 < w.size(); i++) {
+      char c = w[i];
+      if (sq) { if (c == '\'') sq = false; continue; }
+      if (c == '\'') { sq = true; continue; }
+      if (c == '\\') { i++; continue; }
+      if (c != '$' || w[i + 1] != '(') continue;
+      if (i + 2 < w.size() && w[i + 2] == '(') { i++; continue; }  // $(( form
+      // The lexer's own scanner finds the closer (case patterns, quotes,
+      // comments, and here-documents included).
+      std::size_t jend = comsub_span_end(w, i + 1);
+      if (jend == std::string::npos) break;  // unterminated: already flagged
+      size_t j = jend - 1;  // the `)'
+      std::string inner = w.substr(i + 2, j - (i + 2));
+      if (inner.find_first_not_of(" \t\n") == std::string::npos) { i = j; continue; }
+      ParseResult ir = parse(inner, posix_mode);
+      if (!ir.ok) {
+        res.ok = false;
+        res.command.reset();
+        res.error_line = t.line;
+        if (ir.incomplete) {
+          // The construct ran into the closing paren: bash blames the `)'.
+          res.error = "near unexpected token `)'";
+        } else if (ir.error.compare(0, 22, "near unexpected token ") == 0) {
+          res.error = ir.error + " while looking for matching `)'";
+        } else {
+          res.error = ir.error;
+        }
+        return false;
+      }
+      i = j;
+    }
+  }
+  return true;
+}
+
 ParseResult parse(const std::string &input, bool posix_mode) {
   Parser p(tokenize(input, posix_mode));
+  // Substitution content validates FIRST, as bash's recursive parser would:
+  // its diagnosis wins over any knock-on error in the outer grammar.
+  ParseResult pre;
+  if (!validate_comsubs(p.toks, posix_mode, pre, 0)) return pre;
   return p.run();
 }
 

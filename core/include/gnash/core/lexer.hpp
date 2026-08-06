@@ -80,6 +80,10 @@ const char *tok_name(Tok t);
 // Tokenize INPUT.  Always ends with a single Tok::Eof token.  Unterminated
 // quotes/spans are tolerated (consumed to end of input); the parser decides
 // whether the result is a syntax error.
+// Offset just past the `)' closing the substitution whose `(' is at open_pos
+// (quote/case/comment/heredoc-aware); npos when unterminated.
+std::size_t comsub_span_end(const std::string &text, std::size_t open_pos);
+
 std::vector<Token> tokenize(const std::string &input, bool posix_mode = false);
 
 }  // namespace gnash::core
