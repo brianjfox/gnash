@@ -23,6 +23,13 @@ target_link_libraries(gnash_core
   PUBLIC  gnash_common
   PRIVATE gnash::glob gnash::readline gnash::history gnash_warnings)
 
+# ANSI-C \u/\U escapes encode via iconv when the locale charset is not UTF-8.
+find_package(Iconv)
+if(Iconv_FOUND)
+  target_link_libraries(gnash_core PRIVATE Iconv::Iconv)
+  target_compile_definitions(gnash_core PRIVATE GNASH_HAVE_ICONV=1)
+endif()
+
 # gnash-parse: syntax-check / dump the AST (accept/reject like `bash -n`).
 add_executable(gnash-parse tools/gnash_parse.cpp)
 target_link_libraries(gnash-parse PRIVATE gnash::core)
