@@ -9,6 +9,7 @@
 
 #include "gnash/core/builtins.hpp"
 #include "gnash/core/expand.hpp"
+#include "gnash/core/lexer.hpp"
 #include "gnash/core/subscript.hpp"
 
 #include <algorithm>
@@ -1129,7 +1130,12 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
   }
   // $(cmd)
   if (n1 == '(') {
-    size_t end = scan_balanced(t, i + 1, '(', ')');
+    // The lexer's scanner is the single source of truth for the span: it
+    // knows case patterns (`$(case x in in|esac) ...;; esac)'), comments,
+    // and here-documents; fall back to the plain balanced scan if it calls
+    // the span unterminated.
+    size_t end = comsub_span_end(t, i + 1);
+    end = (end == std::string::npos) ? scan_balanced(t, i + 1, '(', ')') : end - 1;
     if (end != std::string::npos) {
       std::string inner = t.substr(i + 2, end - (i + 2));
       int st = 0;
