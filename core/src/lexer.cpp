@@ -9,6 +9,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <cwchar>
+#include <set>
 
 namespace gnash::core {
 
@@ -430,6 +431,59 @@ struct Lexer {
            c == ';' || c == '(' || c == ')' || c == '<' || c == '>';
   }
 
+  // True when a `name=(...)' compound may be recognized at the CURRENT word:
+  // the current simple command is still in assignment-prefix position (every
+  // word so far is an assignment), or its command word is an assignment
+  // builtin (declare/typeset/local/export/readonly/alias) -- options and
+  // redirections in between don't matter.  After an ordinary command word the
+  // `(' stays unconsumed and the parser reports bash's syntax error
+  // (`printf "%s\n" -a a=(a 'b  c')', array1.sub).
+  bool assignment_acceptable() const {
+    static const std::set<std::string> kAssignBuiltins = {
+        "declare", "typeset", "local", "export", "readonly", "alias",
+        "eval", "let"};  // bash marks eval/let assignment builtins too
+    static const std::set<std::string> kCmdStart = {
+        "if", "then", "else", "elif", "fi", "do", "done", "while", "until",
+        "for", "in", "case", "esac", "{", "}", "!", "time", "coproc", "function"};
+    auto is_sep = [](Tok ty) {
+      switch (ty) {
+        case Tok::Newline: case Tok::Amp: case Tok::Semi: case Tok::Pipe:
+        case Tok::AndAnd: case Tok::OrOr: case Tok::SemiSemi: case Tok::SemiAnd:
+        case Tok::SemiSemiAnd: case Tok::PipeAnd: case Tok::Lparen: case Tok::Rparen:
+          return true;
+        default:
+          return false;
+      }
+    };
+    auto assign_shaped = [](const std::string &s) {
+      size_t e = s.find('=');
+      if (e == std::string::npos || e == 0) return false;
+      if (!(std::isalpha(static_cast<unsigned char>(s[0])) || s[0] == '_')) return false;
+      size_t k = 0;
+      while (k < e && (std::isalnum(static_cast<unsigned char>(s[k])) || s[k] == '_')) k++;
+      if (k < e && s[k] == '[') {
+        size_t rb = s.rfind(']', e);
+        k = (rb != std::string::npos && rb < e) ? rb + 1 : k;
+      }
+      if (k < e && s[k] == '+') k++;
+      return k == e;
+    };
+    size_t start = out.size();
+    while (start > 0 && !is_sep(out[start - 1].type)) start--;
+    bool redir_target = false;
+    for (size_t k = start; k < out.size(); k++) {
+      const Token &t = out[k];
+      if (t.type == Tok::IoNumber) continue;
+      if (t.type != Tok::Word) { redir_target = true; continue; }  // a redir operator
+      if (redir_target) { redir_target = false; continue; }        // ... and its target
+      if (kCmdStart.count(t.text)) continue;  // reserved word: command not started yet
+      if (kAssignBuiltins.count(t.text)) return true;
+      if (assign_shaped(t.text)) continue;    // a prefix assignment keeps the position
+      return false;                           // an ordinary command word ends it
+    }
+    return true;  // still in command-prefix position
+  }
+
   // Bytes of the multibyte character starting at `pos' (1 for ASCII, invalid
   // sequences, or single-byte locales).  In charsets like Big5 a trail byte
   // can be `\' or a metacharacter value, so word scanning must consume a
@@ -463,6 +517,12 @@ struct Lexer {
         continue;
       }
       if (c == '(' && is_assignment_prefix(w)) {
+        // A compound value is only recognized where an ASSIGNMENT can appear:
+        // in command-prefix position or after an assignment builtin.  After an
+        // ordinary command word the `(' is a hard syntax error, exactly as
+        // bash's parser treats `printf "%s\n" -a a=(a 'b  c')' (array1.sub);
+        // leaving it unconsumed makes it an operator token the parser rejects.
+        if (!assignment_acceptable()) break;
         scan_paren(w);  // compound (array) assignment value: name=(...)
         quoted = true;
         continue;
