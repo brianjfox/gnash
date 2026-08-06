@@ -1669,7 +1669,10 @@ int bi_set(Shell &sh, const std::vector<std::string> &argv) {
       break;
     }
   }
-  if (positional_given) sh.positional.assign(argv.begin() + static_cast<long>(i), argv.end());
+  if (positional_given) {
+    sh.positional.assign(argv.begin() + static_cast<long>(i), argv.end());
+    if (!sh.in_function()) sh.params_set_builtin = true;
+  }
   return 0;
 }
 
@@ -5696,9 +5699,11 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
         // (`. file a b'); with none, it inherits the caller's positionals.
         std::vector<std::string> saved_pos;
         bool set_pos = argv.size() > ai + 1;
+        bool saved_params_flag = sh.params_set_builtin;
         if (set_pos) {
           saved_pos = sh.positional;
           sh.positional.assign(argv.begin() + ai + 1, argv.end());
+          sh.params_set_builtin = false;
         }
         // A sourced file becomes the innermost BASH_SOURCE frame; use the
         // resolved path (bash records the PATH-found path, not the bare name),
@@ -5718,7 +5723,12 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
         // shell (bash semantics; e.g. /etc/bashrc does `[ -z "$PS1" ] && return').
         if (sh.returning) { sh.returning = false; st = sh.exit_status; }
         sh.pop_src_frame();
-        if (set_pos) sh.positional = saved_pos;
+        // Restore the caller's parameters UNLESS the sourced script ran the
+        // `set' builtin at top level -- then its parameters stick (bash).
+        if (set_pos) {
+          if (!(!sh.in_function() && sh.params_set_builtin)) sh.positional = saved_pos;
+          sh.params_set_builtin = saved_params_flag;
+        }
       } else {
         std::fprintf(stderr, "%s%s: %s\n", sh.err_prefix().c_str(),
                      fname.c_str(), std::strerror(errno));
