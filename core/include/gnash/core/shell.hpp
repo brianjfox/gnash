@@ -163,6 +163,10 @@ class Shell {
   std::vector<std::vector<std::pair<std::string, std::optional<Variable>>>> local_stack;
   // Per-scope saved getopt state, set when that scope localizes OPTIND.
   std::vector<std::optional<std::tuple<size_t, std::string, int>>> getopt_scope_saves;
+  // Pre-temp-env bindings and names whose temp layer was consumed by a
+  // `local'/`declare' during the command (see executor apply_temp/undo_temp).
+  std::map<std::string, std::optional<Variable>> temp_prior;
+  std::set<std::string> temp_consumed;
   // Names currently bound by a `VAR=val cmd' temporary environment.  make_local
   // inherits such a variable's value/attributes when a called function localizes
   // it (`v=t f; f(){ local v; }' -> the local is `v=t', exported), matching bash.

@@ -37,6 +37,11 @@
 
 namespace gnash::core {
 
+// Shared with the executor: parse a `( ... )' compound value into elements.
+std::vector<std::pair<std::optional<std::string>, std::string>>
+parse_array_elems(Shell &sh, Expander &ex, const std::string &name, bool integer,
+                  bool whole_append, const std::string &parenval);
+
 namespace {
 
 std::string join(const std::vector<std::string> &v, size_t from) {
@@ -1553,6 +1558,12 @@ std::vector<std::pair<std::string, bool>> set_option_states(Shell &sh) {
       {"xtrace", sh.opt_xtrace}};
 }
 
+// External wrapper for `local -' restore (Shell::pop_scope lives in
+// shell.cpp, outside this file's anonymous namespace).
+bool apply_set_o_option(Shell &sh, const std::string &o, bool on) {
+  return set_o_option(sh, o, on);
+}
+
 namespace {  // reopen the anonymous namespace for the remaining file-local helpers
 
 int bi_set(Shell &sh, const std::vector<std::string> &argv) {
@@ -2105,6 +2116,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
           for (const auto &pr : sh.local_stack.back()) {
             if (std::find(seen.begin(), seen.end(), pr.first) != seen.end()) continue;
             seen.push_back(pr.first);
+            if (pr.first == "-") { std::printf("local -\n"); continue; }
             auto it = sh.vars.find(pr.first);
             if (it != sh.vars.end()) declare_print_var(pr.first, it->second, argv[0], sh.opt_posix);
           }
@@ -2248,7 +2260,25 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
   int ret = 0;
   for (; i < argv.size(); i++) {
     const std::string &a = argv[i];
+    // `local -': snapshot the set -o option states into the function frame
+    // (entry named "-"); Shell::pop_scope restores them at return.
+    if (local && a == "-" && !sh.local_stack.empty()) {
+      auto &frame = sh.local_stack.back();
+      bool have = false;
+      for (auto &e : frame)
+        if (e.first == "-") { have = true; break; }
+      if (!have) {
+        Variable v;
+        v.value = "\x01SETOPTS:";
+        for (const auto &o : set_option_states(sh))
+          v.value += o.first + "=" + (o.second ? "1" : "0") + ";";
+        frame.emplace_back("-", std::optional<Variable>(v));
+      }
+      continue;
+    }
     std::string a_display = a;  // error display; subscript shown expanded
+    std::vector<std::pair<std::optional<std::string>, std::string>> pre_elems;
+    bool have_pre_elems = false;
     size_t nend = a.find_first_of("[=");
     std::string name = (nend == std::string::npos) ? a : a.substr(0, nend);
     size_t eq = a.find('=');
@@ -2388,6 +2418,19 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
         for (auto &e : sh.local_stack.back())
           if (e.first == name) { fresh_local = false; break; }  // a re-declaration
       }
+      // A compound value on a LOCAL expands in the ENCLOSING scope before the
+      // variable is localized, so `local -a arr=( "${arr[@]}" )' copies the
+      // caller's array (bash), exactly like the scalar `local x=${x}' timing.
+      if (arraylit0 && eq != std::string::npos &&
+          (a.find(name, eq) != std::string::npos ||
+           a.find("${!", eq) != std::string::npos)) {
+        // Only when the value references the name being localized -- other
+        // values expand identically in either scope, and the normal path
+        // preserves subtleties (e.g. CTLESC data bytes, array29.sub).
+        Expander pex(sh);
+        pre_elems = parse_array_elems(sh, pex, name, integer, append, a.substr(eq + 1));
+        have_pre_elems = true;
+      }
       if (sh.make_local(name, force_inherit)) inherited_local = true;
     }
     // An array cannot be switched between indexed and associative in place; bash
@@ -2501,6 +2544,16 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
           val[1] == '(' && val[val.size() - 2] == ')') {
         apply_assignment_word(sh, name + (append ? "+=" : "=") +
                                       val.substr(1, val.size() - 2));
+      } else if (have_pre_elems && arraylit && !nameref) {
+        // The elements were expanded in the enclosing scope before make_local.
+        auto avk = sh.vars.find(name);
+        bool as_assoc = avk != sh.vars.end() && avk->second.kind == VarKind::Assoc;
+        if (integer)
+          for (auto &e : pre_elems) {
+            bool iok = true;
+            e.second = std::to_string(eval_arith(sh, e.second, &iok));
+          }
+        sh.array_assign(name, pre_elems, append, as_assoc);
       } else if (arraylit || subscript) {
         // An UNQUOTED compound (`declare -n array=(one two three)') is assigned
         // as an array literal even under -n; the "reference variable cannot be an
