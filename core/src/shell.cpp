@@ -331,10 +331,11 @@ int Shell::run_debug_trap(const std::string &cmd_text) {
 void Shell::run_err_trap(int status) {
   auto it = traps.find("ERR");
   if (it == traps.end() || it->second.empty() || in_err_trap) return;
-  // Without errtrace (`set -E'), the ERR trap is not inherited into functions
-  // or subshells (a forked child raises subshell_level); only the enclosing
-  // shell fires it for the function call / subshell / pipeline as a whole.
-  if (!opt_functrace && (in_function() || subshell_level > 0)) return;
+  // Without errtrace (`set -E'), the ERR trap is not inherited into function
+  // bodies; subshell non-inheritance is already modeled by the fork-time
+  // trap erasure, so a trap SET INSIDE the subshell still fires
+  // (redir12.sub's \`(trap ... ERR; while ...)').
+  if (!opt_functrace && in_function()) return;
   in_err_trap = true;
   int saved = last_status;
   last_status = status;  // $? inside the ERR trap is the failing command's status
@@ -1971,7 +1972,7 @@ int Shell::run_script_lines(const std::string &text) {
     pending.clear();
   };
 
-  while (pos < text.size() && !exiting) {
+  while (pos < text.size() && !exiting && !stdin_source_changed) {
     size_t nl = text.find('\n', pos);
     std::string line = (nl == std::string::npos) ? text.substr(pos) : text.substr(pos, nl - pos);
     pos = (nl == std::string::npos) ? text.size() : nl + 1;
@@ -2292,6 +2293,7 @@ std::string Shell::run_and_capture(const std::string &script, int *status) {
     no_current_job = true;  // bash resets the current job in the subshell
     subshell_level++;  // $BASH_SUBSHELL
     traps.erase("CHLD");  // the parent fires CHLD for the substitution as a whole
+    if (!opt_functrace) traps.erase("ERR");  // ERR is not inherited without -E
     pending_sigchld = 0;
     subshell_leaf = true;  // a lone external here can exec in place (no 2nd fork)
     // Command substitution unsets errexit in the subshell unless the caller has
