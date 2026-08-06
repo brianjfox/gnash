@@ -53,7 +53,7 @@ bool pat_match(const std::string &pattern, const std::string &text) {
 // -- only a `${` does -- matching bash's parse_matched_pair P_FIRSTCLOSE rule,
 // so `${IFS+a{b}` closes at the `}` after `b`.
 size_t scan_balanced(const std::string &t, size_t i, char open, char close,
-                     bool firstclose = false) {
+                     bool firstclose = false, bool squote_literal = false) {
   int depth = 0;
   bool wasdol = false;  // previous char was an unquoted `$` (LEX_WASDOL)
   // When scanning a `$( ... )' command substitution, a `)' that terminates a
@@ -91,7 +91,12 @@ size_t scan_balanced(const std::string &t, size_t i, char open, char close,
       wasdol = false;
       continue;
     }
-    if (c == '\'') { contaminate(); while (++i < t.size() && t[i] != '\'') {} wasdol = false; continue; }
+    if (c == '\'') {
+      // POSIX mode, inside a double-quoted ${...}: a single quote is an
+      // ordinary character (`"${IFS+'}'z}"` closes at the first `}`).
+      if (squote_literal) { wasdol = false; continue; }
+      contaminate(); while (++i < t.size() && t[i] != '\'') {} wasdol = false; continue;
+    }
     if (c == '"') {
       contaminate();
       while (++i < t.size() && t[i] != '"')
@@ -985,7 +990,8 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
   }
   // ${...}
   if (n1 == '{') {
-    size_t end = scan_balanced(t, i + 1, '{', '}', /*firstclose=*/true);
+    size_t end = scan_balanced(t, i + 1, '{', '}', /*firstclose=*/true,
+                               /*squote_literal=*/dq && sh_.opt_posix);
     if (end != std::string::npos) {
       std::string body = t.substr(i + 2, end - (i + 2));
 
@@ -1090,7 +1096,14 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
                 // Unquoted default word: a leading `~' tilde-expands (bash).
                 // In a here-document the word keeps here-document quoting
                 // (e.g. $'...' stays literal), so pass the flag through.
+                size_t m0 = mask.size();
                 process(expand_leading_tilde(sh_, word), out, mask, false, heredoc);
+                // The replacement is EXPANSION OUTPUT: its unquoted literal
+                // text IFS-splits like a parameter's value (`${IFS+foo 'b c'
+                // baz}' is three fields, the middle protected by its quotes).
+                if (!heredoc)
+                  for (size_t mk = m0; mk < mask.size(); mk++)
+                    if (mask[mk] == '2') mask[mk] = '0';
               }
               i = end + 1;
               return;
@@ -2427,7 +2440,13 @@ std::string Expander::expand_dq_word(const std::string &w_in) {
   // literal.
   std::string w;
   for (size_t k = 0; k < w_in.size(); k++) {
-    if (w_in[k] == '\\' && k + 1 < w_in.size()) { w += w_in[k]; w += w_in[k + 1]; k++; continue; }
+    if (w_in[k] == '\\' && k + 1 < w_in.size()) {
+      // `\}' escaped the ${...} closer at scan time: the word keeps a literal
+      // `}' and the backslash is consumed (`"${IFS+\}z}"' -> `}z'), unlike
+      // the ordinary double-quote escapes which process() handles below.
+      if (w_in[k + 1] == '}') { w += '}'; k++; continue; }
+      w += w_in[k]; w += w_in[k + 1]; k++; continue;
+    }
     if (w_in[k] == '$' && k + 1 < w_in.size() && w_in[k + 1] == '\'') {
       size_t j = k + 2;
       while (j < w_in.size() && w_in[j] != '\'') { if (w_in[j] == '\\' && j + 1 < w_in.size()) j++; j++; }
@@ -2873,6 +2892,12 @@ void Expander::expand_word_fields(const std::string &w) {
   splitting_ = true;  // nested $*/$@ -> separate fields, with proper masks
   process(src, o, m, false);
   splitting_ = saved;
+  // The whole replacement is EXPANSION OUTPUT: its unquoted literal text
+  // IFS-splits like a parameter's value (`${IFS+foo 'b c' baz}' is three
+  // fields), so remap literal '2' to splittable '0'; quoted '1' stays
+  // protected.
+  for (char &mc : m)
+    if (mc == '2') mc = '0';
   op_out_ = std::move(o);
   op_mask_ = std::move(m);
   op_fields_ = true;  // consumed (and cleared) by the ${...} splice in expand_dollar
@@ -2898,7 +2923,12 @@ static bool has_unquoted_splat(const std::string &w) {
 }
 
 std::string Expander::expand_op_word(const std::string &w, bool dq, bool top_level) {
-  if (top_level && splitting_ && !dq && !sh_.is_zsh() && has_unquoted_splat(w)) {
+  // An UNQUOTED substitute word is expanded and field-split like any other
+  // expansion output, with the word's own quotes protecting their content:
+  // `${IFS+foo 'b c' baz}' is three fields, the middle one `b c' (bash).
+  if (top_level && splitting_ && !dq && !sh_.is_zsh() &&
+      (has_unquoted_splat(w) ||
+       w.find_first_of(" \t\n") != std::string::npos)) {
     expand_word_fields(w);
     return std::string();  // real content is in op_out_/op_mask_ (op_fields_ set)
   }

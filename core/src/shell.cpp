@@ -1848,7 +1848,7 @@ int Shell::run_script_lines(const std::string &text) {
       ParseResult chk =
           aliases_active()
               ? parse_with_aliases(pending, aliases, global_aliases, suffix_aliases, opt_posix)
-              : parse(pending);
+              : parse(pending, opt_posix);
       bool was_heredoc = in_heredoc;
       in_heredoc = chk.heredoc_eof;
       in_heredoc_quoted = chk.heredoc_eof_quoted;
@@ -1890,7 +1890,7 @@ int Shell::run_string(const std::string &script) {
   ParseResult r = aliases_active()
                       ? parse_with_aliases(script, aliases, global_aliases, suffix_aliases,
                                            opt_posix)
-                      : parse(script);
+                      : parse(script, opt_posix);
   if (!r.ok) {
     // bash's format: `NAME: [CONTEXT: ][-c: ]line N: syntax error...' per
     // message line; "near unexpected token" joins without a colon, and the

@@ -34,7 +34,7 @@ struct ParseResult {
 };
 
 // Parse a complete program.
-ParseResult parse(const std::string &input);
+ParseResult parse(const std::string &input, bool posix_mode = false);
 
 // Parse with alias expansion applied first: regular aliases in command position,
 // zsh global aliases (`alias -g') anywhere, and zsh suffix aliases (`alias -s').
