@@ -850,6 +850,9 @@ int bi_dirs(Shell &sh, const std::vector<std::string> &argv) {
   std::string select;  // a +N / -N argument: print only that entry
   for (size_t i = 1; i < argv.size(); i++) {
     const std::string &a = argv[i];
+    // `--' ends option parsing; bash then ignores every remaining argument
+    // (`dirs -- +8' prints the whole stack).
+    if (a == "--") break;
     // A `+N' / `-N' selector (a dash/plus followed by a digit) is not an option.
     if (a.size() >= 2 && (a[0] == '+' || a[0] == '-') &&
         std::isdigit(static_cast<unsigned char>(a[1]))) {
@@ -916,9 +919,15 @@ int rot_index(const std::string &spec, size_t n) {
 int bi_pushd(Shell &sh, const std::vector<std::string> &argv) {
   // A leading `-n' suppresses the directory change (only the stack is touched).
   std::vector<std::string> a(argv.begin(), argv.end());
-  bool no_cd = false;
-  if (a.size() > 1 && a[1] == "-n") { no_cd = true; a.erase(a.begin() + 1); }
-  if (a.size() > 1 && (a[1][0] == '+' || a[1][0] == '-') && a[1].size() > 1 &&
+  bool no_cd = false, opts_end = false;
+  while (a.size() > 1) {
+    if (a[1] == "-n") { no_cd = true; a.erase(a.begin() + 1); }
+    else if (a[1] == "--") { opts_end = true; a.erase(a.begin() + 1); break; }
+    else break;
+  }
+  // After `--' the argument is a literal directory name, never a rotation:
+  // `pushd -- +1' is a chdir to `./+1' (bash).
+  if (!opts_end && a.size() > 1 && (a[1][0] == '+' || a[1][0] == '-') && a[1].size() > 1 &&
       std::isdigit(static_cast<unsigned char>(a[1][1]))) {
     // Rotate so the Nth entry becomes the top.
     std::vector<std::string> v = full_dirstack(sh);
@@ -932,7 +941,7 @@ int bi_pushd(Shell &sh, const std::vector<std::string> &argv) {
     return no_cd ? 0 : bi_dirs(sh, {"dirs"});
   }
   // A `+'/`-' argument that isn't a numeric index is a malformed rotation count.
-  if (a.size() > 1 && (a[1][0] == '+' || a[1][0] == '-')) {
+  if (!opts_end && a.size() > 1 && (a[1][0] == '+' || a[1][0] == '-')) {
     std::fprintf(stderr, "%spushd: %s: invalid number\n", sh.err_prefix().c_str(),
                  a[1].c_str());
     std::fprintf(stderr, "pushd: usage: pushd [-n] [+N | -N | dir]\n");
@@ -961,9 +970,15 @@ int bi_popd(Shell &sh, const std::vector<std::string> &argv) {
   // A leading `-n' suppresses the directory change (only the stack is touched);
   // it does not otherwise change which entry is removed.
   std::vector<std::string> a(argv.begin(), argv.end());
-  bool no_cd = false;
-  if (a.size() > 1 && a[1] == "-n") { no_cd = true; a.erase(a.begin() + 1); }
-  if (a.size() > 1 && (a[1][0] == '+' || a[1][0] == '-') && a[1].size() > 1 &&
+  bool no_cd = false, opts_end = false;
+  while (a.size() > 1) {
+    if (a[1] == "-n") { no_cd = true; a.erase(a.begin() + 1); }
+    else if (a[1] == "--") { opts_end = true; a.erase(a.begin() + 1); break; }
+    else break;
+  }
+  // After `--' bash ignores every remaining argument: `popd -- +8' acts as a
+  // plain `popd' (a quirk the test suite depends on).
+  if (!opts_end && a.size() > 1 && (a[1][0] == '+' || a[1][0] == '-') && a[1].size() > 1 &&
       std::isdigit(static_cast<unsigned char>(a[1][1]))) {
     std::vector<std::string> v = full_dirstack(sh);
     int idx = rot_index(a[1], v.size());
@@ -978,9 +993,17 @@ int bi_popd(Shell &sh, const std::vector<std::string> &argv) {
     }
     return bi_dirs(sh, {"dirs"});
   }
-  // A `+'/`-' argument that isn't a numeric index is a malformed number.
-  if (a.size() > 1 && (a[1][0] == '+' || a[1][0] == '-')) {
+  // A `+'/`-' argument that isn't a numeric index is a malformed number, and
+  // any other argument (without `--') is invalid outright -- popd takes no
+  // directory name.
+  if (!opts_end && a.size() > 1 && (a[1][0] == '+' || a[1][0] == '-')) {
     std::fprintf(stderr, "%spopd: %s: invalid number\n", sh.err_prefix().c_str(),
+                 a[1].c_str());
+    std::fprintf(stderr, "popd: usage: popd [-n] [+N | -N]\n");
+    return 2;
+  }
+  if (!opts_end && a.size() > 1) {
+    std::fprintf(stderr, "%spopd: %s: invalid argument\n", sh.err_prefix().c_str(),
                  a[1].c_str());
     std::fprintf(stderr, "popd: usage: popd [-n] [+N | -N]\n");
     return 2;
