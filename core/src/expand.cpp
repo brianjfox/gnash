@@ -2773,8 +2773,12 @@ static bool opens_bracket(const std::string &field, const std::string &mask, siz
   size_t j = i + 1;
   if (j < field.size() && mask[j] != '1' && (field[j] == '!' || field[j] == '^')) j++;
   if (j < field.size() && mask[j] != '1' && field[j] == ']') j++;  // literal first `]'
-  for (; j < field.size(); j++)
+  for (; j < field.size(); j++) {
+    // Posix 2.13.3: an unquoted slash renders the bracket expression invalid,
+    // so `[qwe/qwe]' is not a pattern at all (a quoted `/' is fine).
+    if (mask[j] != '1' && field[j] == '/') return false;
     if (mask[j] != '1' && field[j] == ']') return true;
+  }
   return false;
 }
 
@@ -2790,6 +2794,20 @@ std::vector<std::string> Expander::glob_field(const std::string &field, const st
   for (size_t i = 0; i < field.size(); i++) {
     char c = field[i];
     bool q = mask[i] == '1';
+    // A backslash in unquoted expansion data quotes the following character
+    // for the matcher, so neither it nor that character can make the word a
+    // pattern (bash unquoted_glob_pattern_p skips both): `var='a\?'; echo
+    // ${var}' is not a glob even with a file `a?' present.
+    if (!q && c == '\\') {
+      pattern += c;
+      if (i + 1 < field.size()) {
+        char n = field[++i];
+        if (mask[i] == '1' && (n == '*' || n == '?' || n == '[' || n == '\\' || n == ']'))
+          pattern += '\\';
+        pattern += n;
+      }
+      continue;
+    }
     if (!q && (c == '*' || c == '?' ||
                (c == '[' && opens_bracket(field, mask, i))))
       magic = true;
