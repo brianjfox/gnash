@@ -960,7 +960,10 @@ void Shell::make_array(const std::string &n_in, bool assoc) {
       v.assoc["0"] = v.value;
       v.value.clear();
     }
-    if (assoc && !fresh) v.assoc_buckets = 128;
+    // Only a SET (visible) scalar is a real conversion; a declared-but-unset
+    // placeholder (a fresh `local'/`declare' cell) makes a NEW table with the
+    // full 1024 buckets, exactly like bash's make_new_assoc_variable.
+    if (assoc && !fresh && !v.invisible) v.assoc_buckets = 128;
     v.kind = assoc ? VarKind::Assoc : VarKind::Indexed;
   }
 }
