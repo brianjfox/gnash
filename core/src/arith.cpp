@@ -708,8 +708,15 @@ static bool resolve_sub(const Node *n, Ctx &ctx, std::string &out, bool writing 
     // An associative key: the once-expanded text is the key, verbatim for the
     // arithmetic-source mode (`(( a[\" \"]=11 ))' keys on the literal `" "');
     // let's pre-expanded text drops its removable double-quote characters
-    // (`let 'a[" "]=11'` keys on the space).
-    if (ctx.expand_subs == 2) {
+    // (`let 'a[" "]=11'` keys on the space) -- EXCEPT under assoc_expand_once,
+    // whose literal-subscript rule keeps them (`let "a[\\" \\"]=11"' keys on
+    // `" "' with the quotes, array25.sub).
+    bool eo = false;
+    {
+      auto eoit = ctx.sh.shopt_opts.find("assoc_expand_once");
+      eo = eoit != ctx.sh.shopt_opts.end() && eoit->second;
+    }
+    if (ctx.expand_subs == 2 && !eo) {
       std::string k2;
       for (char c : out)
         if (c != '"') k2 += c;
