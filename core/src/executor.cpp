@@ -1285,10 +1285,11 @@ int Executor::run_simple(const SimpleCommand *c) {
     sh_.arith_error = false;
     return (sh_.last_status = 1);
   }
-  // An expansion that began the shell's exit (`set -u' unbound variable)
-  // suppresses the command itself: bash never runs the echo in
-  // `( echo ${#narray[4]} )'.
-  if (unwinding()) return sh_.last_status = sh_.exit_status;
+  // An expansion that began an unwind (`set -u' unbound variable, an
+  // aborting arithmetic error) suppresses the command itself: bash never
+  // runs the echo in `( echo ${#narray[4]} )'.
+  if (sh_.exiting) return sh_.last_status = sh_.exit_status;
+  if (unwinding()) return sh_.last_status;
 
   if (sh_.opt_xtrace) {
     // bash's xtrace prefix is $PS4 (default `+ '), decoded for prompt escapes
