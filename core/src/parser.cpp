@@ -1452,8 +1452,8 @@ static AliasExpansion alias_splice_text(const std::string &input,
   return ax;
 }
 
-ParseResult parse(const std::string &input) {
-  Parser p(tokenize(input));
+ParseResult parse(const std::string &input, bool posix_mode) {
+  Parser p(tokenize(input, posix_mode));
   return p.run();
 }
 
@@ -1464,7 +1464,7 @@ ParseResult parse_with_aliases(const std::string &input,
                                bool posix_mode) {
   AliasExpansion ax =
       alias_splice_text(input, aliases, global_aliases, suffix_aliases, posix_mode);
-  std::vector<Token> toks = tokenize(ax.text);
+  std::vector<Token> toks = tokenize(ax.text, posix_mode);
   if (ax.changed) {
     // Tokens report the line of the byte they start at: original bytes keep
     // their physical line, spliced bytes the invoking word's line.  The Eof

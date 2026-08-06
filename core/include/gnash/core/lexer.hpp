@@ -76,7 +76,7 @@ const char *tok_name(Tok t);
 // Tokenize INPUT.  Always ends with a single Tok::Eof token.  Unterminated
 // quotes/spans are tolerated (consumed to end of input); the parser decides
 // whether the result is a syntax error.
-std::vector<Token> tokenize(const std::string &input);
+std::vector<Token> tokenize(const std::string &input, bool posix_mode = false);
 
 }  // namespace gnash::core
 

@@ -101,6 +101,7 @@ struct Lexer {
     return skip_subscript(in, start);
   }
 
+  bool posix = false;  // posix-mode lexing (quote rules inside "${...}")
   explicit Lexer(const std::string &s) : in(s), n(s.size()) {}
 
   char cur() const { return in[pos]; }
@@ -225,7 +226,7 @@ struct Lexer {
     } while (pos < n && depth > 0);
     if (depth > 0) { unterminated = true; if (!unterm_close) unterm_close = ')'; }
   }
-  void scan_brace(std::string &w) {  // pos at '{'
+  void scan_brace(std::string &w, bool in_dq = false) {  // pos at '{'
     int depth = 0;
     // Inside ${...} only a nested `${` opens another level; a bare `{` is a
     // literal character.  This mirrors bash's parse_matched_pair called with
@@ -262,7 +263,11 @@ struct Lexer {
         scan_paren(w);
         wasdol = false;
       } else if (c == '\'') {
-        scan_single(w);
+        // POSIX mode: inside a DOUBLE-QUOTED ${...} a single quote is an
+        // ordinary character, not a quote (`"${IFS+'}'z}"` ends at the first
+        // `}`), matching bash's parse_matched_pair posix handling.
+        if (posix && in_dq) { w += c; pos++; }
+        else scan_single(w);
         wasdol = false;
       } else if (c == '"') {
         scan_double(w);
@@ -329,7 +334,7 @@ struct Lexer {
       } else if (c == '$' && pos + 1 < n && in[pos + 1] == '{') {
         w += '$';
         pos++;
-        scan_brace(w);
+        scan_brace(w, /*in_dq=*/true);
       } else {
         w += c;
         pos++;
@@ -657,8 +662,9 @@ struct Lexer {
 
 }  // namespace
 
-std::vector<Token> tokenize(const std::string &input) {
+std::vector<Token> tokenize(const std::string &input, bool posix_mode) {
   Lexer lx(input);
+  lx.posix = posix_mode;
   lx.run();
   return std::move(lx.out);
 }
