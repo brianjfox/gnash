@@ -66,3 +66,4 @@ and parser, redirection, and diagnostic behavior land major clusters.
   reached, prints even when the surrounding construct fails to parse,
   and `unexpected end of file from ... on line N` uses file
   coordinates.
+
