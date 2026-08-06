@@ -52,7 +52,11 @@ Shell::Shell() {
   set("PPID", std::to_string(static_cast<long>(getppid())));
   set("$", std::to_string(static_cast<long>(getpid())));
   // bash exposes the real/effective user id as readonly integer variables.
-  for (const auto &uv : {std::make_pair("UID", getuid()), std::make_pair("EUID", geteuid())}) {
+  const std::initializer_list<std::pair<const char *, unsigned int>> uid_vars = {
+    {"UID", static_cast<unsigned int>(getuid())},
+    {"EUID", static_cast<unsigned int>(geteuid())}
+  };
+  for (const auto &uv : uid_vars) {
     set(uv.first, std::to_string(static_cast<long>(uv.second)));
     Variable &v = vars[uv.first];
     v.integer = true;

@@ -7,6 +7,7 @@
 #include "gnash/core/subscript.hpp"
 
 #include <cctype>
+#include <cstring>
 #include <cstdlib>
 #include <cwchar>
 #include <set>

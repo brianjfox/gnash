@@ -389,7 +389,8 @@ struct Interp {
         bool first = true;
         for (size_t k = 0; k < o.size();) {
           if (o[k] == ' ' || o[k] == '\t' || o[k] == '\n') { k++; continue; }
-          if (!first) flush(); first = false;
+          if (!first) flush();
+          first = false;
           while (k < o.size() && o[k] != ' ' && o[k] != '\t' && o[k] != '\n') push_char(o[k++]);
         }
         continue;
