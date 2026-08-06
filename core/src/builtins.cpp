@@ -1547,7 +1547,8 @@ bool set_o_option(Shell &sh, const std::string &o, bool on) {
   else if (o == "ignoreeof") { if (on) sh.set("IGNOREEOF", "10"); else sh.unset("IGNOREEOF"); }
   // Valid bash `set -o' names whose behavior is unimplemented: accept as no-ops
   // (a script may set them; erroring would diverge from bash, which knows them).
-  else if (o == "allexport" || o == "braceexpand" ||
+  else if (o == "allexport") sh.opt_allexport = on;
+  else if (o == "braceexpand" ||
            o == "interactive-comments" || o == "nolog" ||
            o == "notify" || o == "onecmd")
     ;  // no-op
@@ -1563,7 +1564,7 @@ bool set_o_option(Shell &sh, const std::string &o, bool on) {
 std::vector<std::pair<std::string, bool>> set_option_states(Shell &sh) {
   bool i = sh.interactive;
   return {
-      {"allexport", false},   {"braceexpand", true},
+      {"allexport", sh.opt_allexport},   {"braceexpand", true},
       {"emacs", i ? (rl_editing_mode == 1) : sh.opt_emacs},
       {"errexit", sh.opt_errexit},
       {"errtrace", sh.opt_functrace}, {"functrace", sh.opt_functrace},
@@ -1659,7 +1660,8 @@ int bi_set(Shell &sh, const std::vector<std::string> &argv) {
           case 'h': sh.opt_hashall = on; break;  // -h/+h: hashall
           // Flags accepted as no-ops where the behavior is unimplemented:
           // allexport/notify/onecmd/braceexpand.
-          case 'a': case 'b': case 't': case 'B': break;
+          case 'a': sh.opt_allexport = on; break;  // allexport: assignments export
+          case 'b': case 't': case 'B': break;
           default:
             std::fprintf(stderr, "%sset: %c%c: invalid option\n", sh.err_prefix().c_str(),
                          a[0], a[k]);
@@ -2181,6 +2183,18 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
       } else {
         // `declare -p' with attribute flags (`-pa', `-pi', `-pr', ...) lists
         // only the variables carrying those attributes, not every variable.
+        // SHELLOPTS is a real readonly variable in bash's table; gnash keeps
+        // it dynamic, so a readonly listing splices it in at its sorted spot
+        // (`readonly -p | grep SHELLOPTS').
+        bool need_shellopts = readonly && !nameref && !integer && !exported && !mk_array &&
+                              !mk_assoc && !lcase && !ucase && !capcase && !sh.is_zsh();
+        auto emit_shellopts = [&]() {
+          if (!need_shellopts) return;
+          std::string sv;
+          if (sh.dynamic_var("SHELLOPTS", sv))
+            std::printf("declare -r SHELLOPTS=\"%s\"\n", sv.c_str());
+          need_shellopts = false;
+        };
         for (const auto &kv : sh.vars) {
           const std::string &nm = kv.first;
           if (nm.empty() || !(std::isalpha(static_cast<unsigned char>(nm[0])) || nm[0] == '_'))
@@ -2195,8 +2209,10 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
           if (lcase && !v.lcase) continue;
           if (ucase && !v.ucase) continue;
           if (capcase && !v.capcase) continue;
+          if (need_shellopts && nm > "SHELLOPTS") emit_shellopts();
           declare_print_var(kv.first, v, argv[0], sh.opt_posix);
         }
+        emit_shellopts();
       }
     } else {
       // `local -p NAME' reports only variables local to the CURRENT function
@@ -2300,6 +2316,18 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
   if (i >= argv.size() &&
       (nameref || readonly || integer || exported || mk_array || mk_assoc ||
        lcase || ucase || capcase)) {
+    // SHELLOPTS is a real readonly variable in bash's table; gnash keeps it
+    // dynamic, so a readonly listing must splice it in at its sorted spot
+    // (`readonly -p | grep SHELLOPTS' -- varenv.tests).
+    bool need_shellopts = readonly && !nameref && !integer && !exported && !mk_array &&
+                          !mk_assoc && !lcase && !ucase && !capcase && !sh.is_zsh();
+    auto emit_shellopts = [&]() {
+      if (!need_shellopts) return;
+      std::string sv;
+      if (sh.dynamic_var("SHELLOPTS", sv))
+        std::printf("declare -r SHELLOPTS=\"%s\"\n", sv.c_str());
+      need_shellopts = false;
+    };
     for (const auto &kv : sh.vars) {
       const std::string &nm = kv.first;
       if (nm.empty() || !(std::isalpha(static_cast<unsigned char>(nm[0])) || nm[0] == '_'))
@@ -2314,7 +2342,29 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
       if (lcase && !v.lcase) continue;
       if (ucase && !v.ucase) continue;
       if (capcase && !v.capcase) continue;
+      if (need_shellopts && nm > "SHELLOPTS") emit_shellopts();
       declare_print_var(kv.first, v, argv[0], sh.opt_posix);
+    }
+    emit_shellopts();
+    return 0;
+  }
+
+  // Bare `local' inside a function lists the current scope's local variables
+  // in declare form (`declare -a avar=(...)', `declare -- z="yy"'), sorted.
+  if (local && !global && i >= argv.size()) {
+    if (!sh.local_stack.empty()) {
+      std::vector<std::string> names;
+      for (const auto &e : sh.local_stack.back()) {
+        const std::string &nm = e.first;
+        if (nm.empty() || !(std::isalpha(static_cast<unsigned char>(nm[0])) || nm[0] == '_'))
+          continue;  // skip the `-' set -o snapshot and other markers
+        if (std::find(names.begin(), names.end(), nm) == names.end()) names.push_back(nm);
+      }
+      std::sort(names.begin(), names.end());
+      for (const auto &nm : names) {
+        auto vit = sh.vars.find(nm);
+        if (vit != sh.vars.end()) declare_print_var(nm, vit->second, "declare", sh.opt_posix);
+      }
     }
     return 0;
   }
@@ -2519,7 +2569,12 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
             std::fprintf(stderr, "%s%s: cannot convert %s array\n", pfx.c_str(),
                          name.c_str(), cvt_dir);
           } else {
-            if (global)
+            // The function-name line also appears when a localvar_inherit'd
+            // (or -I'd) local copied the mismatched enclosing array AND the
+            // word carries an assignment: `declare -A var+=(...)' reports the
+            // failed make-local conversion first, a bare `declare -A var'
+            // only the builtin's own line (varenv14.sub lines 31 vs 77).
+            if (global || (inherited_local && eq != std::string::npos))
               std::fprintf(stderr, "%s%s: %s: cannot convert %s array\n", pfx.c_str(),
                            funcname.c_str(), name.c_str(), cvt_dir);
             std::fprintf(stderr, "%s%s: %s: cannot convert %s array\n", pfx.c_str(),
@@ -4110,7 +4165,7 @@ int bi_hash(Shell &sh, const std::vector<std::string> &argv) {
     bool consumed = false;
     for (size_t k = 1; k < a.size(); k++) {
       char o = a[k];
-      if (o == 'r') { sh.hashed.clear(); expunge = true; }
+      if (o == 'r') { sh.hashed.clear(); sh.hashed_seq.clear(); expunge = true; }
       else if (o == 'l') list_l = true;
       else if (o == 'd') del_d = true;
       else if (o == 't') print_t = true;
@@ -4153,7 +4208,7 @@ int bi_hash(Shell &sh, const std::vector<std::string> &argv) {
                    ppath.c_str());
       return 1;
     }
-    sh.hashed[argv[i]] = ppath;
+    sh.hash_remember(argv[i], ppath);
     return 0;
   }
   if (i >= argv.size()) {
@@ -4162,12 +4217,13 @@ int bi_hash(Shell &sh, const std::vector<std::string> &argv) {
       if (!list_l) std::printf("hash: hash table empty\n");
       return 0;
     }
+    // Both listings walk the hash table in bash's bucket order, not sorted.
     if (list_l)
-      for (const auto &kv : sh.hashed)
-        std::printf("builtin hash -p %s %s\n", kv.second.c_str(), kv.first.c_str());
+      for (const auto &k : sh.hashed_order())
+        std::printf("builtin hash -p %s %s\n", sh.hashed.at(k).c_str(), k.c_str());
     else {
       std::printf("hits\tcommand\n");
-      for (const auto &kv : sh.hashed) std::printf("%4d\t%s\n", 0, kv.second.c_str());
+      for (const auto &k : sh.hashed_order()) std::printf("%4d\t%s\n", 0, sh.hashed.at(k).c_str());
     }
     return 0;
   }
@@ -4193,7 +4249,7 @@ int bi_hash(Shell &sh, const std::vector<std::string> &argv) {
     }
     std::string p = find_in_path(sh, n);
     if (p.empty()) { std::fflush(stdout); std::fprintf(stderr, "%shash: %s: not found\n", sh.err_prefix().c_str(), n.c_str()); st = 1; }
-    else sh.hashed[n] = p;
+    else sh.hash_remember(n, p);
   }
   return st;
 }
@@ -4621,7 +4677,8 @@ int bi_alias(Shell &sh, const std::vector<std::string> &argv) {
         st = 1;
         continue;
       }
-      table[name] = a.substr(eq + 1);
+      if (kind == 0) sh.alias_remember(name, a.substr(eq + 1));
+      else table[name] = a.substr(eq + 1);
     }
   }
   return st;
