@@ -1570,11 +1570,14 @@ int Executor::run_simple(const SimpleCommand *c) {
             argv[k].find('r') != std::string::npos) { persist = true; break; }
     }
     bool special_persist = false;
-    if (!persist && sh_.opt_posix) {
+    if (sh_.opt_posix) {
       static const std::set<std::string> kSpecial = {
           ":",      ".",     "break", "continue", "eval",  "exec",
           "exit",   "export", "readonly", "return", "set", "shift",
           "source", "times", "trap",  "unset"};
+      // In posix mode export/readonly write through an enclosing tempenv TOO
+      // (they are special builtins); in default mode their promotion stays
+      // within the current command's scope.
       if (kSpecial.count(argv[0])) persist = special_persist = true;
     }
     if (persist) {
