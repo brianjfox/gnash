@@ -2268,20 +2268,37 @@ std::string Shell::run_and_capture_inproc(const std::string &script, int *status
   }
   int saved_base = lineno_base;  // run at the enclosing command's line
   lineno_base = cur_lineno - 1;
+  // A valsub's $REPLY is private: bash saves and restores it around the body,
+  // so `${| REPLY=x; }' leaves the caller's REPLY untouched (comsub26.sub).
+  bool had_reply = false;
+  Variable saved_reply;
+  if (valsub) {
+    auto rit = vars.find("REPLY");
+    if (rit != vars.end()) { had_reply = true; saved_reply = rit->second; }
+  }
   // A funsub runs in a fresh local scope (so a `local' inside it does not leak)
   // and is a return boundary like a function body: `return' ends the funsub
   // (its status becomes the funsub's) rather than unwinding the caller.
   bool saved_returning = returning;
   returning = false;
+  // Like a command substitution, a funsub does not inherit errexit unless
+  // `shopt -s inherit_errexit' or POSIX mode says otherwise: `${ false;
+  // echo after; }' still runs the echo under `set -e' (comsub22.sub).
+  bool saved_errexit = opt_errexit;
+  if (opt_errexit && !opt_posix && !shopt_opts["inherit_errexit"]) opt_errexit = false;
   push_scope();
   int st = run_string(script);
   pop_scope();
+  opt_errexit = saved_errexit;
   if (returning) { st = exit_status; returning = false; }
   returning = saved_returning;
   lineno_base = saved_base;
   if (valsub) {
     if (status) *status = st;
-    return get("REPLY");
+    std::string reply = get("REPLY");
+    if (had_reply) vars["REPLY"] = saved_reply;
+    else vars.erase("REPLY");
+    return reply;
   }
   std::fflush(stdout);
   dup2(saved, STDOUT_FILENO);
