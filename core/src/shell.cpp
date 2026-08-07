@@ -1411,7 +1411,11 @@ bool Shell::set(const std::string &n_in, const std::string &v,
     if (!in_function()) {
       std::fprintf(stderr, "%swarning: %s: circular name reference\n",
                    err_prefix().c_str(), n_in.c_str());
-      return true;
+      // A cycle has nothing to assign to, so this is an assignment ERROR:
+      // `x=4; echo A' warns and abandons the rest of the list.  Inside a
+      // function the reference binds at global scope instead and execution
+      // carries on, which is why only the global-scope branch fails.
+      return false;
     }
     std::fprintf(stderr, "%swarning: %s: maximum nameref depth (8) exceeded\n",
                  err_prefix().c_str(), n_in.c_str());
