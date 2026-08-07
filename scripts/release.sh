@@ -31,7 +31,7 @@ MAIN_REPO="brianjfox/gnash"                 # main source repo (releases + tags)
 TAP_REPO="brianjfox/homebrew-tools"         # tap repo (formula + bottles)
 TAP_SLUG="brianjfox/tools"                  # `brew tap' name of TAP_REPO
 FORMULA="gnash"                             # formula / binary name
-BOTTLE_TAG="arm64_tahoe"                    # host bottle platform label
+BOTTLE_TAG="${BOTTLE_TAG:-}"                # host bottle platform label (detected below)
 TARBALL_EXTRA=(LICENSE.md README.md GPLv2-AI-Exception.md)  # shipped alongside the binary
 
 # ---- argument parsing ------------------------------------------------------
@@ -193,6 +193,15 @@ else
 fi
 
 # ---- 6. tap release + Homebrew bottle --------------------------------------
+# The bottle platform label (arm64_tahoe, arm64_golden_gate, ...) changes with
+# every macOS release, so ask Homebrew rather than hard-coding it: a stale value
+# only surfaces after the build, as "brew bottle produced no tarball".  $BOTTLE_TAG
+# from the environment still wins, for cross-checking or a fixed CI label.
+if [ -z "$BOTTLE_TAG" ] && [ "$SKIP_BOTTLE" != 1 ]; then
+  BOTTLE_TAG=$(brew ruby -e 'puts "#{Hardware::CPU.arch}_#{MacOS.version.to_sym}"' \
+                 2>/dev/null | tail -1)
+  [ -n "$BOTTLE_TAG" ] || die "cannot determine the bottle platform; set BOTTLE_TAG"
+fi
 BOTTLE_ASSET="$FORMULA-$VERSION.$BOTTLE_TAG.bottle.tar.gz"
 if [ "$SKIP_BOTTLE" = 1 ]; then
   step "Bottle (skipped: --skip-bottle)"
@@ -220,7 +229,15 @@ else
     ( cd "$WORK" && brew bottle --json --no-rebuild \
         --root-url="$ROOT_URL" "$TAP_SLUG/$FORMULA" )
     built=$(ls "$WORK"/$FORMULA--$VERSION.$BOTTLE_TAG.bottle.tar.gz 2>/dev/null | head -1)
-    [ -n "$built" ] || die "brew bottle produced no tarball in $WORK"
+    if [ -z "$built" ]; then
+      # The file Homebrew actually wrote is authoritative: adopt its platform
+      # label rather than failing, so a detection that disagrees still works.
+      built=$(ls "$WORK"/$FORMULA--$VERSION.*.bottle.tar.gz 2>/dev/null | head -1)
+      [ -n "$built" ] || die "brew bottle produced no tarball in $WORK"
+      BOTTLE_TAG=$(basename "$built" | sed "s/^$FORMULA--$VERSION\\.//;s/\\.bottle\\.tar\\.gz$//")
+      BOTTLE_ASSET="$FORMULA-$VERSION.$BOTTLE_TAG.bottle.tar.gz"
+      info "bottle platform is $BOTTLE_TAG"
+    fi
     # Homebrew names the local file with `--'; the hosted asset uses a single `-'.
     cp "$built" "$WORK/$BOTTLE_ASSET"
     BOTTLE_SHA=$(shasum -a 256 "$WORK/$BOTTLE_ASSET" | cut -d' ' -f1)
