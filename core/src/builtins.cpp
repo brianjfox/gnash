@@ -583,6 +583,15 @@ struct TestEval {
       // array treats them as ordinary literal keys (bash).
       auto vit = sh.vars.find(sh.deref(nm));
       bool assoc = vit != sh.vars.end() && vit->second.kind == VarKind::Assoc;
+      // Without assoc_expand_once, `test -v' expands an associative subscript
+      // a SECOND time (the word expansion was the first): with a key holding
+      // `$(echo foo)' literally, `test -v aa["$k"]' looks for `foo' and fails
+      // (quotearray1.sub).  ASSIGNMENT, by contrast, keeps the literal key.
+      if (assoc && !expand_once_on(sh) && sub != "@" && sub != "*" &&
+          sub.find_first_of("$`") != std::string::npos) {
+        Expander tex(sh);
+        sub = tex.expand_no_split(sub, false, /*do_procsub=*/false);
+      }
       if (!assoc && (sub == "@" || sub == "*")) return sh.array_count(nm) > 0;
       for (const std::string &k : sh.array_keys(nm)) if (k == sub) return true;
       return false;
@@ -625,18 +634,7 @@ struct TestEval {
       if (o == 'n') { std::string s = a[i + 1]; i += 2; return !s.empty(); }
       if (o == 'v') { std::string arg = a[i + 1]; i += 2; return var_is_set(arg); }
     }
-    // A malformed element reference reaching the BINARY stage is bash's
-    // `binary operator expected': `test -v aa[$(echo foo)]' word-splits into
-    // `-v', `aa[$(echo', `foo)]' -- three arguments, no valid operator
-    // (quotearray1.sub).
-    if (i + 2 <= end && i + 1 < end && a[i].find('[') != std::string::npos &&
-        a[i].find(']') == std::string::npos) {
-      std::fprintf(stderr, "%stest: %s: binary operator expected\n",
-                   sh.err_prefix().c_str(), a[i].c_str());
-      ok = false;
-      i = end;
-      return false;
-    }
+
     // binary: a OP b
     if (i + 2 < end + 1 && i + 2 <= end) {
       std::string lhs = a[i];
@@ -666,6 +664,23 @@ int bi_test(Shell &sh, const std::vector<std::string> &argv, bool bracket) {
     a.pop_back();
   }
   if (a.empty()) return 1;
+  // bash dispatches `test' by ARGUMENT COUNT (test.c three_arguments): with
+  // exactly three, the middle one must be a binary operator unless the form
+  // is `! ARG1 ARG2' or `( ARG )'.  Otherwise it is `ARG1: binary operator
+  // expected' with status 2 -- which is what a word-split element reference
+  // produces (`test -v aa[$(echo foo)]' -> -v, aa[$(echo, foo)] --
+  // quotearray1.sub).
+  if (a.size() == 3 && a[0] != "!" && !(a[0] == "(" && a[2] == ")")) {
+    static const std::set<std::string> kBin = {
+        "=", "==", "!=", "<", ">", "-eq", "-ne", "-lt",
+        "-le", "-gt", "-ge", "-ef", "-nt", "-ot",
+        "-a", "-o"};  // the connectives also join two one-argument tests
+    if (!kBin.count(a[1])) {
+      std::fprintf(stderr, "%s%s: %s: binary operator expected\n", sh.err_prefix().c_str(),
+                   bracket ? "[" : "test", a[1].c_str());
+      return 2;
+    }
+  }
   TestEval te{sh, a, 0, a.size(), true};
   bool v = te.expr();
   if (!te.ok) return 2;  // a usage/syntax error: bash's status 2
@@ -6694,7 +6709,11 @@ struct CondEval {
           std::string nm = arg.substr(0, br);
           std::string sub = arg.substr(br + 1, arg.size() - br - 2);
           if (!sh.array_expand_once_ok(nm, sub)) return false;  // diagnostic printed
-          if (sub == "@" || sub == "*") return sh.array_count(nm) > 0;
+          // For an INDEXED array `@'/`*' means "any element set"; for an
+          // ASSOCIATIVE one they are ordinary literal keys (quotearray4.sub).
+          auto cvit = sh.vars.find(sh.deref(nm));
+          bool cassoc = cvit != sh.vars.end() && cvit->second.kind == VarKind::Assoc;
+          if (!cassoc && (sub == "@" || sub == "*")) return sh.array_count(nm) > 0;
           for (const std::string &k : sh.array_keys(nm)) if (k == sub) return true;
           return false;
         }
