@@ -866,6 +866,24 @@ struct Parser {
   // naming what went wrong, then `syntax error near `TOKEN'', then the source
   // line.  The first is emitted verbatim -- the printer leaves the conditional
   // diagnostics unadorned rather than prefixing them with `syntax error:'.
+  int cond_open_line = 0;  // line of the `[[' currently being parsed
+  // True when nothing but blank lines remains: bash calls that EOF, and names
+  // the token `EOF' rather than the NEWLINE that happens to be sitting there.
+  bool at_input_end() const {
+    for (std::size_t k = i; k < toks.size(); k++) {
+      if (toks[k].type == Tok::Eof) return true;
+      if (toks[k].type != Tok::Newline) return false;
+    }
+    return true;
+  }
+  // At end of input bash pairs the conditional diagnostic with the
+  // grammar-level report, on the following line -- and no `near'/source echo.
+  void cond_eof_fail(const std::string &diag) {
+    incomplete = true;
+    fail(diag + "\nunexpected end of file from `[[' command on line " +
+         std::to_string(cond_open_line));
+  }
+
   void cond_fail(const std::string &diag) {
     fail(diag + "\nnear `" + tok_to_text(cur()) + "'");
   }
@@ -883,10 +901,8 @@ struct Parser {
       if (is(Tok::Rparen)) {
         e += " )";
         advance();
-      } else if (is(Tok::Eof)) {
-        // At end of input the grammar reports the unterminated `[[' as well,
-        // so this line stands alone.
-        fail("unexpected token `EOF', expected `)'");
+      } else if (at_input_end()) {
+        cond_eof_fail("unexpected token `EOF', expected `)'");
       } else {
         cond_fail("unexpected token `" + cond_tok() + "', expected `)'");
       }
@@ -1012,12 +1028,13 @@ struct Parser {
 
   CommandPtr parse_cond() {
     int cond_line = cur().line;  // $LINENO / error line of the `[[' command
+    cond_open_line = cond_line;
     advance();  // [[
     auto n = std::make_unique<CondCommand>();
     std::string expr;
     cond_or(expr);
     if (!err && !at_cond_end()) {
-      if (is(Tok::Eof)) fail("unexpected EOF while looking for `]]'");
+      if (at_input_end()) cond_eof_fail("unexpected EOF while looking for `]]'");
       else cond_fail("syntax error in conditional expression: unexpected token `" +
                      cond_tok() + "'");
     }

@@ -2389,7 +2389,16 @@ int Shell::run_string(const std::string &script) {
                starts("unexpected argument `") ||
                starts("syntax error in conditional expression");
       };
-      if (bare()) {
+      // A grammar-level end-of-file report that FOLLOWS another line carries
+      // its own line number: EOF lands after the last content, while the
+      // diagnostic above it named the line the trouble was on.
+      if (p0 > 0 && starts("unexpected end of file from `")) {
+        std::string pfx2 = pfx;
+        size_t lp = pfx2.rfind("line ");
+        if (lp != std::string::npos)
+          pfx2 = pfx2.substr(0, lp + 5) + std::to_string(r.error_line + 1) + ": ";
+        std::fprintf(stderr, "%ssyntax error: %s\n", pfx2.c_str(), line.c_str());
+      } else if (bare()) {
         std::fprintf(stderr, "%s%s\n", pfx.c_str(), line.c_str());  // no `syntax error'
       } else {
         const char *sep = line.compare(0, 5, "near ") == 0 ? " " : ": ";
