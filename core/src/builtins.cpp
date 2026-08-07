@@ -7248,8 +7248,9 @@ struct CondEval {
     // binary operator
     if (t[i].type == Tok::Word || t[i].type == Tok::Less || t[i].type == Tok::Great) {
       std::string op = (t[i].type == Tok::Word) ? t[i].text : std::string(tok_name(t[i].type));
-      static const char *bops[] = {"==", "=", "!=", "=~", "-eq", "-ne", "-lt",
-                                   "-le", "-gt", "-ge", "<", ">", nullptr};
+      static const char *bops[] = {"==", "=",   "!=",  "=~",  "-eq", "-ne", "-lt",
+                                   "-le", "-gt", "-ge", "-nt", "-ot", "-ef",
+                                   "<",   ">",   nullptr};
       bool isb = false;
       for (int k = 0; bops[k]; k++) if (op == bops[k]) isb = true;
       if (isb) {
@@ -7292,6 +7293,14 @@ struct CondEval {
           }
           return matched;
         }
+        // The file comparisons, shared with `test': an unstattable file is
+        // older than one that exists, and `-ef' needs both to exist.  These
+        // were accepted by the parser but never evaluated here, so every
+        // `[[ a -ef b ]]' fell through to the one-argument "non-empty is true"
+        // rule and answered true.
+        if (op == "-nt") return file_comp(lhs, expand(rhs_raw), 'n');
+        if (op == "-ot") return file_comp(lhs, expand(rhs_raw), 'o');
+        if (op == "-ef") return file_comp(lhs, expand(rhs_raw), 'f');
         if (op == "<") return lhs < expand(rhs_raw);
         if (op == ">") return lhs > expand(rhs_raw);
         // The [[ ]] arithmetic comparators evaluate each side as an arithmetic
