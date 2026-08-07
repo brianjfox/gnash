@@ -411,6 +411,14 @@ class Shell {
   // --- status & options --------------------------------------------------
   int last_status = 0;
   int last_bg_pid = 0;  // $!
+  // The live coproc's variable name and pid.  When the coproc is reaped bash
+  // unsets NAME and NAME_PID (coproc_reap), so the fds it named stop being
+  // advertised once the process behind them is gone.
+  std::string coproc_name;
+  long coproc_pid = 0;
+  // Unset the coproc variables if its process has been reaped; a no-op while
+  // it is still running, or when there is no coproc.
+  void reap_coproc();
   // Exit status of the most recent command substitution, so a pure-assignment
   // command (a=$(cmd)) can take its status, as bash does.
   int last_cmdsub_status = 0;
