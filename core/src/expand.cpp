@@ -2283,6 +2283,16 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
     have_sub = true;
   }
 
+  // Text left after a `name[sub]' reference must be an operator: bash rejects
+  // `${a[0]junk}' and `${a[0] + b[y]}' as `bad substitution' rather than
+  // silently reading the element and dropping the rest (issue #459).
+  if (have_sub && p < b.size() && !sh.is_zsh() &&
+      !std::strchr(":-+=?#%/^,@", b[p])) {
+    std::fprintf(stderr, "%s${%s}: bad substitution\n", sh.err_prefix().c_str(), b.c_str());
+    sh.arith_error = true;
+    return std::string();
+  }
+
   // zsh: `${#a}' on an array is the element count (bash gives the length of
   // element 0); `${#a[i]}' keeps its meaning (length of that element).
   if (length && !have_sub && sh.is_zsh() && sh.is_array(name))
