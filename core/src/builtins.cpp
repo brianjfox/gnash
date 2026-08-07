@@ -43,6 +43,10 @@ std::vector<std::pair<std::optional<std::string>, std::string>>
 parse_array_elems(Shell &sh, Expander &ex, const std::string &name, bool integer,
                   bool whole_append, const std::string &parenval);
 
+// The `set -o' option table (defined below, outside the anonymous namespace);
+// `test -o OPTION' reads it.
+std::vector<std::pair<std::string, bool>> set_option_states(Shell &sh);
+
 namespace {
 
 std::string join(const std::vector<std::string> &v, size_t from) {
@@ -531,25 +535,110 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
 
 // ---- test / [ ------------------------------------------------------------
 
-bool file_test(char op, const std::string &path) {
+#ifdef __APPLE__
+#define GN_TST_MTIM st_mtimespec
+#define GN_TST_ATIM st_atimespec
+#else
+#define GN_TST_MTIM st_mtim
+#define GN_TST_ATIM st_atim
+#endif
+
+// bash's valid_number(): a base-10 integer, optionally followed by whitespace,
+// and nothing else.  `test' does NOT evaluate arithmetic, so `4+3' and `A' are
+// both `integer expected' errors rather than operands.
+bool test_number(const std::string &s, long long *out) {
+  errno = 0;
+  char *ep = nullptr;
+  long long v = std::strtoll(s.c_str(), &ep, 10);
+  if (errno != 0 || ep == s.c_str()) return false;  // errno is set on overflow
+  while (*ep != '\0' && std::isspace(static_cast<unsigned char>(*ep))) ep++;
+  if (*ep != '\0') return false;
+  if (out) *out = v;
+  return true;
+}
+
+// bash's test_unop(): the complete set of unary primaries.  An operator that
+// is NOT in this set is a syntax error, never a one-argument string test.
+bool test_unop(const std::string &op) {
+  return op.size() == 2 && op[0] == '-' && op[1] != '\0' &&
+         std::strchr("abcdefghknoprstuvwxzGLOSNR", op[1]) != nullptr;
+}
+
+// bash's test_binop().  `=~' is deliberately absent: bash builds test.c with
+// PATTERN_MATCHING off, so `test a =~ b' is `=~: binary operator expected'.
+// (The `[[ ]]' regex operator is a separate, unrelated code path.)
+bool test_binop(const std::string &op) {
+  if (op == "=" || op == "<" || op == ">" || op == "==" || op == "!=")
+    return true;
+  if (op.size() != 3 || op[0] != '-') return false;
+  static const std::set<std::string> kBin = {"-nt", "-ot", "-lt", "-gt", "-ef",
+                                             "-eq", "-ne", "-ge", "-le"};
+  return kBin.count(op) != 0;
+}
+
+// The file (and `-o') unary primaries, shared by `test' and `[[ ]]'.  The
+// operators that need the argument vector -- `-t', `-v', `-R', `-z', `-n' --
+// are handled by their callers.
+bool file_unop(Shell &sh, char op, const std::string &path) {
   struct stat st;
+  auto stat_ok = [&] { return stat(path.c_str(), &st) == 0; };
   switch (op) {
-    case 'e': return stat(path.c_str(), &st) == 0;
-    case 'f': return stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode);
-    case 'd': return stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
+    case 'a': case 'e': return stat_ok();
     case 'r': return access(path.c_str(), R_OK) == 0;
     case 'w': return access(path.c_str(), W_OK) == 0;
     case 'x': return access(path.c_str(), X_OK) == 0;
-    case 's': return stat(path.c_str(), &st) == 0 && st.st_size > 0;
-    case 'L': case 'h': return lstat(path.c_str(), &st) == 0 && S_ISLNK(st.st_mode);
-    case 'p': return stat(path.c_str(), &st) == 0 && S_ISFIFO(st.st_mode);
-    case 'b': return stat(path.c_str(), &st) == 0 && S_ISBLK(st.st_mode);
-    case 'c': return stat(path.c_str(), &st) == 0 && S_ISCHR(st.st_mode);
+    // A regular file -- or one whose type the filesystem does not report.
+    case 'f': return stat_ok() && (S_ISREG(st.st_mode) || (st.st_mode & S_IFMT) == 0);
+    case 'd': return stat_ok() && S_ISDIR(st.st_mode);
+    case 's': return stat_ok() && st.st_size > 0;
+    case 'S': return stat_ok() && S_ISSOCK(st.st_mode);
+    case 'p': return stat_ok() && S_ISFIFO(st.st_mode);
+    case 'b': return stat_ok() && S_ISBLK(st.st_mode);
+    case 'c': return stat_ok() && S_ISCHR(st.st_mode);
+    case 'u': return stat_ok() && (st.st_mode & S_ISUID) != 0;
+    case 'g': return stat_ok() && (st.st_mode & S_ISGID) != 0;
+    case 'k': return stat_ok() && (st.st_mode & S_ISVTX) != 0;
+    case 'O': return stat_ok() && st.st_uid == geteuid();
+    case 'G': return stat_ok() && st.st_gid == getegid();
+    case 'N': {  // modified since it was last read
+      if (!stat_ok()) return false;
+      struct timespec m = st.GN_TST_MTIM, a = st.GN_TST_ATIM;
+      return m.tv_sec != a.tv_sec ? m.tv_sec > a.tv_sec : m.tv_nsec > a.tv_nsec;
+    }
+    // The empty string is never a symbolic link (bash tests for it before
+    // calling lstat, which would otherwise report ENOENT either way).
+    case 'L': case 'h':
+      return !path.empty() && lstat(path.c_str(), &st) == 0 && S_ISLNK(st.st_mode);
+    case 'o': {  // -o OPTION: is that `set -o' option on?
+      for (const auto &o : set_option_states(sh))
+        if (o.first == path) return o.second;
+      return false;  // an unknown option name is simply false, not an error
+    }
     default: return false;
   }
 }
 
-bool int_cmp(const std::string &op, long a, long b) {
+// bash's filecomp().  A file that cannot be stat'd is older than one that can,
+// so `test noexist -ot existing' is TRUE; `-ef' needs both to exist.
+bool file_comp(const std::string &s, const std::string &t, char op) {
+  struct stat sa{}, sb{};
+  int ra = stat(s.c_str(), &sa), rb = stat(t.c_str(), &sb);
+  if (op == 'f') {  // -ef: the same file, by device and inode
+    if (ra != 0 || rb != 0) return false;
+    return sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino;
+  }
+  struct timespec ta = ra == 0 ? sa.GN_TST_MTIM : timespec{};
+  struct timespec tb = rb == 0 ? sb.GN_TST_MTIM : timespec{};
+  auto cmp = [](const struct timespec &x, const struct timespec &y) {
+    if (x.tv_sec != y.tv_sec) return x.tv_sec < y.tv_sec ? -1 : 1;
+    if (x.tv_nsec != y.tv_nsec) return x.tv_nsec < y.tv_nsec ? -1 : 1;
+    return 0;
+  };
+  if (op == 'n') return ra > rb || (ra == 0 && cmp(ta, tb) > 0);  // -nt
+  return ra < rb || (rb == 0 && cmp(ta, tb) < 0);                 // -ot
+}
+
+bool int_cmp(const std::string &op, long long a, long long b) {
   if (op == "-eq") return a == b;
   if (op == "-ne") return a != b;
   if (op == "-lt") return a < b;
@@ -559,26 +648,59 @@ bool int_cmp(const std::string &op, long a, long b) {
   return false;
 }
 
-// Evaluate a `test' argument vector [a..b) (exclusive of trailing ] already
-// removed).  Handles !, -a/-o, unary, binary; a small recursive evaluator.
+// Thrown when a primary is malformed: bash longjmps out of the evaluation and
+// exits with status 2, so no value is produced.
+struct TestSyntaxError {};
+
+// A port of bash's test.c.  The shape matters as much as the operators: `test'
+// dispatches on the ARGUMENT COUNT (posixtest) rather than parsing greedily,
+// and every construct that is not recognized is a diagnostic with status 2 --
+// never a fallback to "this non-empty string is true".
 struct TestEval {
   Shell &sh;
-  const std::vector<std::string> &a;
-  size_t i;
-  size_t end;
-  bool ok = true;
+  const std::vector<std::string> &v;  // the full argv; v[0] is `test' or `['
+  size_t argc;                        // bash's argc: excludes `['s trailing `]'
+  size_t pos = 1;
+  const char *cmd;
 
-  bool at_end() { return i >= end; }
-  const std::string &cur() { return a[i]; }
+  const std::string &arg(size_t p) const { return v[p]; }
+  // argv[p] as bash sees it -- a null pointer once past the end of the vector.
+  // For `[' the `]' is still there beyond argc, which is why an unterminated
+  // `(' reports ``)' expected, found ]' rather than a bare ``)' expected'.
+  const char *at(size_t p) const { return p < v.size() ? v[p].c_str() : nullptr; }
+
+  [[noreturn]] void syntax_error(const std::string &msg) {
+    std::fprintf(stderr, "%s%s: %s\n", sh.err_prefix().c_str(), cmd, msg.c_str());
+    throw TestSyntaxError{};
+  }
+  [[noreturn]] void integer_expected(const std::string &s) {
+    syntax_error(s + ": integer expected");
+  }
+
+  static bool istoken(const std::string &s, char c) { return s.size() == 1 && s[0] == c; }
+  static bool isprimary(const std::string &s, char c) {
+    return s.size() == 2 && s[0] == '-' && s[1] == c;
+  }
+  static bool andor(const std::string &s) {
+    return s.size() == 2 && s[0] == '-' && (s[1] == 'a' || s[1] == 'o');
+  }
+  // ONE_ARG_TEST: a lone argument is true when it is not the empty string.
+  static bool one_arg(const std::string &s) { return !s.empty(); }
+
+  void advance(bool check) {
+    pos++;
+    if (check && pos >= argc) syntax_error("argument expected");
+  }
+  void unary_advance() { advance(true); pos++; }
 
   // `test -v NAME' / `-v NAME[sub]': true if the variable (or array element) is
   // set.  Under `shopt -s array_expand_once' an un-evaluatable subscript errors.
-  bool var_is_set(const std::string &arg) {
-    size_t br = arg.find('[');
-    if (br != std::string::npos && !arg.empty() && arg.back() == ']') {
-      std::string nm = arg.substr(0, br);
-      std::string sub = arg.substr(br + 1, arg.size() - br - 2);
-      if (!sh.array_expand_once_ok(nm, sub)) { ok = false; return false; }
+  bool var_is_set(const std::string &a) {
+    size_t br = a.find('[');
+    if (br != std::string::npos && !a.empty() && a.back() == ']') {
+      std::string nm = a.substr(0, br);
+      std::string sub = a.substr(br + 1, a.size() - br - 2);
+      if (!sh.array_expand_once_ok(nm, sub)) throw TestSyntaxError{};  // already reported
       // For an INDEXED array `@'/`*' means "any element set"; an ASSOCIATIVE
       // array treats them as ordinary literal keys (bash).
       auto vit = sh.vars.find(sh.deref(nm));
@@ -598,93 +720,248 @@ struct TestEval {
     }
     // A bare array name implicitly references element 0 (bash), which can be
     // unset even when the array has other elements set.
-    if (sh.is_array(arg)) {
-      for (const std::string &k : sh.array_keys(arg)) if (k == "0") return true;
+    if (sh.is_array(a)) {
+      for (const std::string &k : sh.array_keys(a)) if (k == "0") return true;
       return false;
     }
-    return sh.is_set(arg);
+    if (sh.is_set(a)) return true;
+    std::string dv;
+    if (sh.dynamic_var(a, dv)) return true;
+    // `-v N' asks whether the positional parameter $N is set.
+    long long n;
+    if (test_number(a, &n))
+      return n >= 0 && n <= static_cast<long long>(sh.positional.size());
+    return false;
   }
 
-  bool expr() { return or_expr(); }
+  bool unary_test(const std::string &op, const std::string &a) {
+    switch (op[1]) {
+      case 'n': return !a.empty();
+      case 'z': return a.empty();
+      case 'v': return var_is_set(a);
+      case 'R': {  // set, and a nameref
+        auto it = sh.vars.find(a);
+        return it != sh.vars.end() && it->second.nameref;
+      }
+      case 't': {
+        long long r;
+        if (!test_number(a, &r)) integer_expected(a);
+        return r == static_cast<int>(r) && isatty(static_cast<int>(r)) != 0;
+      }
+      default: return file_unop(sh, op[1], a);
+    }
+  }
+
+  bool arith_comp(const std::string &s, const std::string &t, const std::string &op) {
+    long long l, r;
+    if (!test_number(s, &l)) integer_expected(s);
+    if (!test_number(t, &r)) integer_expected(t);
+    return int_cmp(op, l, r);
+  }
+
+  bool binary_test(const std::string &op, const std::string &l, const std::string &r) {
+    if (op == "=" || op == "==") return l == r;
+    if (op == "!=") return l != r;
+    // POSIX interp 375: `<' and `>' collate in posix mode, else compare bytes.
+    if (op == "<")
+      return sh.opt_posix ? strcoll(l.c_str(), r.c_str()) < 0 : l.compare(r) < 0;
+    if (op == ">")
+      return sh.opt_posix ? strcoll(l.c_str(), r.c_str()) > 0 : l.compare(r) > 0;
+    if (op.size() != 3) return false;
+    if (op[2] == 't') switch (op[1]) {
+      case 'n': return file_comp(l, r, 'n');  // -nt
+      case 'o': return file_comp(l, r, 'o');  // -ot
+      case 'l': case 'g': return arith_comp(l, r, op);
+    }
+    else if (op[1] == 'e') switch (op[2]) {
+      case 'f': return file_comp(l, r, 'f');  // -ef
+      case 'q': return arith_comp(l, r, op);
+    }
+    else if (op[2] == 'e') switch (op[1]) {
+      case 'n': case 'g': case 'l': return arith_comp(l, r, op);
+    }
+    return false;
+  }
+
+  // The only tricky unary is `-t', whose argument is optional outside posix
+  // mode: `test -t' and `test -t -a ...' both mean `-t 1'.
+  bool unary_operator() {
+    std::string op = arg(pos);
+    if (!test_unop(op)) return false;
+    if (!sh.opt_posix && op[1] == 't') {
+      advance(false);
+      if (pos >= argc) return unary_test(op, "1");
+      long long r;
+      if (test_number(arg(pos), &r)) {
+        advance(false);
+        return unary_test(op, arg(pos - 1));
+      }
+      if (argc >= 5 && andor(arg(pos))) return unary_test(op, "1");
+      integer_expected(arg(pos));
+    }
+    unary_advance();
+    return unary_test(op, arg(pos - 1));
+  }
+
+  bool binary_operator() {
+    const std::string &w = arg(pos + 1);
+    if (w == "=" || w == "==" || w == "<" || w == ">" || w == "!=") {
+      bool value = binary_test(w, arg(pos), arg(pos + 2));
+      pos += 3;
+      return value;
+    }
+    if (w.size() != 3 || w[0] != '-' || !test_binop(w))
+      syntax_error(w + ": binary operator expected");
+    bool value = binary_test(w, arg(pos), arg(pos + 2));
+    pos += 3;
+    return value;
+  }
+
+  bool expr() {
+    if (pos >= argc) syntax_error("argument expected");
+    return or_expr();
+  }
+  // Both sides are always evaluated, and the operators are right-associative.
   bool or_expr() {
-    bool v = and_expr();
-    while (!at_end() && cur() == "-o") { i++; v = and_expr() || v; }
-    return v;
+    bool value = and_expr();
+    if (pos < argc && isprimary(arg(pos), 'o')) {
+      advance(false);
+      bool v2 = or_expr();
+      return value || v2;
+    }
+    return value;
   }
   bool and_expr() {
-    bool v = term();
-    while (!at_end() && cur() == "-a") { i++; v = term() && v; }
-    return v;
+    bool value = term();
+    if (pos < argc && isprimary(arg(pos), 'a')) {
+      advance(false);
+      bool v2 = and_expr();
+      return value && v2;
+    }
+    return value;
   }
-  bool term() {
-    if (at_end()) return false;
-    if (cur() == "!") { i++; return !term(); }
-    if (cur() == "(") {
-      i++;
-      bool v = expr();
-      if (!at_end() && cur() == ")") i++;
-      return v;
-    }
-    // unary: -X arg
-    if (i + 1 < end && cur().size() == 2 && cur()[0] == '-') {
-      std::string op = cur();
-      char o = op[1];
-      if (std::strchr("efdrwxsLhpbc", o)) { std::string p = a[i + 1]; i += 2; return file_test(o, p); }
-      if (o == 'z') { std::string s = a[i + 1]; i += 2; return s.empty(); }
-      if (o == 'n') { std::string s = a[i + 1]; i += 2; return !s.empty(); }
-      if (o == 'v') { std::string arg = a[i + 1]; i += 2; return var_is_set(arg); }
-    }
 
-    // binary: a OP b
-    if (i + 2 < end + 1 && i + 2 <= end) {
-      std::string lhs = a[i];
-      std::string op = (i + 1 < end) ? a[i + 1] : std::string();
-      if (op == "=" || op == "==") { std::string r = a[i + 2]; i += 3; return lhs == r; }
-      if (op == "!=") { std::string r = a[i + 2]; i += 3; return lhs != r; }
-      if (op == "<") { std::string r = a[i + 2]; i += 3; return lhs < r; }
-      if (op == ">") { std::string r = a[i + 2]; i += 3; return lhs > r; }
-      if (op.size() == 3 && op[0] == '-') {
-        long l = std::strtol(lhs.c_str(), nullptr, 10);
-        long r = std::strtol(a[i + 2].c_str(), nullptr, 10);
-        i += 3;
-        return int_cmp(op, l, r);
+  bool term() {
+    if (pos >= argc) syntax_error("argument expected");
+    // Leading `!'s, which cancel in pairs.
+    if (istoken(arg(pos), '!')) {
+      bool negate = false;
+      while (pos < argc && istoken(arg(pos), '!')) {
+        advance(true);
+        negate = !negate;
       }
+      return negate ? !term() : term();
     }
-    // single argument: true if non-empty
-    std::string s = cur();
-    i++;
-    return !s.empty();
+    if (istoken(arg(pos), '(')) {
+      advance(true);
+      // Scan ahead for the matching `)'.  A well-formed subexpression of 1-4
+      // arguments goes through the argument-count rules, which disambiguates
+      // cases the recursive parse would read greedily.
+      size_t nargs = 1, count = 1;
+      for (; pos + nargs < argc; nargs++) {
+        if (istoken(arg(pos + nargs), ')')) count--;
+        else if (istoken(arg(pos + nargs), '(')) count++;
+        if (count == 0) break;
+      }
+      bool value = (pos + nargs < argc && nargs <= 4) ? posixtest(nargs) : expr();
+      const char *c = at(pos);
+      if (c == nullptr) syntax_error("`)' expected");
+      if (c[0] != ')' || c[1] != '\0')
+        syntax_error(std::string("`)' expected, found ") + c);
+      advance(false);
+      return value;
+    }
+    // Enough arguments left for `A op B'?  Then for `-op A'?  Otherwise the
+    // word stands alone and is true when non-empty.
+    if (pos + 3 <= argc && test_binop(arg(pos + 1))) return binary_operator();
+    if (pos + 2 <= argc && test_unop(arg(pos))) return unary_operator();
+    bool value = one_arg(arg(pos));
+    advance(false);
+    return value;
+  }
+
+  bool two_arguments() {
+    if (istoken(arg(pos), '!')) {
+      advance(false);
+      return arg(pos++).empty();
+    }
+    if (arg(pos).size() == 2 && arg(pos)[0] == '-' && test_unop(arg(pos)))
+      return unary_operator();
+    syntax_error(arg(pos) + ": unary operator expected");
+  }
+
+  bool three_arguments() {
+    if (test_binop(arg(pos + 1))) return binary_operator();
+    if (andor(arg(pos + 1))) {
+      bool value = arg(pos + 1)[1] == 'a'
+                       ? (one_arg(arg(pos)) && one_arg(arg(pos + 2)))
+                       : (one_arg(arg(pos)) || one_arg(arg(pos + 2)));
+      pos += 3;
+      return value;
+    }
+    if (istoken(arg(pos), '!')) {
+      advance(true);
+      return !two_arguments();
+    }
+    if (istoken(arg(pos), '(') && istoken(arg(pos + 2), ')')) {
+      advance(false);
+      bool value = one_arg(arg(pos));
+      pos += 2;
+      return value;
+    }
+    syntax_error(arg(pos + 1) + ": binary operator expected");
+  }
+
+  // David Korn's POSIX.2 proposal: the meaning of an expression is fixed by how
+  // many arguments it has, so `test -a noexist' is the `-a' primary while
+  // `test x -a y' is the `and' connective.
+  bool posixtest(size_t nargs) {
+    switch (nargs) {
+      case 0: return false;
+      case 1: {
+        bool value = one_arg(arg(1));
+        advance(false);
+        return value;
+      }
+      case 2: return two_arguments();
+      case 3: return three_arguments();
+      case 4:
+        if (istoken(arg(pos), '!')) {
+          advance(true);
+          return !three_arguments();
+        }
+        if (istoken(arg(pos), '(') && istoken(arg(pos + 3), ')')) {
+          advance(true);
+          bool value = two_arguments();
+          advance(false);
+          return value;
+        }
+        [[fallthrough]];
+      default: return expr();
+    }
   }
 };
 
 int bi_test(Shell &sh, const std::vector<std::string> &argv, bool bracket) {
-  std::vector<std::string> a(argv.begin() + 1, argv.end());
-  if (bracket) {
-    if (a.empty() || a.back() != "]") return 2;  // missing ]
-    a.pop_back();
-  }
-  if (a.empty()) return 1;
-  // bash dispatches `test' by ARGUMENT COUNT (test.c three_arguments): with
-  // exactly three, the middle one must be a binary operator unless the form
-  // is `! ARG1 ARG2' or `( ARG )'.  Otherwise it is `ARG1: binary operator
-  // expected' with status 2 -- which is what a word-split element reference
-  // produces (`test -v aa[$(echo foo)]' -> -v, aa[$(echo, foo)] --
-  // quotearray1.sub).
-  if (a.size() == 3 && a[0] != "!" && !(a[0] == "(" && a[2] == ")")) {
-    static const std::set<std::string> kBin = {
-        "=", "==", "!=", "<", ">", "-eq", "-ne", "-lt",
-        "-le", "-gt", "-ge", "-ef", "-nt", "-ot",
-        "-a", "-o"};  // the connectives also join two one-argument tests
-    if (!kBin.count(a[1])) {
-      std::fprintf(stderr, "%s%s: %s: binary operator expected\n", sh.err_prefix().c_str(),
-                   bracket ? "[" : "test", a[1].c_str());
-      return 2;
+  TestEval te{sh, argv, argv.size(), 1, bracket ? "[" : "test"};
+  try {
+    if (bracket) {
+      te.argc--;
+      if (argv[te.argc] != "]") te.syntax_error("missing `]'");
+      if (te.argc < 2) return 1;  // `[ ]' is false
     }
+    if (te.pos >= te.argc) return 1;  // `test' with no arguments is false
+    bool value = te.posixtest(te.argc - 1);
+    // Anything left over is a syntax error, not a silently ignored tail.
+    if (te.pos != te.argc) {
+      if (te.pos < te.argc && argv[te.pos][0] == '-')
+        te.syntax_error("syntax error: `" + argv[te.pos] + "' unexpected");
+      te.syntax_error("too many arguments");
+    }
+    return value ? 0 : 1;
+  } catch (const TestSyntaxError &) {
+    return 2;
   }
-  TestEval te{sh, a, 0, a.size(), true};
-  bool v = te.expr();
-  if (!te.ok) return 2;  // a usage/syntax error: bash's status 2
-  return v ? 0 : 1;
 }
 
 // ---- other builtins ------------------------------------------------------
@@ -6787,7 +7064,7 @@ struct CondEval {
         }
         return isatty(static_cast<int>(fd)) != 0;
       }
-      return file_test(o, arg);
+      return file_unop(sh, o, arg);
     }
     // word [ binop word ]
     if (t[i].type != Tok::Word) return false;
