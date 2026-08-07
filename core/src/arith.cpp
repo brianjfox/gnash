@@ -736,9 +736,13 @@ static bool resolve_sub(const Node *n, Ctx &ctx, std::string &out, bool writing 
       // identifier (with the command prefix).
       ctx.full_msg = "`" + n->name + "[]': not a valid identifier";
     } else {
-      // `(( y[$none] ))' -- a read: y[]: bad array subscript (bare).
+      // `(( y[$none] ))' -- a read: y[]: bad array subscript (bare).  bash
+      // reports it TWICE: once while resolving the reference and again when
+      // the arithmetic command reports the failed expression (array27.sub).
       ctx.full_msg = n->name + "[]: bad array subscript";
       ctx.full_msg_bare = true;
+      if (ctx.expand_subs == 1)
+        std::fprintf(stderr, "%s%s\n", ctx.sh.err_prefix().c_str(), ctx.full_msg.c_str());
     }
     return false;
   }
