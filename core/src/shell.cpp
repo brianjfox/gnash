@@ -126,6 +126,19 @@ const std::vector<std::string> &Shell::special_var_names() {
   return names;
 }
 
+// The computed variables that carry bash's att_noassign: an assignment to one
+// succeeds and changes nothing, and the dynamic value keeps being reported.
+// BASH_SUBSHELL and BASH_TRAPSIG are deliberately absent -- bash does let those
+// be overwritten -- as are BASHOPTS/SHELLOPTS, which are readonly instead.
+bool Shell::noassign_var(const std::string &n) const {
+  if (is_zsh()) return false;  // zsh has no such variables
+  static const std::set<std::string> kNoAssign = {
+      "GROUPS",   "FUNCNAME",     "LINENO",       "BASHPID",
+      "HISTCMD",  "BASH_COMMAND", "BASH_ARGC",    "BASH_ARGV",
+      "EPOCHSECONDS", "EPOCHREALTIME", "BASH_MONOSECONDS"};
+  return kNoAssign.count(n) != 0;
+}
+
 // Defined in builtins.cpp: the state of every `set -o' option, in name order.
 std::vector<std::pair<std::string, bool>> set_option_states(Shell &sh);
 
@@ -754,10 +767,10 @@ bool Shell::array_elem_set(const std::string &n_in, const std::string &sub) cons
 
 void Shell::array_set(const std::string &n_in, const std::string &sub, const std::string &val) {
   std::string n = deref(n_in);
-  // GROUPS/FUNCNAME carry bash's att_noassign: an assignment is silently
-  // discarded (and does not fail).  Only in the bash family -- zsh has no such
-  // dynamic variables, so an assignment there is ordinary.
-  if ((n == "GROUPS" || n == "FUNCNAME") && !is_zsh()) return;
+  // A computed variable carries bash's att_noassign: the assignment is
+  // silently discarded (and does not fail).  `BASH_ARGC=x' reaches here rather
+  // than Shell::set, because an existing array takes the element-0 path.
+  if (noassign_var(n)) return;
   // BASH_ALIASES is the live alias table: BASH_ALIASES[name]=value defines an
   // alias, after the same name validation the alias builtin performs.
   if (n == "BASH_ALIASES" && !is_zsh()) {
@@ -1471,9 +1484,16 @@ bool Shell::set(const std::string &n_in, const std::string &v,
     std::fprintf(stderr, "%s%s: readonly variable\n", err_prefix().c_str(), n.c_str());
     return false;
   }
-  // GROUPS/FUNCNAME carry bash's att_noassign: a scalar assignment is silently
-  // discarded without error (bash family only; zsh has no such variables).
-  if ((n == "GROUPS" || n == "FUNCNAME") && !is_zsh()) return true;
+  // A computed variable carries bash's att_noassign: a scalar assignment is
+  // silently discarded without error, so `LINENO=999' succeeds and changes
+  // nothing.
+  if (noassign_var(n)) return true;
+  // $SHELLOPTS and $BASHOPTS are readonly instead: assigning to one is an
+  // error, which (having no command word) also abandons the command list.
+  if (!is_zsh() && (n == "SHELLOPTS" || n == "BASHOPTS")) {
+    std::fprintf(stderr, "%s%s: readonly variable\n", err_prefix().c_str(), n.c_str());
+    return false;
+  }
   Variable &var = vars[n];
   if (var.readonly) {
     std::fprintf(stderr, "%s%s: readonly variable\n", err_prefix().c_str(), n.c_str());
