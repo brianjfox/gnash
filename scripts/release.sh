@@ -119,9 +119,8 @@ else
   sed -i '' -E "s/(GNASH_REF=${FORMULA}-)[0-9]+\.[0-9]+\.[0-9]+/\1$VERSION/" README.md
   git grep -q "VERSION $VERSION" -- CMakeLists.txt || die "CMakeLists.txt bump failed"
   git add CMakeLists.txt README.md
-  git commit -q -m "Release $FORMULA $VERSION" \
-    -m "See scripts/notes/$TAG.md for release notes." \
-    -m "Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
+  git commit -q -m "chore(release): $FORMULA $VERSION" \
+    -m "See scripts/notes/$TAG.md for release notes."
   git tag -a "$TAG" -m "$FORMULA $VERSION"
   info "committed and tagged $TAG"
   git_push "$ROOT"
@@ -161,7 +160,16 @@ fi
 step "GitHub release on $MAIN_REPO"
 if gh release view "$TAG" --repo "$MAIN_REPO" >/dev/null 2>&1; then
   skip "release $TAG exists -- refreshing assets"
-  gh release upload "$TAG" "$TARBALL" "$TARBALL.sha256" --repo "$MAIN_REPO" --clobber
+  # A release published without assets may be IMMUTABLE (GitHub's immutable
+  # releases): uploads then fail with HTTP 422.  That is not fatal to the
+  # release -- the tap formula builds from the source tarball -- so warn and
+  # carry on to the Homebrew steps rather than aborting the whole run.
+  if ! gh release upload "$TAG" "$TARBALL" "$TARBALL.sha256" \
+         --repo "$MAIN_REPO" --clobber 2>/tmp/gnash-relup.$$; then
+    info "warning: could not attach assets to $TAG ($(tr -d '\n' </tmp/gnash-relup.$$ | tail -c 120))"
+    info "         the release stands; Homebrew installs from the source tarball"
+  fi
+  rm -f /tmp/gnash-relup.$$
 else
   gh release create "$TAG" "$TARBALL" "$TARBALL.sha256" \
     --repo "$MAIN_REPO" --title "$FORMULA $VERSION" --notes-file "$NOTES_FILE"
