@@ -1377,6 +1377,20 @@ bool Shell::set(const std::string &n_in, const std::string &v,
                      base.c_str(), sub.c_str());
         return false;
       }
+      // The chain looped back to an ELEMENT of a variable that is itself a
+      // nameref (`typeset -n a=b b; b=a[1]; a=foo'): bash cannot both keep `a'
+      // a reference and subscript it, so it drops the nameref attribute with a
+      // warning and makes the variable an array (nameref15.sub).
+      {
+        auto bv = vars.find(base);
+        if (bv != vars.end() && bv->second.nameref) {
+          std::fprintf(stderr, "%swarning: %s: removing nameref attribute\n",
+                       err_prefix().c_str(), base.c_str());
+          bv->second.nameref = false;
+          bv->second.value.clear();
+          bv->second.invisible = false;
+        }
+      }
       auto it = vars.find(base);
       if (it != vars.end() && it->second.readonly) {
         std::fprintf(stderr, "%s%s: readonly variable\n", err_prefix().c_str(),
@@ -1521,6 +1535,15 @@ void Shell::unset(const std::string &n_in, bool force, bool noref) {
   // usage.  FORCE mirrors bash's unbind_variable_noref: remove the named
   // variable itself (no nameref following) even when it is readonly.
   std::string n = (force || noref) ? n_in : deref(n_in);
+  // A nameref aimed at an array ELEMENT unsets that element, not a variable
+  // literally named `v[1]' (`declare -n n=v[1]; unset n' -- nameref15.sub).
+  if (n != n_in && n.size() > 2 && n.back() == ']') {
+    size_t lb = n.find('[');
+    if (lb != std::string::npos && lb > 0) {
+      array_unset(n.substr(0, lb), n.substr(lb + 1, n.size() - lb - 2));
+      return;
+    }
+  }
   if (n == "POSIXLY_CORRECT") opt_posix = false;  // unsetting leaves POSIX mode
   auto it = vars.find(n);
   if (it != vars.end() && (force || !it->second.readonly)) {
