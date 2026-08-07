@@ -1650,7 +1650,14 @@ bool set_o_option(Shell &sh, const std::string &o, bool on) {
   else if (o == "noclobber") sh.opt_noclobber = on;
   else if (o == "history") { if (on) sh.enable_history(); else sh.opt_history = false; }
   else if (o == "histexpand") sh.opt_histexpand = on;
-  else if (o == "posix") sh.opt_posix = on;
+  else if (o == "posix") {
+    // Entering POSIX mode turns `expand_aliases' on (aliases are expanded in
+    // non-interactive shells there) and leaving it turns the option back off,
+    // exactly as bash's sv_strict_posix does -- `shopt expand_aliases' inside
+    // a posix-mode script reports `on' (comsub2.tests).
+    if (on != sh.opt_posix) sh.shopt_opts["expand_aliases"] = on;
+    sh.opt_posix = on;
+  }
   else if (o == "restricted") {
     if (on) sh.opt_restricted = true;
     else return false;  // cannot clear restricted; caller reports the error
