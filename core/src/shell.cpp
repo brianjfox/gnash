@@ -430,9 +430,25 @@ void Shell::reap_procsubs(size_t from) {
   if (from < procsubs.size()) procsubs.resize(from);
 }
 
+// bash caps nameref chains at NAMEREF_MAX (8) links.  gnash allows more by
+// default -- a long chain is a legitimate, if unusual, thing to build -- and
+// exposes the limit as $GNASH_NAMEREF_MAX so a script that wants bash's exact
+// behaviour can set it to 8.  A missing, malformed or non-positive value falls
+// back to the default.
+int Shell::nameref_max() const {
+  constexpr int kDefault = 100;
+  auto it = vars.find("GNASH_NAMEREF_MAX");
+  if (it == vars.end()) return kDefault;
+  char *end = nullptr;
+  long v = std::strtol(it->second.value.c_str(), &end, 10);
+  if (end == it->second.value.c_str() || *end != '\0' || v < 1) return kDefault;
+  return static_cast<int>(v);
+}
+
 std::string Shell::deref(const std::string &n) const {
   std::string cur = n;
-  for (int guard = 0; guard < 100; guard++) {
+  const int max_links = nameref_max();
+  for (int guard = 0; guard < max_links; guard++) {
     auto it = vars.find(cur);
     if (it == vars.end() || !it->second.nameref) return cur;
     const std::string &tgt = it->second.value;
@@ -442,17 +458,25 @@ std::string Shell::deref(const std::string &n) const {
   return cur;
 }
 
-std::string Shell::deref_ex(const std::string &n, bool &circular) const {
+std::string Shell::deref_ex(const std::string &n, bool &circular, bool *too_deep) const {
   circular = false;
+  if (too_deep) *too_deep = false;
   std::string cur = n;
   std::set<std::string> seen;
-  for (;;) {
+  const int max_links = nameref_max();
+  for (int links = 0;; links++) {
     auto it = vars.find(cur);
     if (it == vars.end() || !it->second.nameref) return cur;
     const std::string &tgt = it->second.value;
     if (tgt.empty()) return cur;  // untargeted nameref: not circular
     if (tgt == cur || seen.count(tgt)) {  // self reference or a longer loop
       circular = true;
+      return cur;
+    }
+    // One link too many.  The chain is not circular -- it simply runs deeper
+    // than the shell is willing to follow -- so it resolves to nothing.
+    if (links >= max_links) {
+      if (too_deep) *too_deep = true;
       return cur;
     }
     seen.insert(cur);
@@ -550,8 +574,15 @@ static std::string scalar_of(const Variable &v) {
 std::string Shell::get(const std::string &n_in) const {
   std::string base, sub;
   if (nameref_elt(n_in, base, sub)) return array_get(base, sub);
-  bool circular = false;
-  std::string n = deref_ex(n_in, circular);
+  bool circular = false, too_deep = false;
+  std::string n = deref_ex(n_in, circular, &too_deep);
+  // A chain longer than nameref_max() resolves to nothing, with bash's warning
+  // naming the limit actually in force.
+  if (too_deep) {
+    std::fprintf(stderr, "%swarning: %s: maximum nameref depth (%d) exceeded\n",
+                 err_prefix().c_str(), n_in.c_str(), nameref_max());
+    return std::string();
+  }
   if (circular) {
     // bash warns and, at function scope, resolves the reference at global
     // scope (find_variable_nameref); at global scope it resolves to nothing.
@@ -567,8 +598,9 @@ std::string Shell::get(const std::string &n_in) const {
 std::string Shell::get_quiet(const std::string &n_in) const {
   std::string base, sub;
   if (nameref_elt(n_in, base, sub)) return array_get(base, sub);
-  bool circular = false;
-  std::string n = deref_ex(n_in, circular);
+  bool circular = false, too_deep = false;
+  std::string n = deref_ex(n_in, circular, &too_deep);
+  if (too_deep) return std::string();  // as get(), but this one never reports
   if (circular) {
     const Variable *g = in_function() ? global_var_ptr(n_in) : nullptr;
     return g ? scalar_of(*g) : std::string();
@@ -1272,8 +1304,15 @@ bool Shell::get_if_set(const std::string &n_in, std::string &out) const {
     out = array_get(base, sub);
     return true;
   }
-  bool circular = false;
-  std::string n = deref_ex(n_in, circular);
+  bool circular = false, too_deep = false;
+  std::string n = deref_ex(n_in, circular, &too_deep);
+  // A chain longer than nameref_max() resolves to nothing, with bash's warning
+  // naming the limit actually in force.
+  if (too_deep) {
+    std::fprintf(stderr, "%swarning: %s: maximum nameref depth (%d) exceeded\n",
+                 err_prefix().c_str(), n_in.c_str(), nameref_max());
+    return false;
+  }
   if (circular) {
     // Same resolution as get(): warn, and at function scope fall through to the
     // global binding; a global-scope cycle resolves to nothing (unset).
@@ -1415,7 +1454,15 @@ bool Shell::set(const std::string &n_in, const std::string &v,
     }
   }
   bool circular = false;
-  std::string n = deref_ex(n_in, circular);
+  bool too_deep = false;
+  std::string n = deref_ex(n_in, circular, &too_deep);
+  // Too long a chain has no variable at the end to assign to: bash warns and
+  // fails the assignment, which (with no command word) abandons the list.
+  if (too_deep) {
+    std::fprintf(stderr, "%swarning: %s: maximum nameref depth (%d) exceeded\n",
+                 err_prefix().c_str(), n_in.c_str(), nameref_max());
+    return false;
+  }
   // A circular nameref (self reference `v->v' or a longer loop).  At function
   // scope bash reports the loop as exceeding the max nameref depth and binds
   // the value at global scope; at global scope it warns and the assignment has

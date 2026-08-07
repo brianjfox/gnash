@@ -100,6 +100,14 @@ Choose a personality by the binary's name -- e.g. a `zsh` symlink to `gnash`, or
 
 Run it as `build/core/gnash` (interactive), `gnash -c 'CMD'`, or `gnash SCRIPT`.
 
+### Tunables
+
+`$GNASH_NAMEREF_MAX` bounds how many links a nameref chain may follow before it
+resolves to nothing, with a `maximum nameref depth (N) exceeded` warning. It
+defaults to **100**; bash fixes the equivalent limit at 8, so setting it to 8
+reproduces bash exactly. A missing, malformed or non-positive value falls back
+to the default.
+
 
 ## Design
 

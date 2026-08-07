@@ -63,7 +63,14 @@ class Shell {
   // reference `v->v' or a longer loop).  On a cycle it returns the last name
   // walked before the loop closed; the warning-issuing caller uses the
   // original NAME for the diagnostic, matching bash's find_variable_nameref.
-  std::string deref_ex(const std::string &n, bool &circular) const;
+  // Resolve NAME through its nameref chain.  Sets `circular' on a loop, and
+  // `too_deep' (when given) once the chain is longer than nameref_max().
+  std::string deref_ex(const std::string &n, bool &circular,
+                       bool *too_deep = nullptr) const;
+  // How many nameref links a chain may follow.  bash fixes this at 8; gnash
+  // defaults to 100 and lets $GNASH_NAMEREF_MAX change it, so setting that to 8
+  // reproduces bash exactly.
+  int nameref_max() const;
   // The global (pre-function) binding of NAME: when a local scope has shadowed
   // NAME, the saved outer Variable; otherwise the entry in `vars'.  bash
   // resolves a circular nameref to global scope, so a write through one lands
