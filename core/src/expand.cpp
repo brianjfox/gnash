@@ -767,6 +767,15 @@ static bool slice_ref(const std::string &body, std::string &name, char &sel,
   return true;
 }
 
+// A negative length in an ARRAY slice is a hard error in bash (only a scalar
+// substring reads one as an offset from the end).  Report it and abort the
+// command, as any other expansion error does.
+static void slice_len_error(Shell &sh, long long len) {
+  std::fprintf(stderr, "%s%lld: substring expression < 0\n", sh.err_prefix().c_str(), len);
+  sh.arith_error = true;
+  sh.arith_abort = true;  // bash unwinds the whole command list, not just this word
+}
+
 // Detect NAME[@]OP / NAME[*]OP where OP is a defaulting/alternative/error
 // operator (`-` `:-` `=` `:=` `+` `:+` `?` `:?`) applied to the array as a
 // whole.  Must be tried before slice_ref, which would otherwise misread
@@ -1794,7 +1803,10 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
           if (shaslen) {
             long long len = eval_arith(sh_, expand_no_split(slenx, false, false), &ok);
             if (!ok) len = 0;
-            count = (len < 0) ? (maxidx + 1 + len - off) : len;
+            // Unlike a scalar substring, an array slice has no "from the end"
+            // reading: bash rejects any negative length outright.
+            if (len < 0) slice_len_error(sh_, len);
+            count = len < 0 ? 0 : len;  // the error already abandons the list
           } else {
             count = static_cast<long long>(keys.size());
           }
@@ -1817,7 +1829,8 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
           if (shaslen) {
             long long len = eval_arith(sh_, expand_no_split(slenx, false, false), &ok);
             if (!ok) len = 0;
-            count = (len < 0) ? (n + len - off) : len;  // negative len = offset from end
+            if (len < 0) slice_len_error(sh_, len);
+            count = len < 0 ? 0 : len;  // the error already abandons the list
           } else {
             count = n - off;
           }
@@ -2693,8 +2706,9 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
     // (`${#:%}' -> `#: %: arithmetic syntax error ...').
     long long off =
         eval_arith_msg(sh, ex.expand_arith(offtxt), name.c_str(), &ok, /*expand_subs=*/1);
-    long long len = -1;
-    if (ok && colon2 != std::string::npos)
+    long long len = 0;
+    bool haslen = colon2 != std::string::npos;
+    if (ok && haslen)
       len = eval_arith_msg(sh, ex.expand_arith(args.substr(colon2 + 1)), name.c_str(), &ok,
                            /*expand_subs=*/1);
     // A failed offset/length aborts the command, as any expansion error does.
@@ -2708,9 +2722,26 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
     if (off < 0) off += n;
     if (off < 0) off = 0;
     if (off > n) off = n;
+    // The slice runs from OFF up to END, both character indices into the whole
+    // value.  A NEGATIVE length is not a count but an end offset measured from
+    // the end of the value, so `${v:0:-5}' drops its last five characters and
+    // `${v:6:-2}' ends two from the end regardless of where it started.
+    long long end = n;
+    if (haslen) {
+      end = (len < 0) ? n + len : (off > n - len ? n : off + len);
+      if (end < off) {
+        std::fprintf(stderr, "%s%lld: substring expression < 0\n", sh.err_prefix().c_str(),
+                     len);
+        sh.arith_error = true;
+        sh.arith_abort = true;  // bash unwinds the whole command list
+        return std::string();
+      }
+      if (end > n) end = n;
+    }
     std::string res = val.substr(mb_byteoff(val, static_cast<size_t>(off)));
-    if (len >= 0 && len < static_cast<long long>(mb_charlen(res)))
-      res = res.substr(0, mb_byteoff(res, static_cast<size_t>(len)));
+    long long take = end - off;
+    if (take < static_cast<long long>(mb_charlen(res)))
+      res = res.substr(0, mb_byteoff(res, static_cast<size_t>(take)));
     return res;
   }
 
