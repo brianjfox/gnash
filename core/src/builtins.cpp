@@ -7296,23 +7296,30 @@ struct CondEval {
         std::string rhs_raw = at_end() ? "" : t[i].text;
         if (!at_end()) i++;
         if (noeval) return false;  // consumed, but this arm does not run
-        // The trace shows both operands plainly expanded, whatever expansion
-        // the operator itself goes on to use.  (Under `set -x' a command
-        // substitution in a pattern or regex right operand therefore runs once
-        // more; only the tracing path pays that.)
-        if (sh.opt_xtrace) xtrace_term(op, lhs, expand(rhs_raw), true, invert);
-        if (op == "==" || op == "=") {
+        // The trace wants the operand plainly expanded, but the operator may
+        // need a pattern- or regex-flavoured expansion of the same text.
+        // Expand ONCE for the operator and recover the plain form by dropping
+        // the escapes it added -- those mark exactly the characters that were
+        // quoted.  Re-expanding would run a command substitution in the right
+        // operand a second time (`[[ x == $(echo foo >>bar) ]]' under set -x).
+        auto plain = [](const std::string &v) {
+          std::string r;
+          for (size_t k = 0; k < v.size(); k++) {
+            if (v[k] == '\\' && k + 1 < v.size()) k++;
+            r += v[k];
+          }
+          return r;
+        };
+        if (op == "==" || op == "=" || op == "!=") {
           std::string pat = expand_pat(rhs_raw);
+          xtrace_term(op, lhs, plain(pat), true, invert);
           std::string p = pat, l = lhs;
-          return strmatch(p.data(), l.data(), FNM_EXTMATCH) == 0;
-        }
-        if (op == "!=") {
-          std::string pat = expand_pat(rhs_raw);
-          std::string p = pat, l = lhs;
-          return strmatch(p.data(), l.data(), FNM_EXTMATCH) != 0;
+          bool m = strmatch(p.data(), l.data(), FNM_EXTMATCH) == 0;
+          return op == "!=" ? !m : m;
         }
         if (op == "=~") {
           std::string re = expand_re(rhs_raw);
+          xtrace_term(op, lhs, plain(re), true, invert);
           std::string why;
           regex_t *rx = cached_regex(re, &why);
           if (!rx) {
@@ -7342,11 +7349,15 @@ struct CondEval {
         // were accepted by the parser but never evaluated here, so every
         // `[[ a -ef b ]]' fell through to the one-argument "non-empty is true"
         // rule and answered true.
-        if (op == "-nt") return file_comp(lhs, expand(rhs_raw), 'n');
-        if (op == "-ot") return file_comp(lhs, expand(rhs_raw), 'o');
-        if (op == "-ef") return file_comp(lhs, expand(rhs_raw), 'f');
-        if (op == "<") return lhs < expand(rhs_raw);
-        if (op == ">") return lhs > expand(rhs_raw);
+        if (op == "-nt" || op == "-ot" || op == "-ef" || op == "<" || op == ">") {
+          std::string rhs = expand(rhs_raw);  // one expansion, shared with the trace
+          xtrace_term(op, lhs, rhs, true, invert);
+          if (op == "-nt") return file_comp(lhs, rhs, 'n');
+          if (op == "-ot") return file_comp(lhs, rhs, 'o');
+          if (op == "-ef") return file_comp(lhs, rhs, 'f');
+          if (op == "<") return lhs < rhs;
+          return lhs > rhs;
+        }
         // The [[ ]] arithmetic comparators evaluate each side as an arithmetic
         // expression (so `-eq 4+3' means 7), reporting a malformed one with
         // bash's `[[: EXPR: ...' diagnostic rather than silently reading 0.
@@ -7356,6 +7367,7 @@ struct CondEval {
         // subscript is copied raw and expanded exactly once by the evaluator
         // -- keys containing `]'/`[' or $(...) resolve like (( )) operands
         // (quotearray1.sub) -- falling back to the plain path on failure.
+        bool traced = false;
         {
           // The [[ ]] tokenizer splits `assoc[$key]' at a `]' INSIDE the
           // expanded key, so rejoin the pieces of an unclosed subscript
@@ -7378,14 +7390,18 @@ struct CondEval {
           long lv = static_cast<long>(eval_arith_msg(sh, la, "[[", &lok, /*expand_subs=*/1));
           if (lok) {
             std::string ra = cex.expand_arith(rraw);
+            xtrace_term(op, la, ra, true, invert);  // expanded, not yet evaluated
+            traced = true;
             bool rok = true;
             long rv = static_cast<long>(eval_arith_msg(sh, ra, "[[", &rok, /*expand_subs=*/1));
             if (rok) return int_cmp(op, lv, rv);
           }
         }
         bool aok = true;
+        std::string rhs = expand(rhs_raw);  // one expansion, shared with the trace
+        if (!traced) xtrace_term(op, lhs, rhs, true, invert);
         long l = static_cast<long>(eval_arith(sh, lhs, &aok));
-        long r = static_cast<long>(eval_arith(sh, expand(rhs_raw), &aok));
+        long r = static_cast<long>(eval_arith(sh, rhs, &aok));
         return int_cmp(op, l, r);
       }
     }
