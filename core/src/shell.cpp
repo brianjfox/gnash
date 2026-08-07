@@ -371,9 +371,17 @@ int Shell::run_return_trap(int status) {
   in_return_trap = true;
   int saved = last_status;
   last_status = status;  // $? inside the RETURN trap is the function's return status
+  // As for the DEBUG trap: the body runs without resetting the line counter, so
+  // $LINENO on its first line reports the line that triggered the trap rather
+  // than restarting at 1.
+  int saved_line = cur_lineno;
+  int saved_base = lineno_base;
+  lineno_base = cur_lineno - 1;
   std::string body = it->second;
   int st = run_string(body);
   last_status = saved;
+  cur_lineno = saved_line;
+  lineno_base = saved_base;
   in_return_trap = false;
   return st;
 }
