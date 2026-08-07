@@ -7086,6 +7086,7 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
 }  // namespace gnash::core
 
 #include "gnash/core/lexer.hpp"
+#include "gnash/core/parser.hpp"  // COND_RX_ESC: the `[[ =~ ]]' transport encoding
 
 namespace gnash::core {
 
@@ -7094,13 +7095,23 @@ namespace {
 // Compile REG_EXTENDED regexes once and reuse them: regcomp() is expensive
 // (it builds a whole automaton) and a loop such as opsh's semver::parse runs
 // `[[ $v =~ $re ]]' with the same pattern every iteration, as bash caches too.
-regex_t *cached_regex(const std::string &pat) {
+regex_t *cached_regex(const std::string &pat, std::string *why = nullptr) {
   static std::map<std::string, regex_t> cache;
   auto it = cache.find(pat);
   if (it != cache.end()) return &it->second;
   if (cache.size() >= 64) { for (auto &kv : cache) regfree(&kv.second); cache.clear(); }
   regex_t rx;
-  if (regcomp(&rx, pat.c_str(), REG_EXTENDED) != 0) return nullptr;
+  int rc = regcomp(&rx, pat.c_str(), REG_EXTENDED);
+  if (rc != 0) {
+    // bash reports why the pattern would not compile and fails the whole
+    // conditional with status 2, rather than treating it as "no match".
+    if (why) {
+      char buf[256];
+      regerror(rc, &rx, buf, sizeof buf);
+      *why = buf;
+    }
+    return nullptr;
+  }
   return &cache.emplace(pat, rx).first->second;  // map owns the compiled data
 }
 
@@ -7125,6 +7136,26 @@ struct CondEval {
   std::string expand_pat(const std::string &s) {
     Expander ex(sh);
     return ex.expand_pattern(s);
+  }
+  // A `=~' right-hand side is a REGEX.  Undo the parser's transport encoding
+  // first -- those characters were never quoted by the user -- then expand,
+  // escaping only the ERE-special characters that the user really did quote.
+  std::string expand_re(const std::string &s) {
+    std::string raw;
+    raw.reserve(s.size());
+    for (size_t k = 0; k < s.size(); k++) {
+      if (s[k] == COND_RX_ESC && k + 1 < s.size()) {
+        const char *s2 = std::strchr(kCondRxSub, s[k + 1]);
+        if (s[k + 1] != '\0' && s2) {
+          raw += kCondRxRaw[s2 - kCondRxSub];
+          k++;
+          continue;
+        }
+      }
+      raw += s[k];
+    }
+    Expander ex(sh);
+    return ex.expand_regex(raw);
   }
 
   bool or_expr() {
@@ -7230,9 +7261,15 @@ struct CondEval {
           return strmatch(p.data(), l.data(), FNM_EXTMATCH) != 0;
         }
         if (op == "=~") {
-          std::string re = expand(rhs_raw);
-          regex_t *rx = cached_regex(re);
-          if (!rx) return false;
+          std::string re = expand_re(rhs_raw);
+          std::string why;
+          regex_t *rx = cached_regex(re, &why);
+          if (!rx) {
+            std::fprintf(stderr, "%s[[: invalid regular expression `%s': %s\n",
+                         sh.err_prefix().c_str(), re.c_str(), why.c_str());
+            synerr = 2;
+            return false;
+          }
           size_t ng = rx->re_nsub + 1;
           std::vector<regmatch_t> m(ng);
           bool matched = regexec(rx, lhs.c_str(), ng, m.data(), 0) == 0;

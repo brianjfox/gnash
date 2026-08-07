@@ -17,6 +17,17 @@
 
 namespace gnash::core {
 
+// The `[[ ... ]]' body is reconstructed into a string that the conditional
+// evaluator re-tokenizes.  Characters the lexer would treat as operators or
+// separators cannot survive that trip literally, so inside a `=~' operand they
+// are replaced by COND_RX_ESC plus the matching letter from kCondRxSub, and the
+// evaluator puts them back before expanding the operand.  A backslash would not
+// do: the expander records backslash-escaped characters as QUOTED, and quoting
+// is exactly what decides whether a regex metacharacter matches literally.
+constexpr char COND_RX_ESC = '\x1d';        // GS -- an ordinary character to the lexer
+inline constexpr const char *kCondRxRaw = "()|&;<> \t";
+inline constexpr const char *kCondRxSub = "abcdefghi";
+
 struct ParseResult {
   CommandPtr command;   // null for empty input
   bool ok = true;

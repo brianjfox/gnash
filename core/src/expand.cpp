@@ -3437,6 +3437,68 @@ std::string Expander::expand_pattern(const std::string &text) {
   return r;
 }
 
+// bash's ere_char(): the characters that are special in a POSIX extended
+// regular expression, and so need a backslash to match themselves.  Note that
+// `]' and `}' are not among them.
+static bool ere_special(char c) {
+  return c != '\0' && std::strchr(".[\\()*+?{|^$", c) != nullptr;
+}
+
+std::string Expander::expand_regex(const std::string &text) {
+  std::string src = expand_leading_tilde(sh_, text);
+  extract_procsubs(src);
+  std::string out, mask;
+  bool saved_split = splitting_;
+  splitting_ = false;
+  process(src, out, mask, false);
+  splitting_ = saved_split;
+  std::string r;
+  r.reserve(out.size());
+  bool in_bracket = false;   // inside a [...] bracket expression
+  size_t bracket_at = 0;     // index just past the opening `[' (and any `^')
+  for (size_t i = 0; i < out.size(); i++) {
+    char c = out[i];
+    bool quoted = i < mask.size() && mask[i] == '1';
+    if (i < mask.size() && mask[i] == MMARK) {
+      if (c == FIELD_SEP) r += ' ';
+      continue;  // marker bytes never reach the pattern
+    }
+    if (!in_bracket && c == '[' && !quoted) {
+      in_bracket = true;
+      bracket_at = r.size() + 1;
+      r += c;
+      if (i + 1 < out.size() && out[i + 1] == '^') { r += out[++i]; bracket_at++; }
+      continue;
+    }
+    if (in_bracket) {
+      // `[:class:]', `[=equiv=]' and `[.symbol.]' are copied whole: their
+      // closing `]' does not end the enclosing bracket expression.
+      if (c == '[' && i + 1 < out.size() && std::strchr(":=.", out[i + 1])) {
+        char kind = out[i + 1];
+        std::string close = std::string(1, kind) + "]";
+        size_t end = out.find(close, i + 2);
+        if (end != std::string::npos) {
+          r.append(out, i, end + 2 - i);
+          i = end + 1;
+          continue;
+        }
+      }
+      // A `]' closes it, unless it is the first character inside.
+      if (c == ']' && r.size() > bracket_at) in_bracket = false;
+      r += c;
+      continue;
+    }
+    // Quoted AND special in an ERE: escape it so it matches itself.  A quoted
+    // ordinary character is left alone.  Inside a bracket expression nothing is
+    // escaped -- a backslash there is an ordinary member of the set, so adding
+    // one would change which characters match (`[[ "\\" =~ ["."] ]]' must not
+    // match a backslash).
+    if (quoted && ere_special(c)) r += '\\';
+    r += c;
+  }
+  return r;
+}
+
 std::string Expander::expand_no_split(const std::string &text, bool do_glob, bool do_procsub) {
   std::string src = expand_leading_tilde(sh_, text);  // case subjects, redirects
   // Arithmetic contexts pass do_procsub=false: there `4>(2+3)' is a comparison,
