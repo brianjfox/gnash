@@ -1259,8 +1259,11 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
         if (!nm.empty() && q < body.size()) {
           bool colon = body[q] == ':';
           size_t opq = q + (colon ? 1 : 0);
+          // `${#+}' -- an operator with NO operand after the argument count --
+          // is a bad substitution, so leave it for the full parser below.
+          bool bare_op = nm == "#" && !colon && opq + 1 == body.size();
           if (opq < body.size() && (body[opq] == '-' || body[opq] == '+') &&
-              !(nm == "-" && q == 1)) {
+              !bare_op && !(nm == "-" && q == 1)) {
             char op = body[opq];
             bool set = false;
             std::string val = param_value(nm, set, true);
@@ -2176,6 +2179,14 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
       }
     }
     if (param_ref) { length = true; b = r; }
+    else if (std::isdigit(static_cast<unsigned char>(r[0]))) {
+      // `${#1xyz}': a positional reference that is not a digit run is not a
+      // parameter at all, and `#' takes no such operator (more-exp.tests).
+      std::fprintf(stderr, "%s${%s}: bad substitution\n", sh.err_prefix().c_str(),
+                   body.c_str());
+      sh.arith_error = true;
+      return std::string();
+    }
   }
   // ${#@} and ${#*} are the count of positional parameters (like $#), not the
   // character length of the expanded list.
@@ -2186,7 +2197,7 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
   // `${#^}', `${#,}') -- with an operand they are fine (more-exp.tests).
   if (!sh.is_zsh() && !length && b.size() == 2 &&
       !(std::isalnum(static_cast<unsigned char>(b[0])) || b[0] == '_') &&
-      (b[1] == ':' || (b[0] == '#' && std::strchr("/%=^,", b[1]) != nullptr))) {
+      (b[1] == ':' || (b[0] == '#' && std::strchr("/%=^,+", b[1]) != nullptr))) {
     std::fprintf(stderr, "%s${%s}: bad substitution\n", sh.err_prefix().c_str(),
                  body.c_str());
     sh.arith_error = true;
@@ -2665,11 +2676,19 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
     // by the evaluator -- keys holding `]'/`['/$(...) then resolve
     // (`${string:A[%]:A[$k3]}' with k3=`]' -- quotearray.tests).
     std::string offtxt = colon2 == std::string::npos ? args : args.substr(0, colon2);
-    long long off = eval_arith_msg(sh, ex.expand_arith(offtxt), "", &ok, /*expand_subs=*/1);
+    // bash prefixes a substring offset/length error with the PARAMETER
+    // (`${#:%}' -> `#: %: arithmetic syntax error ...').
+    long long off =
+        eval_arith_msg(sh, ex.expand_arith(offtxt), name.c_str(), &ok, /*expand_subs=*/1);
     long long len = -1;
-    if (colon2 != std::string::npos)
-      len = eval_arith_msg(sh, ex.expand_arith(args.substr(colon2 + 1)), "", &ok,
+    if (ok && colon2 != std::string::npos)
+      len = eval_arith_msg(sh, ex.expand_arith(args.substr(colon2 + 1)), name.c_str(), &ok,
                            /*expand_subs=*/1);
+    // A failed offset/length aborts the command, as any expansion error does.
+    if (!ok) {
+      sh.arith_error = true;
+      return std::string();
+    }
     // Offset and length are counted in characters (bash), not bytes: map them
     // through mb_byteoff so a UTF-8 value slices on code-point boundaries.
     long long n = static_cast<long long>(mb_charlen(val));
