@@ -4,6 +4,7 @@
 // builtins.cpp -- shell builtins, plus the test/[ and [[ ]] evaluators.
 
 #include "gnash/core/builtins.hpp"
+#include "gnash/core/subscript.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -624,6 +625,18 @@ struct TestEval {
       if (o == 'n') { std::string s = a[i + 1]; i += 2; return !s.empty(); }
       if (o == 'v') { std::string arg = a[i + 1]; i += 2; return var_is_set(arg); }
     }
+    // A malformed element reference reaching the BINARY stage is bash's
+    // `binary operator expected': `test -v aa[$(echo foo)]' word-splits into
+    // `-v', `aa[$(echo', `foo)]' -- three arguments, no valid operator
+    // (quotearray1.sub).
+    if (i + 2 <= end && i + 1 < end && a[i].find('[') != std::string::npos &&
+        a[i].find(']') == std::string::npos) {
+      std::fprintf(stderr, "%stest: %s: binary operator expected\n",
+                   sh.err_prefix().c_str(), a[i].c_str());
+      ok = false;
+      i = end;
+      return false;
+    }
     // binary: a OP b
     if (i + 2 < end + 1 && i + 2 <= end) {
       std::string lhs = a[i];
@@ -655,6 +668,7 @@ int bi_test(Shell &sh, const std::vector<std::string> &argv, bool bracket) {
   if (a.empty()) return 1;
   TestEval te{sh, a, 0, a.size(), true};
   bool v = te.expr();
+  if (!te.ok) return 2;  // a usage/syntax error: bash's status 2
   return v ? 0 : 1;
 }
 
@@ -1283,19 +1297,28 @@ int bi_unset(Shell &sh, const std::vector<std::string> &argv) {
       continue;
     }
     // A malformed element reference (an unbalanced bracket from word
-    // splitting, e.g. `unset a[$(echo' + `foo)]') is a SILENT no-op in bash.
-    // EXCEPT when the base names an associative array: its subscript spans to
-    // the LAST `]' and may itself be a bracket (`unset A[]]' removes key `]',
-    // `unset A[[]' key `[' -- assoc17.sub), so no balance check applies.
+    // splitting, e.g. `unset a[$(echo' + `foo)]') is `not a valid identifier'
+    // (quotearray5.sub); under assoc_expand_once it stays a silent no-op.
+    // A well-formed ASSOCIATIVE reference is exempt from the balance check:
+    // its subscript spans to the LAST `]' and may itself be a bracket
+    // (`unset A[]]' removes key `]' -- assoc17.sub).
     size_t lb = argv[i].find('[');
     bool assoc_base = false;
     if (lb != std::string::npos && lb > 0 && !argv[i].empty() && argv[i].back() == ']') {
       auto abit = sh.vars.find(sh.deref(argv[i].substr(0, lb)));
       assoc_base = abit != sh.vars.end() && abit->second.kind == VarKind::Assoc;
     }
-    if (!noref && !expand_once_on(sh) && !assoc_base &&
+    if (!noref && !assoc_base &&
         (lb != std::string::npos || argv[i].find(']') != std::string::npos) &&
         !well_formed_element(argv[i], /*allow_empty=*/true)) {
+      // `unset -v' reports the malformed reference; PLAIN unset falls
+      // through to its function-unset attempt and stays silent
+      // (quotearray5.sub line 27 vs quotearray3.sub line 55).
+      if (vflag && !expand_once_on(sh)) {
+        std::fprintf(stderr, "%sunset: `%s': not a valid identifier\n",
+                     sh.err_prefix().c_str(), argv[i].c_str());
+        ret = 1;
+      }
       continue;
     }
     // `unset name[sub]' removes a single array element (or the whole array for
@@ -1334,7 +1357,31 @@ int bi_unset(Shell &sh, const std::vector<std::string> &argv) {
       // literal text stands (a lone `"' stays `"').
       std::string ucompat = sh.get("BASH_COMPAT");
       long ucv = ucompat.empty() ? 99 : std::strtol(ucompat.c_str(), nullptr, 10);
-      if (bit != sh.vars.end() && bit->second.kind == VarKind::Assoc &&
+      // ... and ONLY when the raw word QUOTED the brackets themselves
+      // (`unset 'a[$var]'' / `unset "a[\$x]"'): then the word expansion
+      // left the subscript untouched and unset performs it.  With unquoted
+      // brackets (`unset a["$key"]') the word expansion already resolved
+      // the subscript -- quoted parts stayed literal -- and it is final
+      // (quotearray5.sub vs assoc9.sub).
+      bool bracket_quoted = true;  // no provenance: keep the expanding path
+      if (i < sh.raw_args.size() && !sh.raw_args[i].text.empty()) {
+        const std::string &rw = sh.raw_args[i].text;
+        bool rsq = false, rdq = false;
+        bracket_quoted = false;
+        for (size_t rk = 0; rk < rw.size(); rk++) {
+          char rc = rw[rk];
+          if (rsq) {
+            if (rc == '\'') rsq = false;
+            else if (rc == '[') { bracket_quoted = true; rk = rw.size(); }
+            continue;
+          }
+          if (rc == '\\') { rk++; continue; }
+          if (rc == '\'') { rsq = true; continue; }
+          if (rc == '"') { rdq = !rdq; continue; }
+          if (rc == '[') { bracket_quoted = rdq; break; }
+        }
+      }
+      if (bit != sh.vars.end() && bit->second.kind == VarKind::Assoc && bracket_quoted &&
           !expand_once_on(sh) && !(ucv > 0 && ucv <= 51) && sub != "@" && sub != "*") {
         Expander uex(sh);
         std::string esub = uex.expand_no_split(sub);
@@ -6685,6 +6732,15 @@ struct CondEval {
     }
     // word [ binop word ]
     if (t[i].type != Tok::Word) return false;
+    std::string lhs_raw = t[i].text;
+    // A `]' inside an expanded subscript splits the token: rejoin until the
+    // `[' closes (`assoc[$key]' with key='x],b[...' -- quotearray1.sub).
+    while (lhs_raw.find('[') != std::string::npos &&
+           skip_subscript(lhs_raw, lhs_raw.find('[')) == std::string::npos &&
+           i + 1 < t.size() && t[i + 1].type == Tok::Word) {
+      lhs_raw += t[i + 1].text;
+      i++;
+    }
     std::string lhs = expand(t[i].text);
     i++;
     // binary operator
@@ -6733,9 +6789,40 @@ struct CondEval {
         // The [[ ]] arithmetic comparators evaluate each side as an arithmetic
         // expression (so `-eq 4+3' means 7), reporting a malformed one with
         // bash's `[[: EXPR: ...' diagnostic rather than silently reading 0.
-        bool aok = true;
         // A malformed [[ arithmetic operand is SILENT in bash (the failed
         // side compares as 0): `[[ assoc[$badkey] -eq ... ]]' prints nothing.
+        // Each side goes through the ARITH-context expansion so a `NAME[...]'
+        // subscript is copied raw and expanded exactly once by the evaluator
+        // -- keys containing `]'/`[' or $(...) resolve like (( )) operands
+        // (quotearray1.sub) -- falling back to the plain path on failure.
+        {
+          // The [[ ]] tokenizer splits `assoc[$key]' at a `]' INSIDE the
+          // expanded key, so rejoin the pieces of an unclosed subscript
+          // before evaluating (bash tokenizes the raw text and expands the
+          // subscript once, inside the evaluator).
+          auto rejoin = [&](std::string s) {
+            while (s.find('[') != std::string::npos &&
+                   skip_subscript(s, s.find('[')) == std::string::npos && !at_end()) {
+              s += t[i].text;
+              i++;
+            }
+            return s;
+          };
+          std::string lraw = lhs_raw, rraw = rejoin(rhs_raw);
+          Expander cex(sh);
+          std::string la = cex.expand_arith(lraw);
+          bool lok = true;
+          // expand_subs=1: the evaluator expands a raw-copied NAME[...]
+          // subscript exactly once, so keys holding `]'/`['/$(...) resolve.
+          long lv = static_cast<long>(eval_arith_msg(sh, la, "[[", &lok, /*expand_subs=*/1));
+          if (lok) {
+            std::string ra = cex.expand_arith(rraw);
+            bool rok = true;
+            long rv = static_cast<long>(eval_arith_msg(sh, ra, "[[", &rok, /*expand_subs=*/1));
+            if (rok) return int_cmp(op, lv, rv);
+          }
+        }
+        bool aok = true;
         long l = static_cast<long>(eval_arith(sh, lhs, &aok));
         long r = static_cast<long>(eval_arith(sh, expand(rhs_raw), &aok));
         return int_cmp(op, l, r);
