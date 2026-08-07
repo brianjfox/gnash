@@ -2076,8 +2076,20 @@ int Shell::run_script_lines(const std::string &text) {
     // character, not a line continuation.  In an unquoted here-document bash
     // still splices `\<newline>' (before even checking for the delimiter), so
     // only suppress the continuation for a quoted delimiter.
+    // A pending here-document with a QUOTED delimiter makes a trailing `\'
+    // literal body text.  in_heredoc reflects the PREVIOUS parse, so also ask
+    // the parse of the text INCLUDING this line -- the `<<' may have been read
+    // only now (`x=$(cat <<'"'"'EOT'"'"'' then a body line -- comsub4.sub).
+    bool hd_quoted_now = in_heredoc && in_heredoc_quoted;
+    if (nbs % 2 == 1 && !hd_quoted_now) {
+      ParseResult hc = aliases_active()
+                           ? parse_with_aliases(pending, aliases, global_aliases,
+                                                suffix_aliases, opt_posix)
+                           : parse(pending, opt_posix);
+      hd_quoted_now = hc.heredoc_eof && hc.heredoc_eof_quoted;
+    }
     if (nbs % 2 == 1 && !squote_backslash_literal(pending) && !ends_in_comment(pending) &&
-        !(in_heredoc && in_heredoc_quoted)) {
+        !hd_quoted_now) {
       pending.pop_back();
       cont_bslash = true;
       continue;

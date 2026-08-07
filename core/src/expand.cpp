@@ -1134,7 +1134,8 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
     // knows case patterns (`$(case x in in|esac) ...;; esac)'), comments,
     // and here-documents; fall back to the plain balanced scan if it calls
     // the span unterminated.
-    size_t end = comsub_span_end(t, i + 1);
+    size_t end = sh_.aliases_active() ? comsub_span_end_aliased(t, i + 1, sh_.aliases)
+                                      : comsub_span_end(t, i + 1);
     end = (end == std::string::npos) ? scan_balanced(t, i + 1, '(', ')') : end - 1;
     if (end != std::string::npos) {
       std::string inner = t.substr(i + 2, end - (i + 2));

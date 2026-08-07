@@ -68,6 +68,9 @@ struct Lexer {
   std::size_t n;
   std::vector<Token> out;
   std::vector<Pending> pending;
+  // Alias table used ONLY to recognize `case'/`esac' through one alias level
+  // while scanning a substitution span (see comsub_span_end_aliased).
+  const std::map<std::string, std::string> *span_aliases = nullptr;
   // Heredocs pending when a $(...) closed mid-line (bash warns `command
   // substitution: N unterminated here-document'); converted into comsub
   // Pending entries when the containing word token lands.
@@ -159,7 +162,7 @@ struct Lexer {
   }
   void scan_paren(std::string &w, bool comsub_ctx = false) {  // pos at '('
     int depth = 0;
-    struct PHd { std::string delim; bool strip; int depth; };
+    struct PHd { std::string delim; bool strip; int depth; bool quoted; };
     std::vector<PHd> paren_heredocs;  // pending heredocs inside the parens
     // A `)' that terminates a `case' pattern (`case x in x)') must not be
     // mistaken for the substitution's closing paren.  Track the paren depth of
@@ -173,10 +176,21 @@ struct Lexer {
     std::string word;             // current unquoted identifier word
     bool word_plain = true;       // word is only identifier chars (a keyword?)
     bool saw_word = false;        // any word content since the last delimiter
+    auto kw = [&](const std::string &w2) -> std::string {
+      if (!span_aliases) return w2;
+      auto it = span_aliases->find(w2);
+      if (it == span_aliases->end()) return w2;
+      std::string v = it->second;
+      while (!v.empty() && (v.back() == ' ' || v.back() == '\t')) v.pop_back();
+      size_t s = v.find_first_not_of(" \t");
+      if (s != std::string::npos) v = v.substr(s);
+      return (v == "case" || v == "esac") ? v : w2;
+    };
     auto boundary = [&]() {
       if (saw_word) {
-        if (cmd_pos && word_plain && word == "case") case_stack.push_back(depth);
-        else if (word_plain && word == "esac" && !case_stack.empty() && !after_pipe)
+        std::string word_kw = kw(word);
+        if (cmd_pos && word_plain && word_kw == "case") case_stack.push_back(depth);
+        else if (word_plain && word_kw == "esac" && !case_stack.empty() && !after_pipe)
           // `esac' closes the case even out of command position: after a
           // stray `done' (`$(case x in x) ;; x) done esac)') bash's scanner
           // still ends the case body and finds the substitution's closer,
@@ -230,24 +244,27 @@ struct Lexer {
         if (strip_tabs) { w += '-'; pos++; }
         while (pos < n && (in[pos] == ' ' || in[pos] == '\t')) { w += in[pos]; pos++; }
         std::string delim;
+        bool dquoted = false;
         while (pos < n && !std::isspace(static_cast<unsigned char>(in[pos])) &&
                !std::strchr(";&|()<>", in[pos])) {
           char dc = in[pos];
           if (dc == '\'' || dc == '"') {
+            dquoted = true;
             char q = dc;
             w += in[pos++];
             while (pos < n && in[pos] != q) { delim += in[pos]; w += in[pos]; pos++; }
             if (pos < n) { w += in[pos]; pos++; }
             continue;
           }
-          if (dc == '\\' && pos + 1 < n) { w += dc; pos++; dc = in[pos]; }
+          if (dc == '\\' && pos + 1 < n) { dquoted = true; w += dc; pos++; dc = in[pos]; }
           delim += dc;
           w += dc;
           pos++;
         }
         // Only depth 1 is a real here-document: `<<'/`>>' at depth 2 inside
         // `$((...))' are the arithmetic shifts (multiline $(( )) bodies).
-        if (!delim.empty() && depth == 1) paren_heredocs.push_back({delim, strip_tabs, depth});
+        if (!delim.empty() && depth == 1)
+          paren_heredocs.push_back({delim, strip_tabs, depth, dquoted});
         saw_word = true;
         word_plain = false;
       } else if (c == ';' || c == '&' || c == '|' || c == '\n') {
@@ -286,7 +303,18 @@ struct Lexer {
               w += line;
               if (had_nl) { w += '\n'; pos++; }
               if (cmp == hd.delim) break;
-              if (!had_nl) break;
+              if (!had_nl) {
+                // Input ended inside the body: the command is incomplete and
+                // the reader must know the delimiter's quoting (a trailing
+                // `\' in a QUOTED body is literal, not a continuation).
+                if (!heredoc_eof) {
+                  heredoc_eof = true;
+                  heredoc_eof_delim = hd.delim;
+                  heredoc_eof_line = line_for(pos);
+                  heredoc_eof_quoted = hd.quoted;
+                }
+                break;
+              }
             }
           }
           paren_heredocs.clear();
@@ -326,7 +354,21 @@ struct Lexer {
         pos++;
       }
     } while (pos < n && depth > 0);
-    if (depth > 0) { unterminated = true; if (!unterm_close) unterm_close = ')'; }
+    if (depth > 0) {
+      unterminated = true;
+      if (!unterm_close) unterm_close = ')';
+      // Input ended with the substitution still open and a here-document
+      // registered inside it: the reader must know a BODY is pending (and
+      // its delimiter's quoting) before it sees any body line, so a trailing
+      // `\' in a quoted body is literal rather than a line continuation
+      // (comsub4.sub).
+      if (!paren_heredocs.empty() && !heredoc_eof) {
+        heredoc_eof = true;
+        heredoc_eof_delim = paren_heredocs.front().delim;
+        heredoc_eof_line = line_for(pos);
+        heredoc_eof_quoted = paren_heredocs.front().quoted;
+      }
+    }
     // The substitution closed on the same line with here-documents still
     // pending: carry them out so their bodies come from the lines after the
     // full command (spliced back in before the closer), with bash's warning.
@@ -896,10 +938,22 @@ std::size_t comsub_span_end(const std::string &text, std::size_t open_pos) {
   return lx.unterminated ? std::string::npos : lx.pos;
 }
 
+std::size_t comsub_span_end_aliased(const std::string &text, std::size_t open_pos,
+                                    const std::map<std::string, std::string> &aliases) {
+  Lexer lx{text};
+  lx.pos = open_pos;
+  lx.span_aliases = &aliases;
+  std::string dummy;
+  lx.scan_paren(dummy);
+  return lx.unterminated ? std::string::npos : lx.pos;
+}
 
-std::vector<Token> tokenize(const std::string &input, bool posix_mode) {
+
+std::vector<Token> tokenize(const std::string &input, bool posix_mode,
+                            const std::map<std::string, std::string> *span_aliases) {
   Lexer lx(input);
   lx.posix = posix_mode;
+  lx.span_aliases = span_aliases;
   lx.run();
   return std::move(lx.out);
 }

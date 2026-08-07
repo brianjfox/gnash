@@ -1139,6 +1139,15 @@ struct Parser {
       res.error = cl ? std::string("unexpected EOF while looking for matching `") + cl + "'"
                      : std::string("unterminated quoted string or substitution");
       res.error_line = toks.back().line;
+      // An unterminated span may still have a here-document pending inside
+      // it; the reader needs the delimiter's quoting to decide whether a
+      // trailing `\' is a line continuation (comsub4.sub).
+      if (toks.back().heredoc_eof) {
+        res.heredoc_eof = true;
+        res.heredoc_eof_delim = toks.back().heredoc_eof_delim;
+        res.heredoc_eof_line = toks.back().heredoc_eof_line;
+        res.heredoc_eof_quoted = toks.back().heredoc_eof_quoted;
+      }
       return res;
     }
     newline_list();
@@ -1471,8 +1480,21 @@ static AliasExpansion alias_splice_text(const std::string &input,
 // in x) ;; x) done esac)' -> "near unexpected token `done' while ...").
 // Spans starting `$((' are skipped (arithmetic or `$( (subshell' -- both
 // validated elsewhere); quoted (') and escaped `$(' are literal.
+ParseResult parse_with_aliases(const std::string &input,
+                               const std::map<std::string, std::string> &aliases,
+                               const std::map<std::string, std::string> &global_aliases,
+                               const std::map<std::string, std::string> &suffix_aliases,
+                               bool posix_mode);
+
+struct AliasTables {
+  const std::map<std::string, std::string> *aliases;
+  const std::map<std::string, std::string> *global_aliases;
+  const std::map<std::string, std::string> *suffix_aliases;
+};
+
 static bool validate_comsubs(const std::vector<Token> &toks, bool posix_mode,
-                             ParseResult &res, int depth) {
+                             ParseResult &res, int depth,
+                             const AliasTables *at = nullptr) {
   if (depth > 16) return true;
   for (const Token &t : toks) {
     if (t.type != Tok::Word) continue;
@@ -1487,12 +1509,18 @@ static bool validate_comsubs(const std::vector<Token> &toks, bool posix_mode,
       if (i + 2 < w.size() && w[i + 2] == '(') { i++; continue; }  // $(( form
       // The lexer's own scanner finds the closer (case patterns, quotes,
       // comments, and here-documents included).
-      std::size_t jend = comsub_span_end(w, i + 1);
+      std::size_t jend = at ? comsub_span_end_aliased(w, i + 1, *at->aliases)
+                            : comsub_span_end(w, i + 1);
       if (jend == std::string::npos) break;  // unterminated: already flagged
       size_t j = jend - 1;  // the `)'
       std::string inner = w.substr(i + 2, j - (i + 2));
       if (inner.find_first_not_of(" \t\n") == std::string::npos) { i = j; continue; }
-      ParseResult ir = parse(inner, posix_mode);
+      // bash parses substitution content with ALIASES ACTIVE (posix mode
+      // requires it), so `$( switch foo in foo) ... esac )' with
+      // `alias switch=case' is valid (comsub5.sub).
+      ParseResult ir = at ? parse_with_aliases(inner, *at->aliases, *at->global_aliases,
+                                               *at->suffix_aliases, posix_mode)
+                          : parse(inner, posix_mode);
       if (!ir.ok) {
         res.ok = false;
         res.command.reset();
@@ -1529,7 +1557,9 @@ ParseResult parse_with_aliases(const std::string &input,
                                bool posix_mode) {
   AliasExpansion ax =
       alias_splice_text(input, aliases, global_aliases, suffix_aliases, posix_mode);
-  std::vector<Token> toks = tokenize(ax.text, posix_mode);
+  // The substitution scanner resolves `case'/`esac' through one alias level,
+  // so a `$( switch x in y) ...;; esac )' span ends at the right `)'.
+  std::vector<Token> toks = tokenize(ax.text, posix_mode, &aliases);
   if (ax.changed) {
     // Tokens report the line of the byte they start at: original bytes keep
     // their physical line, spliced bytes the invoking word's line.  The Eof
@@ -1541,6 +1571,9 @@ ParseResult parse_with_aliases(const std::string &input,
     }
   }
   Parser p(std::move(toks));
+  AliasTables at{&aliases, &global_aliases, &suffix_aliases};
+  ParseResult pre;
+  if (!validate_comsubs(p.toks, posix_mode, pre, 0, &at)) return pre;
   return p.run();
 }
 

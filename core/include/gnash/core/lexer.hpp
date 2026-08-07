@@ -11,6 +11,7 @@
 #ifndef GNASH_CORE_LEXER_HPP
 #define GNASH_CORE_LEXER_HPP
 
+#include <map>
 #include <string>
 #include <vector>
 
@@ -84,7 +85,16 @@ const char *tok_name(Tok t);
 // (quote/case/comment/heredoc-aware); npos when unterminated.
 std::size_t comsub_span_end(const std::string &text, std::size_t open_pos);
 
-std::vector<Token> tokenize(const std::string &input, bool posix_mode = false);
+// Same, but resolving one level of ALIAS for the `case'/`esac' keywords: bash
+// expands aliases while scanning substitution content, so `alias switch=case'
+// makes `$( switch x in y) ...;; esac )' scan correctly (comsub5.sub).  Pass
+// the shell's alias table; names whose expansion is exactly `case' or `esac'
+// are treated as that keyword.
+std::size_t comsub_span_end_aliased(const std::string &text, std::size_t open_pos,
+                                    const std::map<std::string, std::string> &aliases);
+
+std::vector<Token> tokenize(const std::string &input, bool posix_mode = false,
+                            const std::map<std::string, std::string> *span_aliases = nullptr);
 
 }  // namespace gnash::core
 
