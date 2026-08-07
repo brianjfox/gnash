@@ -915,7 +915,13 @@ int Executor::run(const Command *c) {
   // if/while/for, or function body -- whose own commands already fired it.
   if (st != 0 && sh_.errexit_suppress == 0 && !unwinding() &&
       !(c->flags & CMD_INVERT_RETURN)) {
-    if (dynamic_cast<const Subshell *>(c)) sh_.run_err_trap(st);
+    // A subshell is a process boundary; `[[ ]]' and `(( ))' are leaves that
+    // failed on their own account.  The transparent wrappers -- group, if,
+    // loop, function body -- stay silent, since the commands inside them
+    // already fired it.
+    if (dynamic_cast<const Subshell *>(c) || dynamic_cast<const CondCommand *>(c) ||
+        dynamic_cast<const ArithCommand *>(c))
+      sh_.run_err_trap(st);
     if (sh_.opt_errexit) { sh_.exiting = true; sh_.exit_status = st; }
   }
   return st;
@@ -1151,8 +1157,10 @@ std::string temp_assign_name(Shell &sh, const std::string &name) {
 int Executor::run_simple(const SimpleCommand *c) {
   if (c->line > 0) sh_.cur_lineno = sh_.lineno_base + c->line;  // $LINENO
   // $BASH_COMMAND tracks the command currently executing (bash sets it before
-  // every command, not only inside a DEBUG trap).
-  sh_.bash_command = to_string(c);
+  // every command, not only inside a DEBUG trap) -- except while a trap body
+  // runs, where it stays the command that TRIGGERED the trap for the whole
+  // body, so the handler can report what failed.
+  if (!sh_.in_err_trap) sh_.bash_command = to_string(c);
   // Consume the exec-in-place permission for *this* command up front, so it
   // applies only to a direct external here -- never to commands that a builtin
   // (eval/source) or function invoked by this command goes on to run.
@@ -1943,6 +1951,9 @@ int Executor::run_coproc(const CoprocCommand *c) {
 }
 
 int Executor::run_subshell(const Subshell *c) {
+  // A subshell is a leaf for $BASH_COMMAND too: it is what the ERR trap
+  // reports when the subshell fails.
+  if (!sh_.in_err_trap) sh_.bash_command = to_string(c);
   pid_t pid = fork();
   if (pid == 0) {
     sh_.job_control = false;  // the subshell runs as one unit; no nested tty control
@@ -2362,6 +2373,9 @@ int Executor::run_funcdef(const FunctionDef *c) {
 }
 
 int Executor::run_cond(const CondCommand *c) {
+  // A conditional is a leaf command, not a wrapper: like a simple command it
+  // sets $BASH_COMMAND and, failing, fires the ERR trap.
+  sh_.bash_command = to_string(c);
   // Minimal [[ ]] evaluation delegated to the test builtin semantics via a
   // small dispatch here.  For now, evaluate simple `a OP b`, unary, and !/&&/||
   // by reusing the expression string tokens is complex; approximate with the
@@ -2373,6 +2387,7 @@ int Executor::run_cond(const CondCommand *c) {
 }
 
 int Executor::run_arith(const ArithCommand *c) {
+  sh_.bash_command = to_string(c);  // a leaf command, as `[[ ]]' is
   bool ok = true;
   Expander ex(sh_);  // expand ${#arr[@]} etc. before arithmetic evaluation
   std::string e = ex.expand_arith(c->expression);

@@ -355,11 +355,13 @@ void Shell::run_err_trap(int status) {
   // (redir12.sub's \`(trap ... ERR; while ...)').
   if (!opt_functrace && in_function()) return;
   in_err_trap = true;
+  std::string saved_cmd = bash_command;  // restored below; frozen during the body
   int saved = last_status;
   last_status = status;  // $? inside the ERR trap is the failing command's status
   std::string body = it->second;
   run_string(body);
   last_status = saved;
+  bash_command = saved_cmd;
   in_err_trap = false;
 }
 
