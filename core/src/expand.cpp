@@ -1137,6 +1137,21 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
     size_t end = sh_.aliases_active() ? comsub_span_end_aliased(t, i + 1, sh_.aliases)
                                       : comsub_span_end(t, i + 1);
     end = (end == std::string::npos) ? scan_balanced(t, i + 1, '(', ')') : end - 1;
+    if (end == std::string::npos && !heredoc) {
+      // An unterminated `$(' reaching expansion (a quoted one inside a
+      // ${...} operand, where single quotes are literal) is bash's
+      // command-substitution parse error, and the command aborts
+      // (braces.tests).
+      // bash's prefix names the failing context and the line where the
+      // substitution's text ran out (its own last line).
+      int nl = static_cast<int>(std::count(t.begin() + static_cast<long>(i), t.end(), '\n'));
+      std::fprintf(stderr, "%s: command substitution: line %d: "
+                           "unexpected EOF while looking for matching `)'\n",
+                   sh_.shell_name.c_str(), sh_.cur_lineno + nl + 2);
+      sh_.arith_error = true;
+      i = t.size();
+      return;
+    }
     if (end != std::string::npos) {
       std::string inner = t.substr(i + 2, end - (i + 2));
       int st = 0;
@@ -3570,8 +3585,24 @@ std::vector<std::string> brace_expand(const std::string &text) {
                          std::isalpha(static_cast<unsigned char>(a[0])) &&
                          std::isalpha(static_cast<unsigned char>(b[0]))) {
                 char ca = a[0], cb = b[0];
-                if (ca <= cb) for (int v = ca; v <= cb; v += step) items.push_back(std::string(1, static_cast<char>(v)));
-                else for (int v = ca; v >= cb; v -= step) items.push_back(std::string(1, static_cast<char>(v)));
+                // A character range yields LITERAL characters: bash brace-
+                // expands after parsing, so a `$', backquote, or quote in the
+                // range is never re-scanned as syntax.  Escape those here so
+                // the expander treats them as data (`{Z..a}' -- braces.tests).
+                auto lit = [](int v) {
+                  std::string s;
+                  char c2 = static_cast<char>(v);
+                  // A backslash is quote-removed to nothing, but the field
+                  // survives (bash prints an empty word); an empty pair of
+                  // quotes reproduces that in both bare and joined contexts.
+                  if (c2 == '\\') return std::string("\"\"");
+                  if (c2 == '$' || c2 == '`' || c2 == '"' || c2 == '\'' || c2 == '!')
+                    s += '\\';
+                  s += c2;
+                  return s;
+                };
+                if (ca <= cb) for (int v = ca; v <= cb; v += step) items.push_back(lit(v));
+                else for (int v = ca; v >= cb; v -= step) items.push_back(lit(v));
               }
             }
           }
