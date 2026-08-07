@@ -204,6 +204,27 @@ int wait_job(Shell::Job &j) {
 }
 }  // namespace
 
+// bash's coproc_reap(): once the coprocess has been reaped its NAME and
+// NAME_PID variables go away.  NAME_PID is unbound outright -- a readonly one
+// disappears silently -- while NAME goes through the ordinary unset, so a
+// readonly array reports and survives.
+void Shell::reap_coproc() {
+  if (coproc_pid == 0) return;
+  for (const auto &j : jobs)
+    for (long p : j.pids)
+      if (p == coproc_pid && !j.done) return;  // still running
+  std::string nm = coproc_name;
+  coproc_name.clear();
+  coproc_pid = 0;
+  unset(nm + "_PID", /*force=*/true, /*noref=*/true);
+  auto it = vars.find(nm);
+  if (it != vars.end() && it->second.readonly)
+    std::fprintf(stderr, "%s%s: cannot unset: readonly variable\n", err_prefix().c_str(),
+                 nm.c_str());
+  else
+    unset(nm, false, true);
+}
+
 int Shell::foreground_job(Job &j, bool cont) {
   if (job_control) tcsetpgrp(job_terminal, static_cast<pid_t>(j.pgid));
   if (cont) {
@@ -216,6 +237,7 @@ int Shell::foreground_job(Job &j, bool cont) {
     j.running = true;
   }
   int st = wait_job(j);
+  reap_coproc();
   if (job_control) {
     tcsetpgrp(job_terminal, static_cast<pid_t>(shell_pgid));
   }
@@ -242,6 +264,7 @@ int Shell::wait_for_pid(long pid) {
   for (auto &j : jobs)
     for (long p : j.pids)
       if (p == pid) { j.done = true; j.running = false; j.status = rc; }
+  reap_coproc();
   return rc;
 }
 
@@ -358,6 +381,7 @@ int Shell::wait_all() {
   int wst;
   while (waitpid(-1, &wst, WNOHANG) > 0) note_child_reaped();  // reap exited stragglers
   end_interruptible_wait();
+  reap_coproc();
   // bash's `wait' with no operands removes every terminated job it reaped.
   remove_jobs_if([](const Job &j) { return j.done; });
   // `wait' with no operands always returns 0 (`f1 & wait' is 0 even though

@@ -1928,8 +1928,15 @@ int Executor::run_coproc(const CoprocCommand *c) {
   std::vector<std::pair<std::optional<std::string>, std::string>> elems;
   elems.emplace_back(std::string("0"), std::to_string(read_fd));
   elems.emplace_back(std::string("1"), std::to_string(write_fd));
+  // A readonly NAME stops the whole thing: bash reports the array assignment
+  // and never goes on to NAME_PID.
+  auto nit = sh_.vars.find(sh_.deref(name));
+  bool name_ro = nit != sh_.vars.end() && nit->second.readonly;
   sh_.array_assign(name, elems, false, false);
-  sh_.set(name + "_PID", std::to_string(pid));
+  if (!name_ro) sh_.set(name + "_PID", std::to_string(pid));
+  // Remember it so the variables go away once the coprocess is reaped.
+  sh_.coproc_name = name;
+  sh_.coproc_pid = pid;
   return (sh_.last_status = 0);
 }
 
