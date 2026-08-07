@@ -1170,6 +1170,10 @@ int Executor::run_simple(const SimpleCommand *c) {
     ~ProcsubGuard() { s.reap_procsubs(base); }
   } psg{sh_, sh_.procsubs.size()};
   std::vector<std::pair<std::string, std::string>> assigns;
+  // The first assignment that could not be made (readonly target, invalid
+  // nameref value).  Replaying earlier assignments to expand a later RHS
+  // reports it, so remember which one it was and do not report it twice.
+  size_t first_bad_assign = std::string::npos;
   std::vector<Assign> pending_elem;  // subscripted prefix assigns, decided below
   std::vector<std::string> argv;
   std::vector<Shell::RawArg> raw_prov;
@@ -1229,11 +1233,13 @@ int Executor::run_simple(const SimpleCommand *c) {
         // (`A=1 B=$A'): apply the already-collected assignments, expand, then
         // roll them back so command arguments still see the original values.
         std::vector<std::pair<std::string, std::optional<Variable>>> prior;
-        for (const auto &pa : assigns) {
+        for (size_t pi = 0; pi < assigns.size(); pi++) {
+          const auto &pa = assigns[pi];
           auto pv = sh_.vars.find(pa.first);
           prior.push_back({pa.first, pv == sh_.vars.end() ? std::nullopt
                                                           : std::optional<Variable>(pv->second)});
-          sh_.set(pa.first, pa.second);
+          if (!sh_.set(pa.first, pa.second) && first_bad_assign == std::string::npos)
+            first_bad_assign = pi;
         }
         std::string v = ex.expand_assignment(a.value);
         // The traced value is the expanded RHS as written (for `+=' the appended
@@ -1380,8 +1386,23 @@ int Executor::run_simple(const SimpleCommand *c) {
   if (argv.empty()) {
     std::vector<SavedFd> saved;
     apply_redirects(sh_, c->redirects, saved);
-    for (const auto &a : assigns) sh_.set(a.first, a.second);
+    // A failed assignment in a command with NO command word is a fatal
+    // assignment error: bash longjmps out of the current top-level command
+    // list (`RO=z; echo hi' prints nothing, and the abort escapes functions and
+    // loops), while the reader carries on with the next line.  With a command
+    // word (`RO=z echo hi') the command still runs and nothing is abandoned.
+    // Assignments before the failing one still take effect (`a=1 RO=z b=2'
+    // leaves a set and b unset); the rest are abandoned.
+    bool assign_failed = false;
+    for (size_t ai = 0; ai < assigns.size() && !assign_failed; ai++) {
+      if (ai == first_bad_assign) { assign_failed = true; break; }  // already reported
+      if (!sh_.set(assigns[ai].first, assigns[ai].second)) assign_failed = true;
+    }
     restore_fds(saved);
+    if (assign_failed) {
+      sh_.arith_abort = true;
+      return (sh_.last_status = 1);
+    }
     int st = sh_.cmdsub_ran ? sh_.last_cmdsub_status : 0;
     if (c->flags & CMD_INVERT_RETURN) st = st ? 0 : 1;  // a bare `!'
     sh_.last_status = st;
