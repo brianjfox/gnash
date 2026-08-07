@@ -2157,10 +2157,41 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
   // Leading `#' means length-of.
   bool length = false;
   std::string b = body;
-  if (b.size() > 1 && b[0] == '#') { length = true; b = b.substr(1); }
+  if (b.size() > 1 && b[0] == '#') {
+    // `${#X}' is the LENGTH of parameter X only when X really is a parameter
+    // reference; otherwise the `#' is the parameter and the rest an operator
+    // (`${#/a/b}' substitutes on the argument count, `${#@Q}' quotes it).
+    const std::string r = b.substr(1);
+    bool param_ref = r == "@" || r == "*" || r == "#" || r == "?" || r == "-" ||
+                     r == "$" || r == "!";
+    if (!param_ref && !r.empty()) {
+      size_t k = 0;
+      if (std::isdigit(static_cast<unsigned char>(r[0]))) {
+        while (k < r.size() && std::isdigit(static_cast<unsigned char>(r[k]))) k++;
+        param_ref = k == r.size();
+      } else if (std::isalpha(static_cast<unsigned char>(r[0])) || r[0] == '_') {
+        while (k < r.size() && (std::isalnum(static_cast<unsigned char>(r[k])) || r[k] == '_')) k++;
+        param_ref = k == r.size() ||
+                    (r[k] == '[' && !r.empty() && r.back() == ']');  // name[sub]
+      }
+    }
+    if (param_ref) { length = true; b = r; }
+  }
   // ${#@} and ${#*} are the count of positional parameters (like $#), not the
   // character length of the expanded list.
   if (length && (b == "@" || b == "*")) return std::to_string(sh.positional.size());
+  // An operator with no operand after a SPECIAL parameter is incomplete: a
+  // lone `:' never forms one (`${@:}', `${$:}', `${#:}'), and the argument
+  // count rejects the other bare operators too (`${#/}', `${#%}', `${#=}',
+  // `${#^}', `${#,}') -- with an operand they are fine (more-exp.tests).
+  if (!sh.is_zsh() && !length && b.size() == 2 &&
+      !(std::isalnum(static_cast<unsigned char>(b[0])) || b[0] == '_') &&
+      (b[1] == ':' || (b[0] == '#' && std::strchr("/%=^,", b[1]) != nullptr))) {
+    std::fprintf(stderr, "%s${%s}: bad substitution\n", sh.err_prefix().c_str(),
+                 body.c_str());
+    sh.arith_error = true;
+    return std::string();
+  }
 
   // ${!name} indirection and ${!prefix*}/${!prefix@} name listing.  A `['
   // after the name is the ${!arr[@]} keys form, handled by the array path.
