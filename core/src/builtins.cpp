@@ -1440,12 +1440,36 @@ int bi_mapfile(Shell &sh, const std::vector<std::string> &argv) {
     recs.clear();
   if (count > 0 && static_cast<size_t>(count) < recs.size()) recs.resize(count);
 
-  if (!haveO) sh.unset(name);  // default: replace the whole array
+  std::vector<std::pair<std::optional<std::string>, std::string>> elems;
   for (size_t k = 0; k < recs.size(); k++) {
     std::string v = recs[k];
     if (strip && !v.empty() && v.back() == delim) v.pop_back();
-    sh.array_set(name, std::to_string(origin + static_cast<long>(k)), v);
+    elems.emplace_back(std::to_string(origin + static_cast<long>(k)), v);
   }
+  // Without `-O' the whole array is replaced.  Go through array_assign rather
+  // than unsetting first: bash's mapfile creates the array up front
+  // (find_or_make_array_variable) and only then flushes it, so the variable
+  // exists even when the input is empty -- and an unset nameref target is
+  // converted into a real array, with bash's warning, instead of being
+  // silently removed.
+  // mapfile fills an INDEXED array; an existing associative one is refused and
+  // left alone.
+  {
+    auto mit = sh.vars.find(sh.deref(name));
+    if (mit != sh.vars.end() && mit->second.kind == VarKind::Assoc) {
+      std::fprintf(stderr, "%smapfile: %s: not an indexed array\n",
+                   sh.err_prefix().c_str(), name.c_str());
+      return 1;
+    }
+  }
+  // Without `-O' the whole array is replaced.  Create and flush it rather than
+  // unsetting it first: bash's mapfile makes the array up front
+  // (find_or_make_array_variable) and only then empties it, so the variable
+  // exists even when the input is empty, it keeps its attributes, and an unset
+  // nameref target is converted into a real array -- with bash's warning --
+  // instead of being silently removed.
+  if (!haveO) sh.array_assign(name, {}, false, false);
+  for (const auto &e : elems) sh.array_set(name, *e.first, e.second);
   return 0;
 }
 
