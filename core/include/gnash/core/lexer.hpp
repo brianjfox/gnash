@@ -93,8 +93,14 @@ std::size_t comsub_span_end(const std::string &text, std::size_t open_pos);
 std::size_t comsub_span_end_aliased(const std::string &text, std::size_t open_pos,
                                     const std::map<std::string, std::string> &aliases);
 
+// CONT_LINES lists the line numbers of INPUT at which a `\'-newline line
+// continuation was spliced away before parsing.  Each one makes every later
+// line of the source one higher than the text shows, so token line numbers add
+// them back.  Without it a continued line inside a compound command shifts the
+// whole rest of the body (`$LINENO', the DEBUG trap, BASH_LINENO).
 std::vector<Token> tokenize(const std::string &input, bool posix_mode = false,
-                            const std::map<std::string, std::string> *span_aliases = nullptr);
+                            const std::map<std::string, std::string> *span_aliases = nullptr,
+                            const std::vector<int> *cont_lines = nullptr);
 
 }  // namespace gnash::core
 

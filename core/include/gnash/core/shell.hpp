@@ -555,7 +555,11 @@ class Shell {
   std::vector<std::string> environ_block() const;  // NAME=value for exported
 
   // Parse and execute a script; returns the final exit status.
-  int run_string(const std::string &script);
+  // CONT_LINES: see tokenize() in lexer.hpp.  Passed only by the line reader,
+  // which is the one caller that knows where continuations were spliced away;
+  // nested runs (traps, eval, source) parse their own text and must not
+  // inherit it.
+  int run_string(const std::string &script, const std::vector<int> *cont_lines = nullptr);
   // Whether run_string's OWN parse of its input failed (nested runs -- eval,
   // source, traps -- do not leak theirs).  A non-interactive line reader stops
   // reading its input when set, as bash does after a top-level syntax error.

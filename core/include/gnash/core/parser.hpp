@@ -49,7 +49,10 @@ struct ParseResult {
 };
 
 // Parse a complete program.
-ParseResult parse(const std::string &input, bool posix_mode = false);
+// CONT_LINES: see tokenize() in lexer.hpp -- the lines whose `\'-newline
+// continuation was spliced away, so token lines can add them back.
+ParseResult parse(const std::string &input, bool posix_mode = false,
+                  const std::vector<int> *cont_lines = nullptr);
 
 // Parse with alias expansion applied first: regular aliases in command position,
 // zsh global aliases (`alias -g') anywhere, and zsh suffix aliases (`alias -s').
@@ -58,7 +61,8 @@ ParseResult parse_with_aliases(const std::string &input,
                                const std::map<std::string, std::string> &aliases,
                                const std::map<std::string, std::string> &global_aliases = {},
                                const std::map<std::string, std::string> &suffix_aliases = {},
-                               bool posix_mode = false);
+                               bool posix_mode = false,
+                               const std::vector<int> *cont_lines = nullptr);
 
 }  // namespace gnash::core
 

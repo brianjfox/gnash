@@ -87,6 +87,8 @@ struct Lexer {
   bool heredoc_eof_quoted = false;  // that here-doc's delimiter was quoted
   std::size_t line_scanned = 0;  // bytes already counted for line numbering
   int cur_line = 1;              // 1-based line at line_scanned
+  // Lines at which a spliced-away line continuation sat; see lexer.hpp.
+  const std::vector<int> *cont_lines = nullptr;
 
   // Line number of the byte at `start` (pos advances monotonically).
   int line_for(std::size_t start) {
@@ -94,7 +96,16 @@ struct Lexer {
       if (in[line_scanned] == '\n') cur_line++;
       line_scanned++;
     }
-    return cur_line;
+    if (!cont_lines) return cur_line;
+    // Every continuation that joined an EARLIER line pushed this one down by
+    // one physical line; a token on the joining line itself keeps that line,
+    // which is where bash reports the command as starting.
+    int extra = 0;
+    for (int c : *cont_lines) {
+      if (c >= cur_line) break;
+      extra++;
+    }
+    return cur_line + extra;
   }
 
   static bool is_assignment_prefix(const std::string &w) {
@@ -980,10 +991,12 @@ std::size_t comsub_span_end_aliased(const std::string &text, std::size_t open_po
 
 
 std::vector<Token> tokenize(const std::string &input, bool posix_mode,
-                            const std::map<std::string, std::string> *span_aliases) {
+                            const std::map<std::string, std::string> *span_aliases,
+                            const std::vector<int> *cont_lines) {
   Lexer lx(input);
   lx.posix = posix_mode;
   lx.span_aliases = span_aliases;
+  lx.cont_lines = cont_lines;
   lx.run();
   return std::move(lx.out);
 }
