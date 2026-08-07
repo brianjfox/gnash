@@ -1691,6 +1691,24 @@ void Shell::set_personality(const std::string &name) {
     // arrays; virtual_array serves the live alias/hash tables for reads).
     for (const char *nm : {"BASH_ALIASES", "BASH_CMDS"})
       if (!vars.count(nm)) array_assign(nm, {}, false, true);
+    // GROUPS is the supplementary group list, with the REAL gid forced to
+    // element 0: bash prepends it when getgroups() omits it and swaps it
+    // forward when it is merely out of order (initialize_group_array).
+    if (!vars.count("GROUPS")) {
+      long maxg = sysconf(_SC_NGROUPS_MAX);
+      if (maxg <= 0) maxg = NGROUPS_MAX;
+      std::vector<gid_t> g(static_cast<size_t>(maxg));
+      int ng = getgroups(static_cast<int>(maxg), g.data());
+      gid_t rgid = getgid();
+      if (ng <= 0) { g[0] = rgid; ng = 1; }
+      g.resize(static_cast<size_t>(ng));
+      auto at = std::find(g.begin(), g.end(), rgid);
+      if (at == g.end()) g.insert(g.begin(), rgid);
+      else std::iter_swap(g.begin(), at);
+      std::vector<std::pair<std::optional<std::string>, std::string>> gv;
+      for (gid_t id : g) gv.emplace_back(std::nullopt, std::to_string(id));
+      array_assign("GROUPS", gv, false, false);
+    }
   }
 
   // Let an interactive REPL re-apply persona-dependent readline hooks when the
