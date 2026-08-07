@@ -385,6 +385,9 @@ class Shell {
   // --- process substitutions <(...) / >(...) live for one command ---------
   struct ProcSub { long pid; int fd; };
   std::vector<ProcSub> procsubs;
+  // Exit status of already-reaped process-substitution children, so a later
+  // `wait "$!"' can still report it (bash keeps them waitable).
+  std::map<long, int> reaped_procsub_status;
   // Close fds and wait for substitution children added since index `from`.
   void reap_procsubs(size_t from = 0);
 

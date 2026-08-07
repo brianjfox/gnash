@@ -405,7 +405,14 @@ void Shell::reap_procsubs(size_t from) {
   for (size_t k = from; k < procsubs.size(); k++) {
     if (procsubs[k].fd >= 0) close(procsubs[k].fd);
     int st = 0;
-    waitpid(static_cast<pid_t>(procsubs[k].pid), &st, 0);
+    if (waitpid(static_cast<pid_t>(procsubs[k].pid), &st, 0) > 0) {
+      // Remember the status so a later `wait "$!"' can report it: bash keeps
+      // process-substitution children waitable after the command that
+      // created them finishes (procsub1.sub).
+      int rc = WIFEXITED(st) ? WEXITSTATUS(st)
+                             : 128 + (WIFSIGNALED(st) ? WTERMSIG(st) : 0);
+      reaped_procsub_status[procsubs[k].pid] = rc;
+    }
   }
   if (from < procsubs.size()) procsubs.resize(from);
 }
