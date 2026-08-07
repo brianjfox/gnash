@@ -299,6 +299,11 @@ struct Lexer {
         word_plain = false;
       } else if (c == ';' || c == '&' || c == '|' || c == '\n') {
         boundary();
+        // The splice in boundary() can supply the closing `)' from an alias
+        // body (`alias short="echo ok 8 )"').  The span is finished at that
+        // point, so this delimiter belongs to the text AFTER it -- consuming it
+        // would pull the next command into the substitution's word.
+        if (depth == 0) break;
         after_pipe = (c == '|');
         bool was_nl = c == '\n';
         w += c;
@@ -351,6 +356,7 @@ struct Lexer {
         }
       } else if (c == ' ' || c == '\t') {
         boundary();
+        if (depth == 0) break;  // an alias body supplied the closer (see above)
         w += c;
         pos++;
       } else if (c == '#' && !saw_word) {
