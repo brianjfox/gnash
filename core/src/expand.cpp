@@ -2905,7 +2905,13 @@ void Expander::process(const std::string &text, std::string &out, std::string &m
         else if (nx == '\n') { i += 2; }  // line continuation
         else { out += c; mask += '2'; i++; }
       } else if (i + 1 < text.size()) { out += text[i + 1]; mask += '1'; i += 2; }
-      else i++;
+      else {
+        // A backslash with nothing to escape is a literal character (bash:
+        // `echo escape\' prints the backslash -- quote.tests).
+        out += c;
+        mask += '1';
+        i++;
+      }
     } else if (c == '$') {
       expand_dollar(text, i, false, out, mask, heredoc);
     } else if (c == '`') {
