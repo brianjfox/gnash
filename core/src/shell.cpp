@@ -1951,6 +1951,7 @@ static bool ends_in_comment(const std::string &t) {
 
 static bool squote_backslash_literal(const std::string &t) {
   bool squote = false, dquote = false, btick = false;
+  std::vector<bool> dq_stack;  // enclosing double-quote state per `$(' level
   char prev = '\n';  // start of input behaves like just after a newline
   for (size_t i = 0; i < t.size(); i++) {
     char c = t[i];
@@ -1968,6 +1969,22 @@ static bool squote_backslash_literal(const std::string &t) {
       continue;  // the for-loop's ++i steps past the newline
     }
     if (c == '\\') { if (i + 1 < t.size()) i++; prev = 'x'; continue; }
+    // A `$(' starts a fresh quoting context: single quotes are quotes again
+    // even inside the enclosing double quotes (`echo "$(echo 'foo\' ...)"' --
+    // quote.tests), so remember the outer state and restart.
+    if (c == '$' && i + 1 < t.size() && t[i + 1] == '(' && !squote) {
+      dq_stack.push_back(dquote);
+      dquote = false;
+      i++;
+      prev = '(';
+      continue;
+    }
+    if (c == ')' && !squote && !dq_stack.empty()) {
+      dquote = dq_stack.back();
+      dq_stack.pop_back();
+      prev = c;
+      continue;
+    }
     if (c == '\'' && !dquote) squote = true;
     else if (c == '"') dquote = !dquote;
     else if (c == '`') btick = !btick;
@@ -2001,7 +2018,14 @@ int Shell::run_script_lines(const std::string &text) {
     // bash reads file input with a guaranteed trailing newline; without it a
     // here-document whose delimiter is the last line of the file would be
     // (wrongly) reported as delimited by end-of-file.
-    if (pending.back() != '\n') pending += '\n';
+    {
+      // ... except after an odd run of backslashes: the synthetic newline
+      // would turn the final `\' into a line continuation and swallow it,
+      // where bash keeps it literal (`sh -c 'echo escape\'' -- quote.tests).
+      size_t tb = 0;
+      while (tb < pending.size() && pending[pending.size() - 1 - tb] == '\\') tb++;
+      if (pending.back() != '\n' && tb % 2 == 0) pending += '\n';
+    }
     st = run_string(pending);
     lineno_base = 0;
     hist_cur_cmd_index = -1;
@@ -2011,6 +2035,7 @@ int Shell::run_script_lines(const std::string &text) {
   while (pos < text.size() && !exiting && !stdin_source_changed) {
     size_t nl = text.find('\n', pos);
     std::string line = (nl == std::string::npos) ? text.substr(pos) : text.substr(pos, nl - pos);
+    bool line_had_newline = nl != std::string::npos;
     pos = (nl == std::string::npos) ? text.size() : nl + 1;
     lineno++;
 
@@ -2095,8 +2120,12 @@ int Shell::run_script_lines(const std::string &text) {
                            : parse(pending, opt_posix);
       hd_quoted_now = hc.heredoc_eof && hc.heredoc_eof_quoted;
     }
-    if (nbs % 2 == 1 && !squote_backslash_literal(pending) && !ends_in_comment(pending) &&
-        !hd_quoted_now) {
+    // A `\' before a NEWLINE is a line continuation even at end of file
+    // (parser1.sub splices `echo AAA\' + newline into `echo AAA'); a `\'
+    // that ends the input with no newline at all is literal (`sh -c 'echo
+    // escape\'' prints the backslash -- quote.tests).
+    if (nbs % 2 == 1 && line_had_newline && !squote_backslash_literal(pending) &&
+        !ends_in_comment(pending) && !hd_quoted_now) {
       pending.pop_back();
       cont_bslash = true;
       continue;
