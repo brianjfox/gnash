@@ -177,8 +177,14 @@ struct Parser {
       advance();
     else {
       if (eof_from_open()) return;
-      if (is(Tok::Eof)) incomplete = true;
-      fail(std::string("expected `") + w + "'");
+      if (is(Tok::Eof)) {
+        incomplete = true;
+        fail(std::string("expected `") + w + "'");
+        return;
+      }
+      // A real token in the wrong place is bash's "near unexpected token"
+      // (`for z in 1 2 3; done' -> near `done'), not a grammar expectation.
+      fail(std::string("near unexpected token `") + tok_to_text(cur()) + "'");
     }
   }
   void expect(Tok t, const char *name) {

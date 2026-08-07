@@ -1443,9 +1443,14 @@ int bi_unset(Shell &sh, const std::vector<std::string> &argv) {
     // A plain operand (no `[subscript]', handled above) must be a valid
     // identifier: `unset -v a-b' -> `a-b': not a valid identifier (bash).
     if (!valid_identifier(argv[i])) {
-      std::fprintf(stderr, "%sunset: `%s': not a valid identifier\n",
-                   sh.err_prefix().c_str(), argv[i].c_str());
-      ret = 1;
+      // Only `unset -v' reports an invalid identifier; a plain `unset' falls
+      // through to its function-unset attempt and stays silent with status 0
+      // (`unset /bin/sh' -- errors.tests), like the malformed-element case.
+      if (vflag) {
+        std::fprintf(stderr, "%sunset: `%s': not a valid identifier\n",
+                     sh.err_prefix().c_str(), argv[i].c_str());
+        ret = 1;
+      }
       continue;
     }
     // A readonly variable cannot be unset.  Resolve through a nameref (unless

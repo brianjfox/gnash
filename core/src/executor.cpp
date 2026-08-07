@@ -2062,8 +2062,11 @@ int Executor::run_for(const ForCommand *c) {
         break;
       } else
         vit->second.value = item;
-    } else {
-      sh_.set(c->var, item);
+    } else if (!sh_.set(c->var, item)) {
+      // A readonly loop variable aborts the whole loop with status 1, after
+      // ONE diagnostic (bash: `for VAR in 1 2 3' with VAR readonly).
+      st = 1;
+      break;
     }
     st = run(c->body.get());
     if (sh_.break_count) { sh_.break_count--; break; }
