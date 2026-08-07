@@ -36,6 +36,12 @@ class Expander {
   // characters stay active.
   std::string expand_pattern(const std::string &text);
 
+  // Expand a word used as a REGEX (a `[[ =~ ]]' right-hand side).  Like
+  // expand_pattern, but only those quoted characters that are special in a
+  // POSIX ERE are backslash-escaped: `\a' is not a portable way to write a
+  // literal `a', so escaping everything would change what the pattern means.
+  std::string expand_regex(const std::string &text);
+
   // Expand a word as if inside double quotes (bash-family default words after
   // ${x:-w}/${x:+w}): `$'/backquote expand, backslash escapes the shell
   // specials, single quotes are literal.  Not used under the zsh personality,

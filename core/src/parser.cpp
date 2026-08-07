@@ -140,16 +140,25 @@ struct Parser {
     }
   }
 
-  // Encode a reconstructed =~ regex so it survives re-tokenization and quote
-  // removal in the conditional evaluator: existing backslashes are doubled
-  // (quote removal halves them again) and characters the lexer treats as
-  // operators/separators are backslash-escaped.  `$' is left alone so
-  // variables in the pattern still expand.
+  // Encode a reconstructed =~ regex so it survives re-tokenization in the
+  // conditional evaluator.  A user's backslashes are left exactly as written,
+  // so the expander sees what they quoted and the regex escaping can follow
+  // it: `\(' marks the paren quoted, and a quoted paren matches literally.
+  // Characters the lexer treats as operators or separators are replaced by a
+  // COND_RX_ESC marker plus an ordinary letter, rather than being
+  // backslash-escaped: a backslash here would be indistinguishable from the
+  // user's own quoting once the expander records what was quoted, and quoting
+  // is what decides whether a regex metacharacter matches literally.  `$' is
+  // left alone so variables in the pattern still expand.
   static std::string encode_regex(const std::string &rx) {
     std::string e;
     for (char c : rx) {
-      if (c == '\\') { e += "\\\\"; continue; }
-      if (std::strchr("()|&;<> \t", c)) e += '\\';
+      const char *k = std::strchr(kCondRxRaw, c);
+      if (c != '\0' && k) {
+        e += COND_RX_ESC;
+        e += kCondRxSub[k - kCondRxRaw];
+        continue;
+      }
       e += c;
     }
     return e;
