@@ -216,13 +216,16 @@ void Shell::reap_coproc() {
   std::string nm = coproc_name;
   coproc_name.clear();
   coproc_pid = 0;
-  unset(nm + "_PID", /*force=*/true, /*noref=*/true);
-  auto it = vars.find(nm);
+  // Both names are resolved the way an ordinary `unset' would resolve them, so
+  // `declare -n ref=x; coproc ref' tears down `x' and leaves `ref' alone.
+  std::string tgt = deref(nm);
+  unset(nm + "_PID", /*force=*/true, /*noref=*/false);
+  auto it = vars.find(tgt);
   if (it != vars.end() && it->second.readonly)
     std::fprintf(stderr, "%s%s: cannot unset: readonly variable\n", err_prefix().c_str(),
                  nm.c_str());
   else
-    unset(nm, false, true);
+    unset(nm, false, false);
 }
 
 int Shell::foreground_job(Job &j, bool cont) {
