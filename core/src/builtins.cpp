@@ -3406,9 +3406,21 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     // target if needed -- e.g. `readonly ref' marks ref's target readonly.  bash
     // resolves the nameref because -n is not present.
     std::string aname = name;
-    if (!nameref && !rm_nameref) {
+    if (!nameref) {
       auto nit = sh.vars.find(name);
-      if (nit != sh.vars.end() && nit->second.nameref) aname = sh.deref(name);
+      if (nit != sh.vars.end() && nit->second.nameref) {
+        // `declare +n NAME' ALONE just strips the reference and leaves the
+        // target alone.  Combined with anything else -- another attribute or
+        // an assignment -- everything but the `+n' applies to the TARGET,
+        // which is created if it does not exist, and only then is the
+        // reference torn down (bash declare.def).
+        bool only_rm_nameref =
+            rm_nameref && eq == std::string::npos && !global && !integer && !readonly &&
+            !exported && !ucase && !lcase && !capcase && !mk_array && !mk_assoc &&
+            !rm_integer && !rm_readonly && !rm_exported && !rm_ucase && !rm_lcase &&
+            !rm_capcase && !rm_array && !rm_assoc;
+        if (!only_rm_nameref) aname = sh.deref(name);
+      }
     }
     // The `readonly'/`export' builtins require a plain identifier target.  A
     // nameref that resolves to an array element (`declare -n ref=var[0];
@@ -3550,12 +3562,15 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     // does allow `+n' to strip the attribute -- bash/ksh93 only forbid it when
     // the nameref cell is non-null (declare.def).  A `+n' on a readonly
     // NON-nameref is a harmless no-op and does not error.
-    if (rm_nameref && v.readonly && v.nameref && !v.value.empty()) {
+    // The `+n' always applies to the NAME as written, even when the rest of
+    // the command was redirected to the reference's target above.
+    Variable &nself = sh.vars[name];
+    if (rm_nameref && nself.readonly && nself.nameref && !nself.value.empty()) {
       std::fprintf(stderr, "%s%s: %s: readonly variable\n",
-                   sh.err_prefix().c_str(), argv[0].c_str(), aname.c_str());
+                   sh.err_prefix().c_str(), argv[0].c_str(), name.c_str());
       ret = 1;
     } else if (rm_nameref) {
-      v.nameref = false;
+      nself.nameref = false;
     }
     if (rm_ucase) v.ucase = false;
     if (rm_lcase) v.lcase = false;
