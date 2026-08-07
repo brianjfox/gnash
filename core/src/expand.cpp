@@ -1200,6 +1200,20 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
                                /*squote_literal=*/dq && sh_.opt_posix);
     if (end != std::string::npos) {
       std::string body = t.substr(i + 2, end - (i + 2));
+      // `${}' names no parameter at all -- bash's `bad substitution'.  Note
+      // that `${ }' is a DIFFERENT construct: whitespace after the brace makes
+      // it a function substitution with an empty body, which is valid and
+      // expands to nothing.  Only the empty body is an error.
+      if (body.empty()) {
+        std::fprintf(stderr, "%s${}: bad substitution\n", sh_.err_prefix().c_str());
+        // arith_error alone, as every other bad substitution here does: bash
+        // abandons the command list for some of these and not others (not in a
+        // here-document body, for one), and gnash does not model that split
+        // yet.  Reporting and failing the command is the part that matters.
+        sh_.arith_error = true;
+        i = end + 1;
+        return;
+      }
 
       // ${@} / ${*}: a bare positional list, identical to $@ / $*.  Handle it
       // here so `"${@}"' keeps its per-parameter field structure rather than
