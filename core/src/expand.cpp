@@ -2603,13 +2603,16 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
     std::string args = rest.substr(1);
     size_t colon2 = length_colon(args);
     bool ok = true;
-    long long off = eval_arith(
-        sh, ex.expand_no_split(colon2 == std::string::npos ? args : args.substr(0, colon2),
-                               false, false),
-        &ok);
+    // Offset and length are ARITHMETIC contexts: expand them the way (( ))
+    // does so a `NAME[...]' subscript is copied raw and expanded exactly once
+    // by the evaluator -- keys holding `]'/`['/$(...) then resolve
+    // (`${string:A[%]:A[$k3]}' with k3=`]' -- quotearray.tests).
+    std::string offtxt = colon2 == std::string::npos ? args : args.substr(0, colon2);
+    long long off = eval_arith_msg(sh, ex.expand_arith(offtxt), "", &ok, /*expand_subs=*/1);
     long long len = -1;
     if (colon2 != std::string::npos)
-      len = eval_arith(sh, ex.expand_no_split(args.substr(colon2 + 1), false, false), &ok);
+      len = eval_arith_msg(sh, ex.expand_arith(args.substr(colon2 + 1)), "", &ok,
+                           /*expand_subs=*/1);
     // Offset and length are counted in characters (bash), not bytes: map them
     // through mb_byteoff so a UTF-8 value slices on code-point boundaries.
     long long n = static_cast<long long>(mb_charlen(val));
