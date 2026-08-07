@@ -2026,6 +2026,17 @@ int Executor::run_loop(const LoopCommand *c) {
   return st;
 }
 
+// bash runs the DEBUG trap for a `for'/`case' command itself, not only for the
+// commands inside it -- and for a loop, once per ITERATION, so a trace shows
+// the header line each time round.  Returns false when the trap asked to skip
+// the command (`return'/`exit' from the body).
+bool Executor::debug_trap_for(const Command *c, int line) {
+  if (!sh_.traps.count("DEBUG") || sh_.in_debug_trap) return true;
+  if (line > 0) sh_.cur_lineno = sh_.lineno_base + line;
+  sh_.run_debug_trap(to_string(c));
+  return !unwinding();
+}
+
 int Executor::run_for(const ForCommand *c) {
   int st = 0;
   if (c->is_select) return run_select(c);
@@ -2079,6 +2090,8 @@ int Executor::run_for(const ForCommand *c) {
         if (!ok) { st = 1; break; }
         if (cv == 0) break;
       }
+      // No header trap here: an arithmetic `for' already fires one per pass
+      // when it evaluates its test expression (see aeval above).
       st = run(c->body.get());
       if (sh_.break_count) { sh_.break_count--; break; }
       // `continue N' with N>1 propagates to the enclosing loop; N==1 runs the
@@ -2107,6 +2120,7 @@ int Executor::run_for(const ForCommand *c) {
   }
   sh_.loop_depth++;
   for (const std::string &item : items) {
+    if (!debug_trap_for(c, c->line)) break;  // the loop header, once per pass
     if (sh_.opt_xtrace) std::fprintf(stderr, "%s\n", xtrace_line.c_str());
     // A nameref loop variable is special: each iteration *retargets* the
     // reference to name ITEM rather than writing ITEM through to its current
@@ -2281,6 +2295,7 @@ int Executor::run_select(const ForCommand *c) {
 }
 
 int Executor::run_case(const CaseCommand *c) {
+  if (!debug_trap_for(c, c->line)) return sh_.last_status;
   Expander ex(sh_);
   std::string word = ex.expand_no_split(c->word.text);
   if (sh_.arith_error) { sh_.arith_error = false; return (sh_.last_status = 1); }
@@ -2393,6 +2408,7 @@ int Executor::run_cond(const CondCommand *c) {
 
 int Executor::run_arith(const ArithCommand *c) {
   sh_.bash_command = to_string(c);  // a leaf command, as `[[ ]]' is
+  if (!debug_trap_for(c, c->line)) return sh_.last_status;
   bool ok = true;
   Expander ex(sh_);  // expand ${#arr[@]} etc. before arithmetic evaluation
   std::string e = ex.expand_arith(c->expression);

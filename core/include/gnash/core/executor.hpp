@@ -35,6 +35,8 @@ class Executor {
   int run_cond(const CondCommand *c);
   int run_arith(const ArithCommand *c);
   int run_coproc(const CoprocCommand *c);
+  // Fire the DEBUG trap for a compound command's own header line.
+  bool debug_trap_for(const Command *c, int line);
 
   // True if a break/continue/return/exit -- or an interactive C-c -- is
   // unwinding the stack.  Honoring g_sigint_received here makes every run()
