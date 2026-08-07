@@ -1505,8 +1505,11 @@ void Shell::export_name(const std::string &n) {
   // value: a previously-unset variable stays unset (bash's att_invisible), so
   // `${NAME+set}' is empty and `declare -p NAME' prints just `declare -x NAME'
   // (no `=').  An existing variable keeps its value and visibility.
-  bool fresh = vars.find(n) == vars.end();
-  Variable &var = vars[n];
+  // `export ref' follows a nameref and exports its TARGET, leaving the nameref
+  // itself unexported (bash's declare_internal resolves the name first).
+  std::string t = deref(n);
+  bool fresh = vars.find(t) == vars.end();
+  Variable &var = vars[t];
   var.exported = true;
   if (fresh) var.invisible = true;
 }

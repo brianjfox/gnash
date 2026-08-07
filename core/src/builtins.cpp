@@ -1456,6 +1456,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
 
 int bi_export(Shell &sh, const std::vector<std::string> &argv) {
   bool funcs = false;
+  bool nflag = false;   // `-n': remove the export attribute instead of adding it
   char array_flag = 0;  // `-a' / `-A': force an indexed/associative array
   int st = 0;
   size_t i = 1;
@@ -1468,7 +1469,8 @@ int bi_export(Shell &sh, const std::vector<std::string> &argv) {
     for (size_t k = 1; k < a.size(); k++) {
       if (a[k] == 'f') funcs = true;
       else if (a[k] == 'a' || a[k] == 'A') array_flag = a[k];
-      else if (a[k] == 'n' || a[k] == 'p') { /* unmodeled here / no-op */ }
+      else if (a[k] == 'n') nflag = true;
+      else if (a[k] == 'p') { /* listing handled by the caller */ }
       else {
         std::fprintf(stderr, "%sexport: -%c: invalid option\n", sh.err_prefix().c_str(), a[k]);
         std::fprintf(stderr, "export: usage: export [-fn] [name[=value] ...] or export -p [-f]\n");
@@ -1522,6 +1524,12 @@ int bi_export(Shell &sh, const std::vector<std::string> &argv) {
       std::vector<std::string> d = {"export", opt, a};
       int r = bi_declare(sh, d, false, false);
       if (r) st = r;
+      // `export -n NAME=VALUE' still performs the assignment; it just does not
+      // leave the name exported.
+      if (!r && nflag) {
+        auto it = sh.vars.find(sh.deref(a.substr(0, eq)));
+        if (it != sh.vars.end()) it->second.exported = false;
+      }
     } else {
       // `export ref' where ref resolves to an array element is rejected like
       // `export a[5]': the resolved `var[0]' is not a valid identifier (bash).
@@ -1530,6 +1538,11 @@ int bi_export(Shell &sh, const std::vector<std::string> &argv) {
         std::fprintf(stderr, "%sexport: `%s': not a valid identifier\n",
                      sh.err_prefix().c_str(), dn.c_str());
         st = 1;
+      } else if (nflag) {
+        // `export -n NAME' clears the export attribute of the nameref's target
+        // without creating anything: an unset name is simply left alone.
+        auto it = sh.vars.find(sh.deref(a));
+        if (it != sh.vars.end()) it->second.exported = false;
       } else
         sh.export_name(a);
     }
