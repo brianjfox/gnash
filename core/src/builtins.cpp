@@ -3497,8 +3497,11 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
                    "%s%s: %s: nameref variable self references not allowed\n",
                    sh.err_prefix().c_str(), argv[0].c_str(), name.c_str());
       ret = 1;
-    } else if (nameref && !v.value.empty() && v.value != name &&
+    } else if (nameref && !v.invisible && v.value != name &&
                !Shell::valid_nameref_target(v.value)) {
+      // An existing but EMPTY value is rejected too (`r=""; declare -n r'):
+      // only a declared-but-unset variable becomes a targetless reference,
+      // which is why this tests visibility rather than emptiness.
       std::fprintf(stderr,
                    "%s%s: `%s': invalid variable name for name reference\n",
                    sh.err_prefix().c_str(), argv[0].c_str(), v.value.c_str());
