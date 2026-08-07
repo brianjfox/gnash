@@ -6296,6 +6296,25 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
             long pp = std::atol(spec.c_str());
             Shell::Job *pj = sh.job_by_spec(spec);
             if (!pj) {
+              // A process-substitution child is waitable too, though it is not
+              // a job: `cat <(exit 123); wait "$!"' reports 123 (procsub1.sub).
+              bool is_procsub = false;
+              for (const auto &ps : sh.procsubs)
+                if (ps.pid == pp) { is_procsub = true; break; }
+              if (is_procsub) {
+                st = sh.wait_for_pid(pp);
+                finished_pid = pp;
+                found = true;
+                continue;
+              }
+              auto rps = sh.reaped_procsub_status.find(pp);
+              if (rps != sh.reaped_procsub_status.end()) {
+                st = rps->second;
+                finished_pid = pp;
+                found = true;
+                sh.reaped_procsub_status.erase(rps);
+                continue;
+              }
               std::fprintf(stderr, "%swait: pid %ld is not a child of this shell\n",
                            sh.err_prefix().c_str(), pp);
               st = 127;

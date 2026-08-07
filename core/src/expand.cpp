@@ -3221,6 +3221,9 @@ std::string spawn_procsub(Shell &sh, const std::string &cmd, bool input) {
   close(input ? fds[1] : fds[0]);
   if (pid < 0) { close(keep); return std::string(); }
   sh.procsubs.push_back({static_cast<long>(pid), keep});
+  // bash sets $! to the process-substitution child, so `cat <(exit 123)'
+  // can be followed by `wait "$!"' (procsub1.sub).
+  sh.last_bg_pid = static_cast<int>(pid);
   return "/dev/fd/" + std::to_string(keep);
 }
 }  // namespace
