@@ -1972,8 +1972,11 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
   }
 
   // With -e bash reads through readline, whose setup dominates a
-  // sub-millisecond timeout: the read times out before seeing any input.
-  if (edit && have_t && timeout > 0.0 && timeout < 0.001) {
+  // sub-millisecond timeout: the read times out before seeing any input --
+  // but only on a TERMINAL.  Off a terminal readline reads the fd directly,
+  // so an already-at-EOF input returns failure (status 1) immediately, with
+  // no timeout at all (read7.sub under the test harness).
+  if (edit && have_t && timeout > 0.0 && timeout < 0.001 && isatty(fd)) {
     for (const std::string &nm : names) sh.set(nm, std::string());
     return 128 + SIGALRM;
   }
@@ -2216,7 +2219,13 @@ bool is_builtin_name(const std::string &n) {
 
 std::vector<std::string> builtin_names_sorted() {
   std::vector<std::string> v;
-  for (int i = 0; kBuiltinNames[i]; i++) v.emplace_back(kBuiltinNames[i]);
+  for (int i = 0; kBuiltinNames[i]; i++) {
+    // `personality' is gnash's own pseudo-builtin: it is not part of bash's
+    // shell_builtins[], so listings (`compgen -b', `complete -A builtin',
+    // `enable') leave it out to stay byte-compatible.
+    if (std::strcmp(kBuiltinNames[i], "personality") == 0) continue;
+    v.emplace_back(kBuiltinNames[i]);
+  }
   std::sort(v.begin(), v.end());
   return v;
 }
