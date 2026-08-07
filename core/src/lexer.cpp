@@ -188,6 +188,36 @@ struct Lexer {
     };
     auto boundary = [&]() {
       if (saw_word) {
+        // An alias whose body carries UNBALANCED parentheses moves the end of
+        // the substitution (`alias nest='('', `alias short='echo ok 8 )''):
+        // bash splices alias text into the input while scanning, so do the
+        // same here -- replace the name in the scanned text with its body and
+        // apply the paren delta.  A BALANCED body is left alone, so the
+        // runtime parse performs its (single) alias expansion.
+        if (cmd_pos && word_plain && span_aliases && !word.empty() &&
+            w.size() >= word.size() &&
+            w.compare(w.size() - word.size(), word.size(), word) == 0) {
+          auto ait = span_aliases->find(word);
+          if (ait != span_aliases->end()) {
+            const std::string &body = ait->second;
+            int delta = 0;
+            bool bsq = false, bdq = false;
+            for (std::size_t bi = 0; bi < body.size(); bi++) {
+              char bc = body[bi];
+              if (bsq) { if (bc == '\'') bsq = false; continue; }
+              if (bc == '\\') { bi++; continue; }
+              if (bc == '\'' && !bdq) { bsq = true; continue; }
+              if (bc == '"') { bdq = !bdq; continue; }
+              if (bdq) continue;
+              if (bc == '(') delta++;
+              else if (bc == ')') delta--;
+            }
+            if (delta != 0) {
+              w.replace(w.size() - word.size(), word.size(), body);
+              depth += delta;
+            }
+          }
+        }
         std::string word_kw = kw(word);
         if (cmd_pos && word_plain && word_kw == "case") case_stack.push_back(depth);
         else if (word_plain && word_kw == "esac" && !case_stack.empty() && !after_pipe)
@@ -357,17 +387,11 @@ struct Lexer {
     if (depth > 0) {
       unterminated = true;
       if (!unterm_close) unterm_close = ')';
-      // Input ended with the substitution still open and a here-document
-      // registered inside it: the reader must know a BODY is pending (and
-      // its delimiter's quoting) before it sees any body line, so a trailing
-      // `\' in a quoted body is literal rather than a line continuation
-      // (comsub4.sub).
-      if (!paren_heredocs.empty() && !heredoc_eof) {
-        heredoc_eof = true;
-        heredoc_eof_delim = paren_heredocs.front().delim;
-        heredoc_eof_line = line_for(pos);
-        heredoc_eof_quoted = paren_heredocs.front().quoted;
-      }
+      // NOTE: a here-document registered but whose BODY has not started is
+      // deliberately not flagged here -- the `\' ending the delimiter word
+      // itself (`<<\EOT\' + `4') is a line continuation that builds the
+      // delimiter `EOT4' (comsub4.sub).  The body-skip loop above flags the
+      // in-body case, which is what the reader needs.
     }
     // The substitution closed on the same line with here-documents still
     // pending: carry them out so their bodies come from the lines after the
