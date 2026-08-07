@@ -1136,8 +1136,13 @@ int Executor::run_pipeline(const Connection *c) {
 std::string temp_assign_name(Shell &sh, const std::string &name) {
   auto it = sh.vars.find(name);
   if (it == sh.vars.end() || !it->second.nameref) return name;
-  std::string t = sh.deref(name);
-  if (t == name || t.find('[') != std::string::npos) return name;
+  // A CIRCULAR chain has no target to resolve to: keep the name as written so
+  // the assignment reports the cycle against it (`v->w->x->v; x=4' warns about
+  // `x'), rather than against whichever link a bounded walk happened to stop
+  // on.
+  bool circular = false;
+  std::string t = sh.deref_ex(name, circular);
+  if (circular || t == name || t.find('[') != std::string::npos) return name;
   return t;
 }
 
