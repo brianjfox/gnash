@@ -71,6 +71,15 @@ class Shell {
   // defaults to 100 and lets $GNASH_NAMEREF_MAX change it, so setting that to 8
   // reproduces bash exactly.
   int nameref_max() const;
+
+  // $BASHLY_CORRECT: gnash's opt-in to bash's exact limits, in the spirit of
+  // $POSIXLY_CORRECT.  It is edge-triggered -- turning it on saves whatever
+  // $GNASH_NAMEREF_MAX held (including "it was unset") and pins the limit to
+  // bash's 8; turning it off puts that state back.  The `strict-bash'
+  // personality is just the bash personality with this switched on.
+  bool bashly_correct = false;
+  std::optional<std::string> saved_nameref_max;  // nullopt: it had been unset
+  void apply_bashly_correct(bool on);
   // The global (pre-function) binding of NAME: when a local scope has shadowed
   // NAME, the saved outer Variable; otherwise the entry in `vars'.  bash
   // resolves a circular nameref to global scope, so a write through one lands
