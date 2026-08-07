@@ -1128,6 +1128,19 @@ int Executor::run_pipeline(const Connection *c) {
   return st;
 }
 
+// bash's assign_in_env(): a temporary assignment whose name is a nameref binds
+// the nameref's TARGET, so `ref=xxx cmd' puts var=xxx in the environment and
+// leaves `ref' itself alone.  A nameref with no target, or one aimed at an
+// array element, keeps its own name (bash's valid_nameref_value rejects an
+// array reference here because the name is used to create a variable directly).
+std::string temp_assign_name(Shell &sh, const std::string &name) {
+  auto it = sh.vars.find(name);
+  if (it == sh.vars.end() || !it->second.nameref) return name;
+  std::string t = sh.deref(name);
+  if (t == name || t.find('[') != std::string::npos) return name;
+  return t;
+}
+
 int Executor::run_simple(const SimpleCommand *c) {
   if (c->line > 0) sh_.cur_lineno = sh_.lineno_base + c->line;  // $LINENO
   // $BASH_COMMAND tracks the command currently executing (bash sets it before
@@ -1253,7 +1266,7 @@ int Executor::run_simple(const SimpleCommand *c) {
                                  (xtrace_rhs.empty() ? std::string()
                                                      : xtrace_quote_word(xtrace_rhs)));
         if (is_arr) sh_.array_set(a.name, "0", v);
-        else assigns.emplace_back(a.name, v);
+        else assigns.emplace_back(temp_assign_name(sh_, a.name), v);
       }
     } else {
       prefix = false;
