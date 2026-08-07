@@ -7126,6 +7126,10 @@ struct CondEval {
   std::vector<Token> t;
   size_t i = 0;
   int synerr = 0;  // forced exit status (2) after a `[[' syntax error, else 0
+  // bash's `noeval': the arm of a `&&'/`||' that cannot change the answer is
+  // PARSED but not evaluated, so its command substitutions never run, its
+  // errors are never reported, and it is not traced.
+  bool noeval = false;
 
   bool is_word(const char *w) { return t[i].type == Tok::Word && t[i].text == w; }
   bool at_end() { return t[i].type == Tok::Eof; }
@@ -7142,6 +7146,22 @@ struct CondEval {
   std::string expand_pat(const std::string &s) {
     Expander ex(sh);
     return ex.expand_pattern(s);
+  }
+  // bash traces a conditional one TERM at a time, as it evaluates it: so
+  // `[[ -n a && -n b ]]' prints two lines, a short-circuited `||' arm prints
+  // none, grouping parentheses never appear, and the implicit `-n' of a bare
+  // `[[ x ]]' does.  Operands are the EXPANDED values, printed raw except that
+  // an empty one shows as ''.
+  void xtrace_term(const std::string &op, const std::string &a1, const std::string &a2,
+                   bool binary, bool invert) {
+    if (noeval || !sh.opt_xtrace) return;
+    std::string ps4 = sh.is_set("PS4") ? sh.get("PS4") : "+ ";
+    Expander xex(sh);
+    std::string pfx = xex.expand_no_split(expand_prompt(sh, ps4), false, false);
+    auto shown = [](const std::string &v) { return v.empty() ? std::string("''") : v; };
+    std::string body = binary ? shown(a1) + " " + op + " " + shown(a2)
+                              : op + " " + shown(a1);
+    std::fprintf(stderr, "%s[[ %s%s ]]\n", pfx.c_str(), invert ? "! " : "", body.c_str());
   }
   // A `=~' right-hand side is a REGEX.  Undo the parser's transport encoding
   // first -- those characters were never quoted by the user -- then expand,
@@ -7166,24 +7186,42 @@ struct CondEval {
 
   bool or_expr() {
     bool v = and_expr();
-    while (t[i].type == Tok::OrOr) { i++; bool r = and_expr(); v = v || r; }
+    while (t[i].type == Tok::OrOr) {
+      i++;
+      bool save = noeval;
+      noeval = noeval || v;  // already true: the right arm cannot change it
+      bool r = and_expr();
+      noeval = save;
+      if (!v) v = r;
+    }
     return v;
   }
   bool and_expr() {
     bool v = primary();
-    while (t[i].type == Tok::AndAnd) { i++; bool r = primary(); v = v && r; }
+    while (t[i].type == Tok::AndAnd) {
+      i++;
+      bool save = noeval;
+      noeval = noeval || !v;  // already false: the right arm cannot change it
+      bool r = primary();
+      noeval = save;
+      if (v) v = r;
+    }
     return v;
   }
-  bool primary() {
-    if (t[i].type == Tok::Word && t[i].text == "!") { i++; return !primary(); }
+  bool primary(bool invert = false) {
+    if (t[i].type == Tok::Word && t[i].text == "!") { i++; return !primary(!invert); }
     if (t[i].type == Tok::Lparen) { i++; bool v = or_expr(); if (t[i].type == Tok::Rparen) i++; return v; }
     // unary -X word
     if (t[i].type == Tok::Word && t[i].text.size() == 2 && t[i].text[0] == '-' &&
         std::isalpha(static_cast<unsigned char>(t[i].text[1]))) {
+      std::string uop = t[i].text;
       char o = t[i].text[1];
       i++;
-      std::string arg = at_end() ? "" : expand(t[i].text);
+      std::string arg_raw = at_end() ? "" : t[i].text;
       if (!at_end()) i++;
+      if (noeval) return false;  // consumed, but this arm does not run
+      std::string arg = expand(arg_raw);
+      xtrace_term(uop, arg, "", false, invert);
       if (o == 'z') return arg.empty();
       if (o == 'n') return !arg.empty();
       if (o == 'v') {  // -v NAME: true if the variable (or array element) is set
@@ -7243,7 +7281,7 @@ struct CondEval {
       lhs_raw += t[i + 1].text;
       i++;
     }
-    std::string lhs = expand(t[i].text);
+    std::string lhs = noeval ? std::string() : expand(t[i].text);
     i++;
     // binary operator
     if (t[i].type == Tok::Word || t[i].type == Tok::Less || t[i].type == Tok::Great) {
@@ -7257,6 +7295,12 @@ struct CondEval {
         i++;
         std::string rhs_raw = at_end() ? "" : t[i].text;
         if (!at_end()) i++;
+        if (noeval) return false;  // consumed, but this arm does not run
+        // The trace shows both operands plainly expanded, whatever expansion
+        // the operator itself goes on to use.  (Under `set -x' a command
+        // substitution in a pattern or regex right operand therefore runs once
+        // more; only the tracing path pays that.)
+        if (sh.opt_xtrace) xtrace_term(op, lhs, expand(rhs_raw), true, invert);
         if (op == "==" || op == "=") {
           std::string pat = expand_pat(rhs_raw);
           std::string p = pat, l = lhs;
@@ -7345,7 +7389,9 @@ struct CondEval {
         return int_cmp(op, l, r);
       }
     }
-    // single argument: non-empty test
+    // single argument: non-empty test.  bash traces it as the `-n' it means.
+    if (noeval) return false;
+    xtrace_term("-n", lhs, "", false, invert);
     return !lhs.empty();
   }
 };
