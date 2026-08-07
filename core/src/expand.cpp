@@ -1284,8 +1284,10 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
                                     : (set && !(colon && null_val));
             if (fire) {
               std::string word = body.substr(opq + 1);
+              // Only `$@'/`${a[@]}' keep field structure inside double quotes;
+              // `$*' joins with IFS[0] (exp9.sub).
               bool has_at = word.find("$@") != std::string::npos ||
-                            word.find("$*") != std::string::npos;
+                            word.find("[@]") != std::string::npos;
               // In double quotes (bash-family), expand the word in double-quote
               // context so backslash escapes and literal quotes behave right;
               // a word with "$@"/"$*" keeps its field structure via process().
@@ -1723,7 +1725,8 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
         };
         // Emit the substituted word (subject to the enclosing quoting).
         auto emit_word = [&]() {
-          bool has_at = word.find("$@") != std::string::npos || word.find("$*") != std::string::npos;
+          bool has_at = word.find("$@") != std::string::npos ||
+                        word.find("[@]") != std::string::npos;
           std::string w = (dq && !sh_.is_zsh() && !has_at) ? expand_dq_word(word)
                                                            : expand_no_split(word);
           char m = dq ? '1' : '0';
@@ -2495,8 +2498,18 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
           sh.array_set(name, sub, w);
           return sh.array_get(name, sub);
         }
+        // A scalar assignment honors the variable's attributes exactly like a
+        // plain `name=w': an integer variable evaluates the word
+        // arithmetically and -u/-l/-c fold its case, and the EXPANSION is the
+        // stored value (`declare -i a; echo ${a:=4+3}' prints 7 -- exp13.sub).
+        auto sit = sh.vars.find(sh.deref(name));
+        if (sit != sh.vars.end() && sit->second.integer) {
+          bool iok = true;
+          w = std::to_string(eval_arith(sh, w, &iok));
+        }
         sh.set(name, w);
-        return w;
+        std::string stored;
+        return sh.get_if_set(name, stored) ? stored : w;
       }
       return val;
     }
@@ -3504,7 +3517,10 @@ std::string Expander::expand_op_word(const std::string &w, bool dq, bool top_lev
     expand_word_fields(w);
     return std::string();  // real content is in op_out_/op_mask_ (op_fields_ set)
   }
-  bool has_at = w.find("$@") != std::string::npos || w.find("$*") != std::string::npos;
+  // Inside double quotes only `$@' (and `${a[@]}') keeps its field structure;
+  // `$*' and `${a[*]}' JOIN with IFS[0] like any other double-quoted splat, so
+  // `"${var-$*}"' is one field (exp9.sub).
+  bool has_at = w.find("$@") != std::string::npos || w.find("[@]") != std::string::npos;
   if (dq && !sh_.is_zsh() && !has_at) return expand_dq_word(w);
   return expand_no_split(w);
 }
