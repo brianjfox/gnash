@@ -419,6 +419,9 @@ class Shell {
   // Unset the coproc variables if its process has been reaped; a no-op while
   // it is still running, or when there is no coproc.
   void reap_coproc();
+  // True for a computed variable that carries bash's att_noassign: assigning to
+  // it succeeds and changes nothing.
+  bool noassign_var(const std::string &n) const;
   // Exit status of the most recent command substitution, so a pure-assignment
   // command (a=$(cmd)) can take its status, as bash does.
   int last_cmdsub_status = 0;
