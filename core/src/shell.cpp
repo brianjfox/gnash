@@ -2376,7 +2376,18 @@ int Shell::run_string(const std::string &script) {
       if (cp != std::string::npos && lineno_base > 0)
         line = line.substr(0, cp + 18) +
                std::to_string(lineno_base + std::atoi(line.c_str() + cp + 18));
-      if (line.compare(0, 14, "unexpected EOF") == 0) {
+      // bash prints its conditional-expression diagnostics, and the
+      // unterminated-EOF ones, without a `syntax error' prefix -- they are
+      // complete sentences already, and a `syntax error near ...' line follows.
+      auto starts = [&line](const char *pfx2) {
+        return line.rfind(pfx2, 0) == 0;
+      };
+      auto bare = [&starts]() {
+        return starts("unexpected EOF") || starts("unexpected token `") ||
+               starts("unexpected argument `") ||
+               starts("syntax error in conditional expression");
+      };
+      if (bare()) {
         std::fprintf(stderr, "%s%s\n", pfx.c_str(), line.c_str());  // no `syntax error'
       } else {
         const char *sep = line.compare(0, 5, "near ") == 0 ? " " : ": ";
@@ -2385,7 +2396,11 @@ int Shell::run_string(const std::string &script) {
       if (nl == std::string::npos) break;
       p0 = nl + 1;
     }
-    if (r.error.compare(0, 5, "near ") == 0 && r.error_line > 0) {
+    // Echo the offending source line whenever a `near ...' line was printed --
+    // it may be the second line of a conditional-expression report.
+    bool has_near = r.error.compare(0, 5, "near ") == 0 ||
+                    r.error.find("\nnear ") != std::string::npos;
+    if (has_near && r.error_line > 0) {
       // Echo the offending source line, as bash does.
       size_t start = 0;
       for (int k = 1; k < r.error_line && start != std::string::npos; k++) {
