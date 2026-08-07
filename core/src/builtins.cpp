@@ -6552,6 +6552,7 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
         // resolved path (bash records the PATH-found path, not the bare name),
         // so ${BASH_SOURCE[0]} lets a script locate itself.  The call line is
         // where `source' appears in the current file.
+        int src_call_line = sh.cur_lineno;  // where `source' appears; see below
         sh.push_src_frame("source", path, sh.cur_lineno, false);
         // A sourced file has its own line numbering starting at 1 ($LINENO, the
         // DEBUG trap, and functions it defines all use the file's own lines).
@@ -6566,6 +6567,20 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
         // shell (bash semantics; e.g. /etc/bashrc does `[ -z "$PS1" ] && return').
         if (sh.returning) { sh.returning = false; st = sh.exit_status; }
         sh.pop_src_frame();
+        // A sourced file is a FUNCTION FRAME to bash: leaving it fires the
+        // DEBUG and RETURN traps, reporting the line `source' was called on --
+        // exactly as leaving a function body re-reports its definition line.
+        // The frame is already popped, so $FUNCNAME names the caller.
+        {
+          sh.cur_lineno = src_call_line;
+          // Only the RETURN trap is fired here: the DEBUG line that precedes it
+          // is the one its own body produces under functrace, exactly as when a
+          // function body returns.
+          auto srt = sh.traps.find("RETURN");
+          if (srt != sh.traps.end() && !srt->second.empty() && sh.opt_functrace &&
+              !sh.in_debug_trap)
+            sh.run_return_trap(st);
+        }
         // Restore the caller's parameters UNLESS the sourced script ran the
         // `set' builtin at top level -- then its parameters stick (bash).
         if (set_pos) {
