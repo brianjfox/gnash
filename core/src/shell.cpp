@@ -2171,6 +2171,11 @@ int Shell::run_script_lines(const std::string &text) {
   int lineno = 0;        // 1-based physical line being read
   int pending_line = 1;  // first line of the accumulating command
   std::string pending;
+  // Lines of `pending' (1-based, in the SPLICED text) where a `\'-newline
+  // continuation was removed.  The text handed to the parser has to stay
+  // spliced -- the lexer, here-documents and substitution scanning all rely on
+  // it -- so the missing physical lines travel alongside instead.
+  std::vector<int> cont_lines;
   bool cont_bslash = false;  // previous line ended in a line continuation
   bool first_line_saved = false;  // this command's first line is in the history
   bool in_heredoc = false;   // the pending command has an open here-document
@@ -2183,6 +2188,7 @@ int Shell::run_script_lines(const std::string &text) {
     in_heredoc = false;
     if (pending.find_first_not_of(" \t\n") == std::string::npos) {
       pending.clear();
+      cont_lines.clear();
       return;
     }
     lineno_base = pending_line - 1;
@@ -2197,10 +2203,11 @@ int Shell::run_script_lines(const std::string &text) {
       while (tb < pending.size() && pending[pending.size() - 1 - tb] == '\\') tb++;
       if (pending.back() != '\n' && tb % 2 == 0) pending += '\n';
     }
-    st = run_string(pending);
+    st = run_string(pending, cont_lines.empty() ? nullptr : &cont_lines);
     lineno_base = 0;
     hist_cur_cmd_index = -1;
     pending.clear();
+    cont_lines.clear();
   };
 
   while (pos < text.size() && !exiting && !stdin_source_changed) {
@@ -2298,6 +2305,10 @@ int Shell::run_script_lines(const std::string &text) {
     if (nbs % 2 == 1 && line_had_newline && !squote_backslash_literal(pending) &&
         !ends_in_comment(pending) && !hd_quoted_now) {
       pending.pop_back();
+      // The join lands on this line of the spliced text; every later line of
+      // the source is one higher than the text will show.
+      cont_lines.push_back(
+          1 + static_cast<int>(std::count(pending.begin(), pending.end(), '\n')));
       cont_bslash = true;
       continue;
     }
@@ -2347,13 +2358,13 @@ bool Shell::aliases_active() const {
          (!aliases.empty() || !global_aliases.empty() || !suffix_aliases.empty());
 }
 
-int Shell::run_string(const std::string &script) {
+int Shell::run_string(const std::string &script, const std::vector<int> *cont_lines) {
   if (is_csh()) return run_csh(*this, script);  // csh is a different language
   had_parse_error = false;
   ParseResult r = aliases_active()
                       ? parse_with_aliases(script, aliases, global_aliases, suffix_aliases,
-                                           opt_posix)
-                      : parse(script, opt_posix);
+                                           opt_posix, cont_lines)
+                      : parse(script, opt_posix, cont_lines);
   if (!r.ok) {
     // bash's format: `NAME: [CONTEXT: ][-c: ]line N: syntax error...' per
     // message line; "near unexpected token" joins without a colon, and the

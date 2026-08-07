@@ -1549,7 +1549,7 @@ ParseResult parse_with_aliases(const std::string &input,
                                const std::map<std::string, std::string> &aliases,
                                const std::map<std::string, std::string> &global_aliases,
                                const std::map<std::string, std::string> &suffix_aliases,
-                               bool posix_mode);
+                               bool posix_mode, const std::vector<int> *cont_lines);
 
 struct AliasTables {
   const std::map<std::string, std::string> *aliases;
@@ -1606,8 +1606,9 @@ static bool validate_comsubs(const std::vector<Token> &toks, bool posix_mode,
   return true;
 }
 
-ParseResult parse(const std::string &input, bool posix_mode) {
-  Parser p(tokenize(input, posix_mode));
+ParseResult parse(const std::string &input, bool posix_mode,
+                  const std::vector<int> *cont_lines) {
+  Parser p(tokenize(input, posix_mode, nullptr, cont_lines));
   // Substitution content validates FIRST, as bash's recursive parser would:
   // its diagnosis wins over any knock-on error in the outer grammar.
   ParseResult pre;
@@ -1619,12 +1620,12 @@ ParseResult parse_with_aliases(const std::string &input,
                                const std::map<std::string, std::string> &aliases,
                                const std::map<std::string, std::string> &global_aliases,
                                const std::map<std::string, std::string> &suffix_aliases,
-                               bool posix_mode) {
+                               bool posix_mode, const std::vector<int> *cont_lines) {
   AliasExpansion ax =
       alias_splice_text(input, aliases, global_aliases, suffix_aliases, posix_mode);
   // The substitution scanner resolves `case'/`esac' through one alias level,
   // so a `$( switch x in y) ...;; esac )' span ends at the right `)'.
-  std::vector<Token> toks = tokenize(ax.text, posix_mode, &aliases);
+  std::vector<Token> toks = tokenize(ax.text, posix_mode, &aliases, cont_lines);
   if (ax.changed) {
     // Tokens report the line of the byte they start at: original bytes keep
     // their physical line, spliced bytes the invoking word's line.  The Eof
