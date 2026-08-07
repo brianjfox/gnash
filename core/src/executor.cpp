@@ -1140,9 +1140,11 @@ std::string temp_assign_name(Shell &sh, const std::string &name) {
   // the assignment reports the cycle against it (`v->w->x->v; x=4' warns about
   // `x'), rather than against whichever link a bounded walk happened to stop
   // on.
-  bool circular = false;
-  std::string t = sh.deref_ex(name, circular);
-  if (circular || t == name || t.find('[') != std::string::npos) return name;
+  bool circular = false, too_deep = false;
+  std::string t = sh.deref_ex(name, circular, &too_deep);
+  // A chain that is circular or too long has no target to bind: keep the name
+  // as written so Shell::set reports it against what the user actually wrote.
+  if (circular || too_deep || t == name || t.find('[') != std::string::npos) return name;
   return t;
 }
 
