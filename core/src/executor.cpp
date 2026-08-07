@@ -1594,6 +1594,11 @@ int Executor::run_simple(const SimpleCommand *c) {
     // (e.g. the DEBUG-trap handler itself) does not inherit the RETURN trap --
     // bash restores its default at entry when signal_in_progress(DEBUG_TRAP).
     {
+      // Leaving the body, bash reports the function's DEFINITION line again --
+      // the same line its entry DEBUG trap named -- rather than whatever the
+      // last command inside happened to set.
+      auto rlit = sh_.func_def_line.find(argv[0]);
+      if (rlit != sh_.func_def_line.end()) sh_.cur_lineno = rlit->second;
       auto rt = sh_.traps.find("RETURN");
       bool set_now = rt != sh_.traps.end() && !rt->second.empty();
       bool set_inside = set_now && (!had_return || rt->second != return_before);
