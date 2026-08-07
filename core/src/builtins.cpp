@@ -3010,7 +3010,26 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
         pre_elems = parse_array_elems(sh, pex, name, integer, append, a.substr(eq + 1));
         have_pre_elems = true;
       }
-      if (sh.make_local(name, force_inherit)) inherited_local = true;
+      // `local'/`declare' on a name that is ALREADY a nameref localizes the
+      // reference's TARGET rather than the reference -- but only when the
+      // nameref lives at the SAME scope (bash's declare_transform_name
+      // compares contexts).  So `f(){ declare -n ref=var; declare ref; }'
+      // localizes var, while a `local ref' that shadows an OUTER nameref
+      // localizes `ref' itself (nameref20.sub).  Declaring the nameref
+      // attribute (`-n'/`+n') always localizes the name as written.
+      std::string lname = name;
+      if (!nameref && !rm_nameref && !sh.local_stack.empty()) {
+        auto nv3 = sh.vars.find(name);
+        bool same_scope = false;
+        for (const auto &e : sh.local_stack.back())
+          if (e.first == name) { same_scope = true; break; }
+        if (same_scope && nv3 != sh.vars.end() && nv3->second.nameref &&
+            !nv3->second.value.empty()) {
+          std::string d = sh.deref(name);
+          if (d.find('[') == std::string::npos) lname = d;
+        }
+      }
+      if (sh.make_local(lname, force_inherit)) inherited_local = true;
     }
     // An array cannot be switched between indexed and associative in place; bash
     // rejects the redeclaration and leaves the variable unchanged.
@@ -3247,6 +3266,17 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
           if (!preexist) sh.vars.erase(name);  // no half-created variable
           continue;
         }
+        // `declare -i -n NAME=VALUE' can never succeed: the integer attribute
+        // makes the assignment arithmetic, and a number is not a valid nameref
+        // target.  bash applies the attributes, rejects the assignment with
+        // status 1 and no further diagnostic, and leaves NAME without the
+        // reference (nameref23.sub).
+        if (integer) {
+          ret = 1;
+          if (!preexist) sh.vars.erase(name);
+          else sh.vars[name].integer = true;  // the attributes still take effect
+          continue;
+        }
         Variable &rv = sh.vars[name];
         if (rv.readonly) {
           std::fprintf(stderr, "%s%s: readonly variable\n", sh.err_prefix().c_str(),
@@ -3258,6 +3288,17 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
         // the target or clear its invisible flag -- so a rejected retarget of a
         // declared-but-empty array still prints `declare -a array', not `=()'.
         if (rv.kind != VarKind::Indexed && rv.kind != VarKind::Assoc) {
+          // bash applies the declared attributes BEFORE the assignment, so a
+          // case fold given on the same command folds the target name too:
+          // `declare -un b=xyz' stores `XYZ' (declare.def VSETATTR before the
+          // bind).
+          if (ucase || lcase || capcase) {
+            for (size_t ci = 0; ci < tgt.size(); ci++) {
+              unsigned char ch = static_cast<unsigned char>(tgt[ci]);
+              if (ucase || (capcase && ci == 0)) tgt[ci] = static_cast<char>(std::toupper(ch));
+              else tgt[ci] = static_cast<char>(std::tolower(ch));
+            }
+          }
           rv.value = tgt;
           rv.invisible = false;  // a nameref given a target is now visible
                                  // (`typeset -n r; typeset -n r=P' -> `-n r="P"')
@@ -3457,8 +3498,16 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
       // unsets att_integer|att_uppercase|att_lowercase|att_capcase), so
       // `declare -i ivar; declare -n ivar=foo' prints `declare -n ivar="foo"'.
       // Re-declaring an existing nameref (`declare -n b=a[0]; declare -ni b')
-      // leaves them, so only strip when the reference is being introduced.
-      if (!was_nameref) v.integer = v.ucase = v.lcase = v.capcase = false;
+      // leaves them, so only strip when the reference is being introduced --
+      // and an attribute requested by THIS command survives the strip, since
+      // bash unsets them before applying flags_on (`declare -un b=xyz' gives
+      // `declare -nu b="XYZ"').
+      if (!was_nameref) {
+        if (!integer) v.integer = false;
+        if (!ucase) v.ucase = false;
+        if (!lcase) v.lcase = false;
+        if (!capcase) v.capcase = false;
+      }
     }
     // `+X' removes attributes.  Applied after the assignment so `typeset +n
     // foo=other' writes through the still-active nameref to its target before
