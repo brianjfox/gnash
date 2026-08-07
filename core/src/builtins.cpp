@@ -1349,6 +1349,29 @@ int bi_popd(Shell &sh, const std::vector<std::string> &argv) {
 
 // ---- mapfile / readarray -------------------------------------------------
 
+// An integer-attributed array evaluates each element arithmetically as it is
+// stored, so `declare -i x; read -a x <<< "1+1"' yields 2 and a non-numeric
+// word yields 0.  A malformed element is a fatal arithmetic error naming the
+// builtin, and it abandons the command list like any other assignment error.
+// The executor does this for `x[0]=1+1'; `read -a' and `mapfile' fill their
+// arrays directly and so have to do it themselves.
+bool eval_int_elements(Shell &sh, const std::string &name, const char *cmd,
+                       std::vector<std::pair<std::optional<std::string>, std::string>> &elems) {
+  auto it = sh.vars.find(sh.deref(name));
+  if (it == sh.vars.end() || !it->second.integer) return true;
+  for (auto &e : elems) {
+    bool ok = true;
+    long long r = eval_arith_msg(sh, e.second, cmd, &ok);
+    if (!ok) {
+      sh.arith_abort = true;
+      sh.last_status = 1;
+      return false;
+    }
+    e.second = std::to_string(r);
+  }
+  return true;
+}
+
 int bi_mapfile(Shell &sh, const std::vector<std::string> &argv) {
   bool strip = false, haveO = false;
   char delim = '\n';
@@ -1469,6 +1492,7 @@ int bi_mapfile(Shell &sh, const std::vector<std::string> &argv) {
   // nameref target is converted into a real array -- with bash's warning --
   // instead of being silently removed.
   if (!haveO) sh.array_assign(name, {}, false, false);
+  if (!eval_int_elements(sh, name, argv[0].c_str(), elems)) return 1;
   for (const auto &e : elems) sh.array_set(name, *e.first, e.second);
   return 0;
 }
@@ -2454,6 +2478,7 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
     std::vector<std::pair<std::optional<std::string>, std::string>> elems;
     skip_ifs_ws();
     while (p < n) elems.emplace_back(std::nullopt, get_word());
+    if (!eval_int_elements(sh, arrayname, argv[0].c_str(), elems)) return 1;
     sh.array_assign(arrayname, elems, false, false);
     return retval;
   }
