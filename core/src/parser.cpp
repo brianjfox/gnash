@@ -53,8 +53,12 @@ std::string tok_to_text(const Token &t) {
   return tok_name(t.type);
 }
 
+// bash's test_unop(): the exact set, not "a dash and any letter".  `-Q' is not
+// one, so `[[ -Q 7 ]]' reads `-Q' as the left operand and then complains that
+// `7' is not a binary operator.
 bool is_cond_unary(const std::string &w) {
-  return w.size() == 2 && w[0] == '-' && std::isalpha(static_cast<unsigned char>(w[1]));
+  return w.size() == 2 && w[0] == '-' && w[1] != '\0' &&
+         std::strchr("abcdefghknoprstuvwxzGLOSNR", w[1]) != nullptr;
 }
 
 bool is_cond_binop_word(const std::string &w) {
@@ -858,6 +862,16 @@ struct Parser {
 
   bool at_cond_end() const { return reserved("]]"); }
 
+  // bash reports a conditional-expression error in three lines: a diagnostic
+  // naming what went wrong, then `syntax error near `TOKEN'', then the source
+  // line.  The first is emitted verbatim -- the printer leaves the conditional
+  // diagnostics unadorned rather than prefixing them with `syntax error:'.
+  void cond_fail(const std::string &diag) {
+    fail(diag + "\nnear `" + tok_to_text(cur()) + "'");
+  }
+  // The token as bash names it in those diagnostics.
+  std::string cond_tok() const { return tok_to_text(cur()); }
+
   void cond_primary(std::string &e) {
     if (err) return;
     NestGuard g(*this);
@@ -869,20 +883,25 @@ struct Parser {
       if (is(Tok::Rparen)) {
         e += " )";
         advance();
+      } else if (is(Tok::Eof)) {
+        // At end of input the grammar reports the unterminated `[[' as well,
+        // so this line stands alone.
+        fail("unexpected token `EOF', expected `)'");
       } else {
-        fail("expected `)' in conditional");
+        cond_fail("unexpected token `" + cond_tok() + "', expected `)'");
       }
       return;
     }
     if (cur().type != Tok::Word || at_cond_end()) {
-      fail("expected conditional expression");
+      cond_fail("unexpected token `" + cond_tok() + "' in conditional command");
       return;
     }
     std::string w1 = cur().text;
     if (is_cond_unary(w1)) {
       advance();
       if (cur().type != Tok::Word || at_cond_end()) {
-        fail("expected operand after unary operator");
+        cond_fail("unexpected argument `" + cond_tok() +
+                  "' to conditional unary operator");
         return;
       }
       e += w1;
@@ -903,7 +922,8 @@ struct Parser {
         // the original source, gluing tokens that were not separated by
         // whitespace (so `([0-9]+)-([0-9]+)' stays one pattern).
         if (at_cond_end() || is(Tok::Eof)) {
-          fail("expected operand after operator");
+          cond_fail("unexpected argument `" + cond_tok() +
+                    "' to conditional binary operator");
           return;
         }
         // Whitespace normally ends the regex, but not while inside an unclosed
@@ -939,7 +959,8 @@ struct Parser {
         return;
       }
       if (cur().type != Tok::Word || at_cond_end()) {
-        fail("expected operand after operator");
+        cond_fail("unexpected argument `" + cond_tok() +
+                  "' to conditional binary operator");
         return;
       }
       e += ' ';
@@ -947,6 +968,13 @@ struct Parser {
       e += ' ';
       e += cur().text;
       advance();
+    } else if (!at_cond_end() && !is(Tok::Eof) && !is(Tok::AndAnd) &&
+               !is(Tok::OrOr) && !is(Tok::Rparen)) {
+      // `[[ x ]]' is `[[ -n x ]]', but only when the expression really ends
+      // here: anything else in operator position is bash's complaint that it
+      // wanted a binary operator (`[[ 4 & ]]', `[[ -Q 7 ]]').
+      cond_fail("unexpected token `" + cond_tok() +
+                "', conditional binary operator expected");
     }
   }
 
@@ -988,6 +1016,11 @@ struct Parser {
     auto n = std::make_unique<CondCommand>();
     std::string expr;
     cond_or(expr);
+    if (!err && !at_cond_end()) {
+      if (is(Tok::Eof)) fail("unexpected EOF while looking for `]]'");
+      else cond_fail("syntax error in conditional expression: unexpected token `" +
+                     cond_tok() + "'");
+    }
     expect_reserved("]]");
     n->expression = trim(expr);
     n->line = cond_line;
