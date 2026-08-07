@@ -108,6 +108,22 @@ defaults to **100**; bash fixes the equivalent limit at 8, so setting it to 8
 reproduces bash exactly. A missing, malformed or non-positive value falls back
 to the default.
 
+`$BASHLY_CORRECT` is the opt-in to bash's exact limits, in the spirit of
+`$POSIXLY_CORRECT`. Setting it to `true` saves the current
+`$GNASH_NAMEREF_MAX` and pins the limit to bash's 8; setting it to anything
+else -- or unsetting it -- puts the saved value back, including restoring "it
+was unset". Only a change of state does anything, so assigning `true` twice
+cannot lose the saved value.
+
+The `strict-bash` personality is exactly that switch: it selects the `bash`
+personality (so `$GNASH_PERSONALITY` reads `bash` and bash's startup files are
+used) and sets `$BASHLY_CORRECT=true`.
+
+```console
+$ gnash --personality=strict-bash -c 'echo $GNASH_PERSONALITY $BASHLY_CORRECT $GNASH_NAMEREF_MAX'
+bash true 8
+```
+
 
 ## Design
 

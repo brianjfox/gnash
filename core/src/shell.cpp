@@ -48,6 +48,7 @@ Shell::Shell() {
   }
   if (!is_set("IFS")) set("IFS", " \t\n");
   if (is_set("POSIXLY_CORRECT")) opt_posix = true;  // inherited from the environment
+  if (get("BASHLY_CORRECT") == "true") apply_bashly_correct(true);  // likewise
   set("OPTIND", "1");  // bash initializes getopts state at startup
   set("PPID", std::to_string(static_cast<long>(getppid())));
   set("$", std::to_string(static_cast<long>(getpid())));
@@ -443,6 +444,34 @@ int Shell::nameref_max() const {
   long v = std::strtol(it->second.value.c_str(), &end, 10);
   if (end == it->second.value.c_str() || *end != '\0' || v < 1) return kDefault;
   return static_cast<int>(v);
+}
+
+// Turning $BASHLY_CORRECT on pins $GNASH_NAMEREF_MAX to bash's 8, remembering
+// what was there so turning it off restores it -- including restoring "unset".
+// Nothing happens unless the state actually changes, so repeated assignments of
+// the same value cannot lose the saved value.  The writes go straight to `vars'
+// to avoid recursing back through Shell::set.
+void Shell::apply_bashly_correct(bool on) {
+  if (on == bashly_correct) return;
+  bashly_correct = on;
+  if (on) {
+    auto it = vars.find("GNASH_NAMEREF_MAX");
+    saved_nameref_max = (it == vars.end() || it->second.invisible)
+                            ? std::nullopt
+                            : std::optional<std::string>(it->second.value);
+    Variable &v = vars["GNASH_NAMEREF_MAX"];
+    v.value = "8";
+    v.invisible = false;
+    return;
+  }
+  if (saved_nameref_max) {
+    Variable &v = vars["GNASH_NAMEREF_MAX"];
+    v.value = *saved_nameref_max;
+    v.invisible = false;
+  } else {
+    vars.erase("GNASH_NAMEREF_MAX");
+  }
+  saved_nameref_max.reset();
 }
 
 std::string Shell::deref(const std::string &n) const {
@@ -1552,6 +1581,9 @@ bool Shell::set(const std::string &n_in, const std::string &v,
   if (opt_allexport) var.exported = true;
   // Setting POSIXLY_CORRECT (to any value) enables POSIX mode, as in bash.
   if (n == "POSIXLY_CORRECT") opt_posix = true;
+  // BASHLY_CORRECT is a switch rather than a flag: only the exact value `true'
+  // turns it on, and anything else turns it back off.
+  if (n == "BASHLY_CORRECT") apply_bashly_correct(v == "true");
   // A locale assignment re-applies LC_CTYPE so multibyte handling follows it.
   if (is_locale_var(n)) apply_ctype_locale(*this);
   // `declare -u' / `-l' / `-c' fold the value's case on every assignment.
@@ -1582,6 +1614,7 @@ void Shell::set_exported(const std::string &n_in, const std::string &v) {
   var.exported = true;
   var.invisible = false;  // an assignment makes a declared-but-unset scalar visible
   if (n == "POSIXLY_CORRECT") opt_posix = true;
+  if (n == "BASHLY_CORRECT") apply_bashly_correct(v == "true");
   if (is_locale_var(n)) apply_ctype_locale(*this);
 }
 
@@ -1616,6 +1649,8 @@ void Shell::unset(const std::string &n_in, bool force, bool noref) {
     }
   }
   if (n == "POSIXLY_CORRECT") opt_posix = false;  // unsetting leaves POSIX mode
+  // Unsetting it is "any other value": the saved nameref limit comes back.
+  if (n == "BASHLY_CORRECT") apply_bashly_correct(false);
   auto it = vars.find(n);
   if (it != vars.end() && (force || !it->second.readonly)) {
     // Unsetting a variable that is local to the CURRENT function scope leaves
@@ -1740,15 +1775,26 @@ void Shell::import_env_functions() {
 }
 
 void Shell::set_personality(const std::string &name) {
-  personality_name = name;
-  if (name == "zsh") persona = Persona::Zsh;
-  else if (name == "ash" || name == "dash" || name == "sh") persona = Persona::Ash;
-  else if (name == "ksh" || name == "ksh93" || name == "mksh" || name == "pdksh" ||
-           name == "rksh")
+  // `strict-bash' is not a shell of its own: it is the bash personality with
+  // $BASHLY_CORRECT turned on, so the shell identifies itself as bash and picks
+  // up bash's startup files while the stricter limits apply.  Selecting any
+  // other personality turns the switch back off.
+  bool strict = name == "strict-bash";
+  personality_name = strict ? "bash" : name;
+  const std::string &nm = personality_name;
+  if (nm == "zsh") persona = Persona::Zsh;
+  else if (nm == "ash" || nm == "dash" || nm == "sh") persona = Persona::Ash;
+  else if (nm == "ksh" || nm == "ksh93" || nm == "mksh" || nm == "pdksh" ||
+           nm == "rksh")
     persona = Persona::Ksh;
-  else if (name == "csh" || name == "tcsh") persona = Persona::Csh;
+  else if (nm == "csh" || nm == "tcsh") persona = Persona::Csh;
   else persona = Persona::Bash;
-  set("GNASH_PERSONALITY", name);
+  set("GNASH_PERSONALITY", nm);
+  // Only `strict-bash' touches the switch.  Switching to another personality
+  // leaves it alone: it is an ordinary variable the user may have set on
+  // purpose (or inherited from the environment), and assigning to it is how you
+  // turn it off.
+  if (strict) set("BASHLY_CORRECT", "true");
 
   // Per-shell identity variables.  These are additive (as zsh's emulate is):
   // switching does not unset another shell's version variable.

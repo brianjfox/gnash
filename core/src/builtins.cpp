@@ -4538,7 +4538,7 @@ static const BuiltinHelp kBuiltinHelp[] = {
     {"enable", "enable [-a] [-dnps] [-f filename] [name ...]", "Enable and disable shell builtins."},
     {"caller", "caller [expr]", "Return the context of the current subroutine call."},
     {"alias", "alias [-p] [name[=value] ... ]", "Define or display aliases."},
-    {"personality", "personality [-lLR] [{bash|zsh|sh|ksh|csh} [-c command]]", "Switch the shell's personality at runtime (zsh `emulate' syntax)."},
+    {"personality", "personality [-lLR] [{bash|strict-bash|zsh|sh|ksh|csh} [-c command]]", "Switch the shell's personality at runtime (zsh `emulate' syntax)."},
     {"unalias", "unalias [-a] name [name ...]", "Remove each NAME from the list of defined aliases."},
     {"history", "history [-c] [-d offset] [n] or history -anrw [filename] or history -ps arg [arg...]", "Display or manipulate the history list."},
     {"fc", "fc [-e ename] [-lnr] [first] [last] or fc -s [pat=rep] [command]", "Display or execute commands from the history list."},
@@ -6211,8 +6211,8 @@ std::vector<std::string> command_completions(Shell &sh, const std::string &prefi
 // are accepted (a personality switch is already a full reconfiguration).
 int bi_personality(Shell &sh, const std::vector<std::string> &argv) {
   static const std::set<std::string> kNames = {
-      "bash", "zsh",   "sh",    "dash",  "ash",  "ksh",
-      "ksh93", "mksh", "pdksh", "rksh",  "csh",  "tcsh"};
+      "bash", "strict-bash", "zsh",  "sh",    "dash", "ash",
+      "ksh",  "ksh93",       "mksh", "pdksh", "rksh", "csh", "tcsh"};
   bool opt_l = false, opt_L = false, opt_R = false;
   size_t i = 1;
   for (; i < argv.size(); i++) {
@@ -6252,9 +6252,15 @@ int bi_personality(Shell &sh, const std::vector<std::string> &argv) {
 
   if (have_c) {  // run under MODE, then restore
     std::string saved = sh.personality_name;
+    // `strict-bash' leaves $BASHLY_CORRECT on, and restoring the personality
+    // name alone would not undo that -- so put the switch back as well.
+    bool had_bc = sh.is_set("BASHLY_CORRECT");
+    std::string saved_bc = sh.get("BASHLY_CORRECT");
     sh.set_personality(mode);
     int st = sh.run_string(cmd);
     sh.set_personality(saved);
+    if (had_bc) sh.set("BASHLY_CORRECT", saved_bc);
+    else sh.unset("BASHLY_CORRECT");
     return st;
   }
   if (opt_L && !sh.persona_restore.empty() && !sh.persona_restore.back())
