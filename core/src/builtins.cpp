@@ -7222,9 +7222,7 @@ struct CondEval {
   void xtrace_term(const std::string &op, const std::string &a1, const std::string &a2,
                    bool binary, bool invert) {
     if (noeval || !sh.opt_xtrace) return;
-    std::string ps4 = sh.is_set("PS4") ? sh.get("PS4") : "+ ";
-    Expander xex(sh);
-    std::string pfx = xex.expand_no_split(expand_prompt(sh, ps4), false, false);
+    std::string pfx = sh.xtrace_prefix();
     auto shown = [](const std::string &v) { return v.empty() ? std::string("''") : v; };
     std::string body = binary ? shown(a1) + " " + op + " " + shown(a2)
                               : op + " " + shown(a1);

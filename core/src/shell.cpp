@@ -462,6 +462,19 @@ bool Shell::apply_xtracefd(const char *value) {
   return true;
 }
 
+// bash's indirection_level_string(): expand $PS4, then emit its FIRST character
+// repeated indirection_level times followed by the REST of the expanded string.
+// So a trace from inside a trap action or an `eval' -- one level deeper than the
+// command that triggered it -- reads `++ ' rather than `+ '.
+std::string Shell::xtrace_prefix() {
+  std::string ps4 = is_set("PS4") ? get("PS4") : "+ ";
+  Expander xex(*this);
+  std::string p = xex.expand_no_split(expand_prompt(*this, ps4), false, false);
+  if (p.empty()) return p;
+  int n = indirection_level > 0 ? indirection_level : 1;
+  return std::string(static_cast<size_t>(n), p[0]) + p.substr(1);
+}
+
 void Shell::note_child_reaped() {
   // bash runs the SIGCHLD trap once for each terminated child; only count while
   // such a trap is installed.
@@ -2447,6 +2460,13 @@ bool Shell::aliases_active() const {
 
 int Shell::run_string(const std::string &script, const std::vector<int> *cont_lines) {
   if (is_csh()) return run_csh(*this, script);  // csh is a different language
+  // Each nested run_string is one of bash's nested parse_and_execute levels;
+  // see Shell::indirection_level.
+  struct LevelGuard {
+    Shell &sh;
+    explicit LevelGuard(Shell &s) : sh(s) { sh.indirection_level++; }
+    ~LevelGuard() { sh.indirection_level--; }
+  } lvl(*this);
   had_parse_error = false;
   ParseResult r = aliases_active()
                       ? parse_with_aliases(script, aliases, global_aliases, suffix_aliases,

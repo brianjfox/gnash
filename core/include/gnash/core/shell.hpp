@@ -287,6 +287,14 @@ class Shell {
   // Where `set -x' output goes.  stderr unless $BASH_XTRACEFD names an open
   // file descriptor; see apply_xtracefd().
   std::FILE *xtrace_out() const { return xtrace_fp ? xtrace_fp : stderr; }
+  // The `set -x' line prefix: $PS4 expanded, with its FIRST character repeated
+  // once per nesting level (bash's indirection_level_string).
+  std::string xtrace_prefix();
+  // bash's indirection_level: 1 while the top-level reader runs a command, and
+  // one more for each nested parse_and_execute -- an `eval', a command
+  // substitution, a sourced file, a trap action.  NOT a function call or a
+  // plain subshell.  Shell::run_string is the analogue, so it owns the count.
+  int indirection_level = 0;
   // Re-read $BASH_XTRACEFD after it is assigned or unset.  Returns false (with
   // bash's diagnostic already printed) when the value is not an open fd.
   bool apply_xtracefd(const char *value);

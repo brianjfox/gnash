@@ -433,6 +433,15 @@ echo "L=$LINENO"'
   'setexit() { return "$1"; }; trap "setexit 111; return" USR1; invoke() { kill -USR1 $$; return 222; }; invoke; echo "dollar=$?"'
   'setexit() { return "$1"; }; trap "setexit 111; return 7" USR1; invoke() { kill -USR1 $$; return 222; }; invoke; echo "dollar=$?"'
   'setexit() { return "$1"; }; handler() { setexit 111; return; }; trap "handler; stat=\$?; return" USR1; invoke() { kill -USR1 $$; return 222; }; invoke; echo "stat=$stat"'
+  # xtrace repeats PS4'"'"'s FIRST character once per nesting level, so a trace from
+  # inside an `eval'"'"' or a trap action reads `++'"'"'.  A function call and a plain
+  # subshell do NOT nest; a command substitution does.
+  'PS4="+ "; set -x; eval "echo hi"'
+  'PS4="- "; set -x; eval "echo hi"'
+  'PS4="+ "; set -x; f(){ echo in; }; f'
+  'PS4="+ "; set -x; (echo sub)'
+  'PS4="+ "; set -x; x=$(echo cs); echo "$x"'
+  'PS4=""; set -x; echo empty'
 )
 
 fails=0
