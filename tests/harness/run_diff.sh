@@ -390,6 +390,14 @@ fi > /nonexistent-dir-xyz/f; } 2>&1 | sed "s/^[^ ]*: //"'
 echo "L=$LINENO"
 )
 echo "L=$LINENO"'
+  # An unterminated quote, backquote or `${' names the line it OPENED on; an
+  # unterminated `$(' names where input ran out.  These run a script file (via
+  # "$0", the shell under test) because a syntax error aborts -c before any
+  # pipeline could filter the message.
+  'd=$(mktemp -d); printf "foo=bar\necho \"\${foo:-\"a}\"\n" > "$d/s"; "$0" "$d/s" 2>&1 | sed "s|^[^ ]*: ||"; rm -rf "$d"'
+  'd=$(mktemp -d); printf "foo=bar\necho \`bar\n" > "$d/s"; "$0" "$d/s" 2>&1 | sed "s|^[^ ]*: ||"; rm -rf "$d"'
+  'd=$(mktemp -d); printf "foo=bar\necho \"abc\n" > "$d/s"; "$0" "$d/s" 2>&1 | sed "s|^[^ ]*: ||"; rm -rf "$d"'
+  'd=$(mktemp -d); printf "foo=bar\necho \$(bar\nbaz\n" > "$d/s"; "$0" "$d/s" 2>&1 | sed "s|^[^ ]*: ||"; rm -rf "$d"'
 )
 
 fails=0

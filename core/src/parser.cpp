@@ -1210,7 +1210,11 @@ struct Parser {
       char cl = toks.back().lex_close;
       res.error = cl ? std::string("unexpected EOF while looking for matching `") + cl + "'"
                      : std::string("unterminated quoted string or substitution");
-      res.error_line = toks.back().line;
+      // bash's parse_matched_pair reports `start_lineno' -- where the span
+      // OPENED -- for a quote, a backquote and `${'.  Its `$(' scanner reports
+      // where input ran out instead, and leaves lex_open_line 0 to say so.
+      res.error_line = toks.back().lex_open_line > 0 ? toks.back().lex_open_line
+                                                     : toks.back().line;
       // An unterminated span may still have a here-document pending inside
       // it; the reader needs the delimiter's quoting to decide whether a
       // trailing `\' is a line continuation (comsub4.sub).
