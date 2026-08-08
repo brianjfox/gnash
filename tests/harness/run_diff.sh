@@ -459,6 +459,10 @@ echo "L=$LINENO"'
   '{ exec 3</etc/passwd; echo hi >&3; } 2>&1 | sed "s|^[^ ]*: ||"; echo "rc=$?"'
   'exec 3>/dev/null; echo hi >&3; echo "rc=$?"'
   'echo normal; echo "rc=$?"'
+  # `cd -'"'"' echoes where it went, but only once the chdir SUCCEEDS.
+  '{ OLDPWD=/tmp/cd-notthere; cd -; } 2>&1 | sed "s|^[^ ]*: ||"; echo "rc=$?"'
+  'cd /tmp; cd /usr; cd -; echo "rc=$?"; pwd'
+  '{ unset OLDPWD; cd -; } 2>&1 | sed "s|^[^ ]*: ||"; echo "rc=$?"'
 )
 
 fails=0
