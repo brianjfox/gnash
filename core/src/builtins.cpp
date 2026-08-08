@@ -1048,6 +1048,7 @@ int change_dir(Shell &sh, const std::string &dir, bool physical, const char *cal
 }
 
 int bi_cd(Shell &sh, const std::vector<std::string> &argv) {
+  bool print_target = false;  // `cd -' echoes where it went, on success only
   if (sh.opt_restricted) {
     std::fprintf(stderr, "%scd: restricted\n", sh.err_prefix().c_str());
     return 1;
@@ -1072,12 +1073,15 @@ int bi_cd(Shell &sh, const std::vector<std::string> &argv) {
     }
     dir = sh.get("HOME");
   } else if (argv[i] == "-") {
+    print_target = true;  // set below, once the destination is known to be good
     if (!sh.is_set("OLDPWD")) {
       std::fprintf(stderr, "%scd: OLDPWD not set\n", sh.err_prefix().c_str());
       return 1;
     }
     dir = sh.get("OLDPWD");
-    std::printf("%s\n", dir.c_str());
+    // bash echoes the destination only once the chdir SUCCEEDS: a `cd -' to a
+    // directory that has since vanished reports the error and nothing else.
+    print_target = true;
   } else {
     dir = argv[i];
   }
@@ -1108,7 +1112,9 @@ int bi_cd(Shell &sh, const std::vector<std::string> &argv) {
       start = e + 1;
     }
   }
-  return change_dir(sh, dir, physical);
+  int r = change_dir(sh, dir, physical);
+  if (r == 0 && print_target) std::printf("%s\n", logical_pwd(sh).c_str());
+  return r;
 }
 
 int bi_pwd(Shell &sh, const std::vector<std::string> &argv) {
