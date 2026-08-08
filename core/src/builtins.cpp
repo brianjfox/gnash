@@ -150,6 +150,16 @@ int bi_echo(Shell &sh, const std::vector<std::string> &argv) {
   }
   std::fwrite(out.data(), 1, out.size(), stdout);
   if (newline && !stop) std::fputc('\n', stdout);  // \c suppresses everything after
+  // bash's echo flushes and reports a failed write (echo.def -> sh_wrerror()).
+  // It matters for more than full disks: `exec 3</etc/passwd; echo hi >&3'
+  // fails only HERE, because duplicating a read-only descriptor onto stdout
+  // succeeds and only the write itself gets EBADF.
+  if (std::fflush(stdout) != 0 || std::ferror(stdout)) {
+    std::fprintf(stderr, "%secho: write error: %s\n", sh.err_prefix().c_str(),
+                 std::strerror(errno));
+    std::clearerr(stdout);
+    return 1;
+  }
   return 0;
 }
 
