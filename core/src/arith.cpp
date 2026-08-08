@@ -69,6 +69,21 @@ constexpr const char *kRecursion = "expression recursion level exceeded";
 constexpr const char *kBadOp = "arithmetic syntax error: invalid arithmetic operator";
 }  // namespace arith_err
 
+// The characters bash's is_arithop() accepts as operator tokens -- the
+// single-character operators, plus `?', `:' and `,' (which its own comment
+// calls "questionable").  Multi-character operators all begin with one of
+// these, so testing the first character is enough.
+bool arith_op_char(char c) {
+  return c != '\0' && std::strchr("=><+-*/%!()&|^~?:,", c) != nullptr;
+}
+
+// What bash's readtok() will consume as an operand: a digit (NUM) or a
+// variable starter (STR).  Anything else falls through to its operator
+// classification.
+bool arith_operand_start(char c) {
+  unsigned char u = static_cast<unsigned char>(c);
+  return std::isalnum(u) || c == '_';
+}
 
 NodeP mk(K k) { auto n = std::make_unique<Node>(); n->k = k; return n; }
 
@@ -578,8 +593,15 @@ Parsed parse_cached(const std::string &expr) {
              std::strchr("+-*/%&^|", expr[q]) && expr.compare(q, 2, "&&") != 0 &&
              expr.compare(q, 2, "||") != 0)
       p.note(arith_err::kNonVar, q);  // +=, -=, ...: assign to non-lvalue
-    else if (expr[q] == ']')
-      p.note(arith_err::kBadOp, q);  // a stray `]': bash's invalid-operator error
+    // bash's readtok() splits the leftover into two diagnostics.  A character
+    // that could begin an OPERAND (a digit, or a variable starter) is read as a
+    // token, and it is the grammar that then rejects it -- "syntax error in
+    // expression".  A character that is neither an operand starter nor one of
+    // the operator characters is rejected by the tokenizer itself, and since
+    // what precedes it here is a complete expression (so bash's `curtok' is an
+    // operand rather than an operator), that is "invalid arithmetic operator".
+    else if (!arith_operand_start(expr[q]) && !arith_op_char(expr[q]))
+      p.note(arith_err::kBadOp, q);
     else
       p.note(arith_err::kExpr, q);
   }

@@ -351,6 +351,17 @@ line1'
   # trap, which gnash fires in the child rather than the parent.
   'trap "echo DBG" DEBUG; echo a | cat'
   'trap "echo DBG" DEBUG; echo a & wait'
+  # Arithmetic: a character that cannot begin an operand and is not an operator
+  # is the tokenizer'"'"'s "invalid arithmetic operator"; one that can begin an
+  # operand is read as a token and rejected by the grammar instead.
+  'echo $(( x@y )) 2>&1'
+  'echo $(( 1 @ 2 )) 2>&1'
+  'echo $(( 1 ] )) 2>&1'
+  'echo $(( x y )) 2>&1'
+  'echo $(( 1 2 3 )) 2>&1'
+  'echo $(( x!!y )) 2>&1'
+  'echo $(( 1+ )) 2>&1'
+  'echo $(( x= )) 2>&1'
 )
 
 fails=0
