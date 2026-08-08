@@ -81,6 +81,12 @@ struct Lexer {
   int awaiting = -1;  // -1 none, 0 <<, 1 <<-
   bool unterminated = false;
   char unterm_close = 0;  // the closer we were looking for at EOF
+  // The line the unterminated span STARTED on.  bash's parse_matched_pair
+  // reports `start_lineno' for a quote, a backquote and `${', so an
+  // unterminated one names where it opened rather than where input ran out.
+  // Left 0 for `$(' -- bash's parse_comsub reports the end-of-input line
+  // there, which is what the Eof token already carries.
+  int unterm_line = 0;
   bool heredoc_eof = false;        // here-doc body delimited by end of input
   std::string heredoc_eof_delim;
   int heredoc_eof_line = 0;
@@ -153,12 +159,14 @@ struct Lexer {
 
   // -- opaque span scanners (append the span, delimiters included) ----------
   void scan_single(std::string &w) {
+    int startln = line_for(pos);
     w += in[pos++];  // '
     while (pos < n && in[pos] != '\'') w += in[pos++];
     if (pos < n) w += in[pos++];
-    else { unterminated = true; if (!unterm_close) unterm_close = '\''; }
+    else { unterminated = true; if (!unterm_close) { unterm_close = '\''; unterm_line = startln; } }
   }
   void scan_backtick(std::string &w) {
+    int startln = line_for(pos);
     w += in[pos++];  // `
     while (pos < n && in[pos] != '`') {
       if (in[pos] == '\\') {
@@ -169,7 +177,7 @@ struct Lexer {
       }
     }
     if (pos < n) w += in[pos++];
-    else { unterminated = true; if (!unterm_close) unterm_close = '`'; }
+    else { unterminated = true; if (!unterm_close) { unterm_close = '`'; unterm_line = startln; } }
   }
   void scan_paren(std::string &w, bool comsub_ctx = false) {  // pos at '('
     int depth = 0;
@@ -421,6 +429,7 @@ struct Lexer {
           comsub_carry.push_back({hd.delim, hd.strip, w.size() - 1});
   }
   void scan_brace(std::string &w, bool in_dq = false) {  // pos at '{'
+    int startln = line_for(pos);
     int depth = 0;
     // Inside ${...} only a nested `${` opens another level; a bare `{` is a
     // literal character.  This mirrors bash's parse_matched_pair called with
@@ -480,7 +489,7 @@ struct Lexer {
         pos++;
       }
     } while (pos < n && depth > 0);
-    if (depth > 0) { unterminated = true; if (!unterm_close) unterm_close = '}'; }
+    if (depth > 0) { unterminated = true; if (!unterm_close) { unterm_close = '}'; unterm_line = startln; } }
   }
   void scan_square(std::string &w) {  // pos at '[' of $[...] arithmetic
     int depth = 0;
@@ -512,6 +521,7 @@ struct Lexer {
     if (depth > 0) { unterminated = true; if (!unterm_close) unterm_close = ']'; }
   }
   void scan_double(std::string &w) {
+    int startln = line_for(pos);
     w += in[pos++];  // "
     while (pos < n && in[pos] != '"') {
       char c = in[pos];
@@ -535,9 +545,10 @@ struct Lexer {
       }
     }
     if (pos < n) w += in[pos++];
-    else { unterminated = true; if (!unterm_close) unterm_close = '"'; }
+    else { unterminated = true; if (!unterm_close) { unterm_close = '"'; unterm_line = startln; } }
   }
   void scan_dollar_single(std::string &w) {  // pos at '$', next '\''
+    int startln = line_for(pos);
     w += in[pos++];  // $
     w += in[pos++];  // '
     while (pos < n && in[pos] != '\'') {
@@ -549,7 +560,7 @@ struct Lexer {
       }
     }
     if (pos < n) w += in[pos++];
-    else { unterminated = true; if (!unterm_close) unterm_close = '\''; }
+    else { unterminated = true; if (!unterm_close) { unterm_close = '\''; unterm_line = startln; } }
   }
 
   bool is_metachar(char c) {
@@ -956,6 +967,7 @@ struct Lexer {
     eof.line = line_for(n) + ((n > 0 && in[n - 1] != '\n') ? 1 : 0);
     eof.lex_error = unterminated;
     eof.lex_close = unterm_close;
+    eof.lex_open_line = unterm_line;
     eof.heredoc_eof = heredoc_eof;
     eof.heredoc_eof_delim = heredoc_eof_delim;
     eof.heredoc_eof_line = heredoc_eof_line;
