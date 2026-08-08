@@ -6558,6 +6558,22 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
         // DEBUG trap, and functions it defines all use the file's own lines).
         int saved_src_base = sh.lineno_base;
         sh.lineno_base = 0;
+        // A sourced file does not inherit the DEBUG trap unless functrace is
+        // set (source.def restores the default for the duration).  bash lifts
+        // the suppression in an unwind frame that runs AFTER `source_file',
+        // and `source_file' is what fires the RETURN trap -- so the RETURN
+        // trap's own body produces no DEBUG line either.  Hence the window
+        // below closes past the RETURN trap, not at the end of the file.
+        std::string hidden_debug;
+        bool hid_debug = false;
+        if (!sh.opt_functrace) {
+          auto dit = sh.traps.find("DEBUG");
+          if (dit != sh.traps.end()) {
+            hidden_debug = dit->second;
+            hid_debug = true;
+            sh.traps.erase(dit);
+          }
+        }
         sh.source_depth++;  // `return' is legal while sourcing
         st = sh.run_string(ss.str());
         sh.source_depth--;
@@ -6576,11 +6592,17 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
           // Only the RETURN trap is fired here: the DEBUG line that precedes it
           // is the one its own body produces under functrace, exactly as when a
           // function body returns.
-          auto srt = sh.traps.find("RETURN");
-          if (srt != sh.traps.end() && !srt->second.empty() && sh.opt_functrace &&
-              !sh.in_debug_trap)
-            sh.run_return_trap(st);
+          //
+          // Unlike a function, a sourced file does NOT gate this on functrace:
+          // `source_file' runs the trap unconditionally, so a `source' at top
+          // level fires it either way.  Inside a function it follows the
+          // function's own rule, because that is where bash restored the
+          // default trap.  See Shell::return_trap_fires().
+          if (sh.return_trap_fires()) sh.run_return_trap(st);
         }
+        // Restore the DEBUG trap -- but only if the sourced file did not set
+        // one of its own, which is what bash's trap_if_untrapped() amounts to.
+        if (hid_debug && !sh.traps.count("DEBUG")) sh.traps["DEBUG"] = hidden_debug;
         // Restore the caller's parameters UNLESS the sourced script ran the
         // `set' builtin at top level -- then its parameters stick (bash).
         if (set_pos) {

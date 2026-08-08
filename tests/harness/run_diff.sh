@@ -329,6 +329,14 @@ source /tmp/gnrx3.$$; rm -f /tmp/gnrx3.$$'
   # a here-document delimited by end-of-file still runs (with a warning)
   'cat <<XEOF 2>/dev/null
 line1'
+  # A sourced file fires the RETURN trap even without functrace, but does not
+  # inherit the DEBUG trap unless functrace is on.  The last case: a trap the
+  # function installs for ITSELF fires for a `source' in its body, twice --
+  # once leaving the sourced file, once leaving the function.
+  'd=$(mktemp -d); printf "echo in-sub\n" >"$d/s"; trap "echo RET" RETURN; source "$d/s"; echo after; rm -rf "$d"'
+  'd=$(mktemp -d); printf "echo one\necho two\n" >"$d/s"; trap "echo DBG" DEBUG; source "$d/s"; trap - DEBUG; rm -rf "$d"'
+  'd=$(mktemp -d); printf "echo one\n" >"$d/s"; set -T; trap "echo DBG" DEBUG; source "$d/s"; trap - DEBUG; set +T; rm -rf "$d"'
+  'd=$(mktemp -d); printf "echo in-sub\n" >"$d/s"; f() { trap "echo RET" RETURN; source "$d/s"; }; f; echo after; rm -rf "$d"'
 )
 
 fails=0

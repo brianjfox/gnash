@@ -365,6 +365,23 @@ void Shell::run_err_trap(int status) {
   in_err_trap = false;
 }
 
+// Does the RETURN trap fire as the innermost frame -- a function body or a
+// sourced file -- finishes?
+//
+// bash restores the DEFAULT RETURN trap on entry to a function unless functrace
+// is set (execute_cmd.c), so a trap INHERITED from outside does not fire inside
+// one, while a trap the function installs for itself does.  A sourced file gets
+// no such treatment -- `source' does it for the DEBUG trap only, and source.def
+// says as much ("XXX - should sourced files inherit the RETURN trap?  Functions
+// don't.") -- so `source_file' runs the trap unconditionally.  At top level,
+// then, a sourced file fires it whether or not functrace is on.
+bool Shell::return_trap_fires() const {
+  auto it = traps.find("RETURN");
+  if (it == traps.end() || it->second.empty() || in_debug_trap) return false;
+  if (opt_functrace || return_frame.empty()) return true;
+  return it->second != return_frame.back();  // installed inside this function
+}
+
 int Shell::run_return_trap(int status) {
   auto it = traps.find("RETURN");
   if (it == traps.end() || it->second.empty() || in_return_trap) return 0;
