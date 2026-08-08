@@ -508,6 +508,15 @@ class Shell {
   bool in_debug_trap = false; // guard: don't fire the DEBUG trap within itself
   bool in_err_trap = false;   // guard: don't fire the ERR trap within itself
   bool in_return_trap = false;// guard: don't fire the RETURN trap within itself
+  // POSIX interp 1602: a bare `return' (or `exit') inside a SIGNAL trap action
+  // yields $? as it stood when the trap was entered -- the trap cannot change
+  // it -- unless the action has called a shell function we are still inside.
+  // trap_ret_depth is the function/source nesting at trap entry; -1 means no
+  // signal trap is running.  The DEBUG trap is excluded: changing $? is part
+  // of why it exists.
+  int trap_saved_status = 0;
+  int trap_ret_depth = -1;
+  int nest_depth() const { return static_cast<int>(call_stack.size()) + source_depth; }
   // The DEBUG trap body as it stood when each active function was entered.  A
   // DEBUG trap the function installs for itself (the body differs from entry)
   // fires without functrace; an inherited one does not.

@@ -493,8 +493,15 @@ void Shell::run_pending_traps() {
     int saved = last_status;  // the interrupted command's $?
     int saved_sig = trap_sig;
     trap_sig = s;             // $BASH_TRAPSIG names the delivering signal
+    // A bare `return' in the action reports THIS status, not one the action
+    // sets (posix interp 1602); see Shell::trap_saved_status.
+    int prev_status = trap_saved_status, prev_depth = trap_ret_depth;
+    trap_saved_status = saved;
+    trap_ret_depth = nest_depth();
     std::string cmd = it->second;
     run_string(cmd);
+    trap_saved_status = prev_status;
+    trap_ret_depth = prev_depth;
     trap_sig = saved_sig;
     last_status = saved;
     in_trap = false;

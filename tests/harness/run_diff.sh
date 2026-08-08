@@ -419,6 +419,20 @@ echo "L=$LINENO"'
   'shopt -s assoc_expand_once; declare -a a; a[0]=0; { ( let "a[\" \"]"=18 ; echo AFTER ); } 2>&1 | sed "s|^[^ ]*: ||"; declare -p a'
   'shopt -u assoc_expand_once; declare -a a; a[0]=0; { ( let "a[\" \"]"=18 ; echo AFTER ); } 2>&1 | sed "s|^[^ ]*: ||"; declare -p a'
   '{ let "x+"; } 2>&1 | sed "s|^[^ ]*: ||"; echo AFTER'
+  # `trap SIGSPEC' with a single operand REVERTS that signal; a single operand
+  # that names no signal is an ACTION with nothing to apply it to, which is a
+  # usage error (status 2), not a silent no-op.
+  'trap "echo hi" USR1; trap USR1; trap -p | grep -c USR1'
+  '{ trap ""; } 2>&1; echo "rc=$?"'
+  '{ trap 512; } 2>&1; echo "rc=$?"'
+  '{ trap foo; } 2>&1; echo "rc=$?"'
+  'trap 15; echo "rc=$?"'
+  # posix interp 1602: a BARE `return' in a signal trap action reports $? from
+  # before the trap ran -- the action cannot change it.  An explicit argument
+  # still wins, and a function called BY the action reports its own status.
+  'setexit() { return "$1"; }; trap "setexit 111; return" USR1; invoke() { kill -USR1 $$; return 222; }; invoke; echo "dollar=$?"'
+  'setexit() { return "$1"; }; trap "setexit 111; return 7" USR1; invoke() { kill -USR1 $$; return 222; }; invoke; echo "dollar=$?"'
+  'setexit() { return "$1"; }; handler() { setexit 111; return; }; trap "handler; stat=\$?; return" USR1; invoke() { kill -USR1 $$; return 222; }; invoke; echo "stat=$stat"'
 )
 
 fails=0
