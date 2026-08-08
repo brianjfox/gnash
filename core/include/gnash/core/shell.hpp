@@ -284,6 +284,12 @@ class Shell {
   void end_interruptible_wait();
   int pending_trapped_signal();               // a pending signal that has a trap, or 0
   void note_child_reaped();                   // count a reaped child for the SIGCHLD trap
+  // Where `set -x' output goes.  stderr unless $BASH_XTRACEFD names an open
+  // file descriptor; see apply_xtracefd().
+  std::FILE *xtrace_out() const { return xtrace_fp ? xtrace_fp : stderr; }
+  // Re-read $BASH_XTRACEFD after it is assigned or unset.  Returns false (with
+  // bash's diagnostic already printed) when the value is not an open fd.
+  bool apply_xtracefd(const char *value);
   // Drop the traps a child process does not inherit; call in every forked
   // child (subshell, pipeline stage, background job, coproc, comsub).
   void drop_child_traps();
@@ -508,6 +514,8 @@ class Shell {
   std::vector<std::string> debug_frame;
   // The same, for the RETURN trap; see return_trap_fires().
   std::vector<std::string> return_frame;
+  std::FILE *xtrace_fp = nullptr;  // $BASH_XTRACEFD's stream; null = stderr
+  int xtrace_fd = -1;              // the fd it was opened on
   int command_number = 1;     // \# prompt escape: commands entered this session
   bool opt_extdebug = false;  // `shopt -s extdebug': enables BASH_ARGC/BASH_ARGV
   // Call-argument stack for $BASH_ARGC/$BASH_ARGV (only maintained under

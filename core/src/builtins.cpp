@@ -7198,7 +7198,7 @@ struct CondEval {
     auto shown = [](const std::string &v) { return v.empty() ? std::string("''") : v; };
     std::string body = binary ? shown(a1) + " " + op + " " + shown(a2)
                               : op + " " + shown(a1);
-    std::fprintf(stderr, "%s[[ %s%s ]]\n", pfx.c_str(), invert ? "! " : "", body.c_str());
+    std::fprintf(sh.xtrace_out(), "%s[[ %s%s ]]\n", pfx.c_str(), invert ? "! " : "", body.c_str());
   }
   // A `=~' right-hand side is a REGEX.  Undo the parser's transport encoding
   // first -- those characters were never quoted by the user -- then expand,

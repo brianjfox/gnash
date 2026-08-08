@@ -1379,7 +1379,7 @@ int Executor::run_simple(const SimpleCommand *c) {
     // pre-formatted in source order (scalar values and command words are quoted
     // as bash's sh_single_quote/ANSI-C xtrace conventions require).
     for (const auto &a : xtrace_lines)
-      std::fprintf(stderr, "%s%s\n", xt_prefix.c_str(), a.c_str());
+      std::fprintf(sh_.xtrace_out(), "%s%s\n", xt_prefix.c_str(), a.c_str());
     if (!argv.empty()) {
       std::string line = xt_prefix;
       bool first = true;
@@ -1388,7 +1388,7 @@ int Executor::run_simple(const SimpleCommand *c) {
         line += xtrace_quote_word(a);
         first = false;
       }
-      std::fprintf(stderr, "%s\n", line.c_str());
+      std::fprintf(sh_.xtrace_out(), "%s\n", line.c_str());
     }
   }
 
@@ -2096,7 +2096,7 @@ int Executor::run_for(const ForCommand *c) {
         auto ed = sh_.shopt_opts.find("extdebug");
         if (tst != 0 && ed != sh_.shopt_opts.end() && ed->second) return 0LL;
       }
-      if (sh_.opt_xtrace) std::fprintf(stderr, "+ (( %s ))\n", e.c_str());
+      if (sh_.opt_xtrace) std::fprintf(sh_.xtrace_out(), "+ (( %s ))\n", e.c_str());
       // Report an arithmetic error with bash's `((: EXPR: ...' diagnostic (the
       // loop-abort above then stops the loop), rather than failing silently.
       return static_cast<long long>(eval_arith_msg(sh_, aex.expand_no_split(e), "((", &ok));
@@ -2144,7 +2144,7 @@ int Executor::run_for(const ForCommand *c) {
   sh_.loop_depth++;
   for (const std::string &item : items) {
     if (!debug_trap_for(c, c->line)) break;  // the loop header, once per pass
-    if (sh_.opt_xtrace) std::fprintf(stderr, "%s\n", xtrace_line.c_str());
+    if (sh_.opt_xtrace) std::fprintf(sh_.xtrace_out(), "%s\n", xtrace_line.c_str());
     // A nameref loop variable is special: each iteration *retargets* the
     // reference to name ITEM rather than writing ITEM through to its current
     // target (bash treats `for ref in a b c' like successive `declare -n
@@ -2322,7 +2322,7 @@ int Executor::run_case(const CaseCommand *c) {
   Expander ex(sh_);
   std::string word = ex.expand_no_split(c->word.text);
   if (sh_.arith_error) { sh_.arith_error = false; return (sh_.last_status = 1); }
-  if (sh_.opt_xtrace) std::fprintf(stderr, "+ case %s in\n", word.c_str());
+  if (sh_.opt_xtrace) std::fprintf(sh_.xtrace_out(), "+ case %s in\n", word.c_str());
   int st = 0;
   size_t i = 0;
   while (i < c->clauses.size()) {
@@ -2437,7 +2437,7 @@ int Executor::run_arith(const ArithCommand *c) {
   std::string e = ex.expand_arith(c->expression);
   // xtrace prints the POST-EXPANSION expression (`(( $var ))' traces as
   // `+ ((  42  ))'), as bash does.
-  if (sh_.opt_xtrace) std::fprintf(stderr, "+ (( %s ))\n", e.c_str());
+  if (sh_.opt_xtrace) std::fprintf(sh_.xtrace_out(), "+ (( %s ))\n", e.c_str());
   // The `(( ))' command reports an arithmetic error (bad token, division by
   // zero) with bash's `((: EXPR: ...' diagnostic, unlike bare $(( )).
   long long v = eval_arith_msg(sh_, e, "((", &ok, /*expand_subs=*/1);
