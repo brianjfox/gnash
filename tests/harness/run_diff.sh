@@ -398,6 +398,14 @@ echo "L=$LINENO"'
   'd=$(mktemp -d); printf "foo=bar\necho \`bar\n" > "$d/s"; "$0" "$d/s" 2>&1 | sed "s|^[^ ]*: ||"; rm -rf "$d"'
   'd=$(mktemp -d); printf "foo=bar\necho \"abc\n" > "$d/s"; "$0" "$d/s" 2>&1 | sed "s|^[^ ]*: ||"; rm -rf "$d"'
   'd=$(mktemp -d); printf "foo=bar\necho \$(bar\nbaz\n" > "$d/s"; "$0" "$d/s" 2>&1 | sed "s|^[^ ]*: ||"; rm -rf "$d"'
+  # $BASH_XTRACEFD sends `set -x'"'"' output to a descriptor other than stderr; a
+  # value that is not an open fd is an error and leaves the destination alone.
+  # `unset'"'"' puts it back on stderr -- note the trace of the `unset'"'"' itself is
+  # the last line still written to the file.
+  'd=$(mktemp -d); exec 4>"$d/t"; BASH_XTRACEFD=4; set -x; echo one; set +x; exec 4<&-; echo "file:"; cat "$d/t"; rm -rf "$d"'
+  'd=$(mktemp -d); exec 4>"$d/t"; BASH_XTRACEFD=4; set -x; echo one; unset BASH_XTRACEFD; echo two; set +x; exec 4<&-; echo "file:"; cat "$d/t"; rm -rf "$d"'
+  '{ BASH_XTRACEFD=9; } 2>&1 | sed "s|^[^ ]*: ||"'
+  '{ BASH_XTRACEFD=abc; } 2>&1 | sed "s|^[^ ]*: ||"'
 )
 
 fails=0

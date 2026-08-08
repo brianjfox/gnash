@@ -15,6 +15,8 @@
 #include <ctime>
 #include <time.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <climits>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/wait.h>
@@ -422,6 +424,42 @@ void Shell::drop_child_traps() {
     traps.erase("RETURN");
     traps.erase("ERR");  // bash gates this on errtrace (-E); gnash folds -E into -T
   }
+}
+
+// $BASH_XTRACEFD: send `set -x' output to a file descriptor other than stderr.
+// bash's sv_xtracefd(): unset or empty resets to stderr; a value that parses
+// wholly as an integer naming an OPEN fd is adopted; anything else is an error
+// and leaves the current destination alone.
+bool Shell::apply_xtracefd(const char *value) {
+  auto reset = [&] {
+    if (xtrace_fp) { std::fclose(xtrace_fp); xtrace_fp = nullptr; xtrace_fd = -1; }
+  };
+  if (!value || !*value) { reset(); return true; }  // unset or empty: back to stderr
+  std::string v(value);
+  char *end = nullptr;
+  long fd = std::strtol(v.c_str(), &end, 10);
+  // bash requires the whole value to be the number AND the fd to be open.
+  if (end == v.c_str() || *end != '\0' || fd < 0 || fd > INT_MAX ||
+      fcntl(static_cast<int>(fd), F_GETFD) == -1) {
+    std::fprintf(stderr, "%sBASH_XTRACEFD: %s: invalid value for trace file descriptor\n",
+                 err_prefix().c_str(), v.c_str());
+    return false;
+  }
+  if (xtrace_fd == static_cast<int>(fd)) return true;  // already there
+  reset();
+  std::FILE *fp = fdopen(static_cast<int>(fd), "w");
+  if (!fp) {
+    std::fprintf(stderr, "%sBASH_XTRACEFD: %s: cannot open as FILE\n",
+                 err_prefix().c_str(), v.c_str());
+    return false;
+  }
+  // Unbuffered: a script commonly writes the trace to a file and reads it back
+  // in the same run (`exec 4>f; BASH_XTRACEFD=4; ...; cat f'), so buffered
+  // output would still be sitting in the FILE when the reader ran.
+  std::setvbuf(fp, nullptr, _IONBF, 0);
+  xtrace_fp = fp;
+  xtrace_fd = static_cast<int>(fd);
+  return true;
 }
 
 void Shell::note_child_reaped() {
@@ -1592,6 +1630,9 @@ bool Shell::set(const std::string &n_in, const std::string &v,
   // bash reports errors against the source file, not the mutable $0.  $0 already
   // resolves through arg0; still stored so `$BASH_ARGV0' reads back the value.
   if (n == "BASH_ARGV0") { arg0 = v; }
+  // $BASH_XTRACEFD redirects `set -x' output; the value is stored either way,
+  // as bash does, but an unusable fd is reported and the destination unchanged.
+  if (n == "BASH_XTRACEFD") apply_xtracefd(v.c_str());
   // Assigning to a dynamic variable seeds/rebases it rather than storing.
   if (n == "RANDOM") {
     rand_seed = static_cast<unsigned long>(std::strtoul(v.c_str(), nullptr, 10));
@@ -1682,6 +1723,7 @@ void Shell::export_name(const std::string &n) {
 
 void Shell::unset(const std::string &n_in, bool force, bool noref) {
   if (n_in == "HISTSIZE" && history_loaded) unstifle_history();
+  if (n_in == "BASH_XTRACEFD") apply_xtracefd(nullptr);  // trace output back to stderr
   // `unset name' on a nameref removes the target; `unset -n name' (NOREF)
   // removes the nameref variable itself.  Following the ref matches common
   // usage.  FORCE mirrors bash's unbind_variable_noref: remove the named
