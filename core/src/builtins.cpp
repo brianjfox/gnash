@@ -4006,6 +4006,29 @@ int bi_trap(Shell &sh, const std::vector<std::string> &argv) {
 
   // Otherwise set/reset/ignore: the first operand is the action, the rest are
   // the signals it applies to.
+  //
+  // With a SINGLE operand, bash's historical one-argument form applies: if it
+  // names a signal it REVERTS that signal (`trap USR1').  Anything else is an
+  // action with no signal to apply it to --
+  // `trap ""', `trap 512', `trap "echo hi"' -- and that is a usage error, not
+  // the silent no-op it used to be here.
+  if (i + 1 == argv.size()) {
+    const std::string &only = argv[i];
+    bool names_signal = !only.empty() && only != "-" &&
+                        (!trap_pseudo(only).empty() || valid_signal_spec(only));
+    if (!names_signal) {
+      std::fprintf(stderr, "%s\n", kUsage);  // bare, as bash's builtin_usage()
+      return 2;
+    }
+    std::string pseudo = trap_pseudo(only);
+    if (!pseudo.empty()) {
+      sh.traps.erase(pseudo);
+    } else {
+      sh.traps.erase(trap_key_for_spec(only));
+      sh.set_signal_trap(signame_to_num(only), false);
+    }
+    return 0;
+  }
   std::string cmd = argv[i];
   bool reset = (cmd == "-");
   bool ignore = cmd.empty();
@@ -6394,7 +6417,14 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
       sh.posix_special_builtin_error(st);  // special builtin: fatal in posix
     } else {
       sh.returning = true;
-      sh.exit_status = argv.size() > 1 ? (std::atoi(argv[1].c_str()) & 0xff) : sh.last_status;
+      // A BARE `return' inside a signal trap action reports $? from before the
+      // trap ran -- the action cannot change it (posix interp 1602) -- unless
+      // the action called a function we are still inside.  An explicit
+      // argument always wins.
+      int bare = (sh.trap_ret_depth >= 0 && sh.nest_depth() == sh.trap_ret_depth)
+                     ? sh.trap_saved_status
+                     : sh.last_status;
+      sh.exit_status = argv.size() > 1 ? (std::atoi(argv[1].c_str()) & 0xff) : bare;
       st = sh.exit_status;
     }
   } else if (cmd == "break" || cmd == "continue") {
