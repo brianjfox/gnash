@@ -284,6 +284,9 @@ class Shell {
   void end_interruptible_wait();
   int pending_trapped_signal();               // a pending signal that has a trap, or 0
   void note_child_reaped();                   // count a reaped child for the SIGCHLD trap
+  // Drop the traps a child process does not inherit; call in every forked
+  // child (subshell, pipeline stage, background job, coproc, comsub).
+  void drop_child_traps();
   int pending_sigchld = 0;                     // children reaped, awaiting the CHLD trap
   // Run the DEBUG trap (if set) before a command, with $BASH_COMMAND set to
   // CMD_TEXT.  Only fires inside functions when functrace (-T) is enabled.
