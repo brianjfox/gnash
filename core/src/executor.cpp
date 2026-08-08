@@ -1370,10 +1370,9 @@ int Executor::run_simple(const SimpleCommand *c) {
 
   if (sh_.opt_xtrace) {
     // bash's xtrace prefix is $PS4 (default `+ '), decoded for prompt escapes
-    // then word-expanded, so `$LINENO' and friends resolve for the traced line.
-    std::string ps4 = sh_.is_set("PS4") ? sh_.get("PS4") : "+ ";
-    Expander xex(sh_);
-    std::string xt_prefix = xex.expand_no_split(expand_prompt(sh_, ps4), false, false);
+    // then word-expanded, so `$LINENO' and friends resolve for the traced line;
+    // its first character repeats once per nesting level.
+    std::string xt_prefix = sh_.xtrace_prefix();
     // bash traces each temporary/standalone assignment on its own line, then the
     // command word list (if any) on a separate line.  Assignment lines were
     // pre-formatted in source order (scalar values and command words are quoted
