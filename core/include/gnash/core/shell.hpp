@@ -531,6 +531,19 @@ class Shell {
   std::vector<std::string> debug_frame;
   // The same, for the RETURN trap; see return_trap_fires().
   std::vector<std::string> return_frame;
+  // Functions marked with `declare -ft'.  bash's trace attribute (trace_p) is
+  // a per-function functrace: such a function inherits the DEBUG and RETURN
+  // traps even when `set -T' is off.  traced_frame records, for each active
+  // call, whether THAT function is traced.
+  // Signals inherited as SIG_IGN at startup: bash's SIG_HARD_IGNORE.  They keep
+  // that disposition for the life of the shell -- `trap' can neither install a
+  // handler for one nor reset it, and does so silently.
+  std::set<std::string> hard_ignored;
+  std::set<std::string> traced_functions;
+  std::vector<bool> traced_frame;
+  bool in_traced_function() const {
+    return !traced_frame.empty() && traced_frame.back();
+  }
   std::FILE *xtrace_fp = nullptr;  // $BASH_XTRACEFD's stream; null = stderr
   int xtrace_fd = -1;              // the fd it was opened on
   int command_number = 1;     // \# prompt escape: commands entered this session

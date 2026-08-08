@@ -2583,6 +2583,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
   bool lcase = false, ucase = false;  // -l lowercase / -u uppercase attribute
   bool capcase = false;               // -c capitalize-first attribute
   bool funcs = false, funcnames = false;  // -f (definitions) / -F (names)
+  bool trace = false, rm_trace = false;  // -t / +t (bash's trace attribute)
   bool fp = false;                        // -p (display reproducibly)
   bool force_inherit = false;             // -I: inherit a surrounding value/attrs
   size_t i = 1;
@@ -2637,6 +2638,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
           // the same name for this local, as `shopt -s localvar_inherit' does
           // globally.
           case 'I': force_inherit = true; break;
+          case 't': (add ? trace : rm_trace) = true; break;
           default: break;
         }
       }
@@ -2752,6 +2754,25 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
         }
       } else {
         sh.readonly_functions.insert(fn);
+      }
+    }
+    return st;
+  }
+  // `declare -ft NAME' SETS the trace attribute rather than displaying the
+  // function: a traced function inherits the DEBUG and RETURN traps with no
+  // `set -T', which is bash's per-function functrace (trace_p).
+  if (funcs && (trace || rm_trace) && i < argv.size()) {
+    int st = 0;
+    for (; i < argv.size(); i++) {
+      const std::string &fn = argv[i];
+      // A missing function fails SILENTLY here -- unlike `readonly -f', which
+      // reports it; bash's declare returns 1 with no diagnostic.
+      if (!sh.functions.count(fn)) {
+        st = 1;
+      } else if (rm_trace) {
+        sh.traced_functions.erase(fn);
+      } else {
+        sh.traced_functions.insert(fn);
       }
     }
     return st;
@@ -4023,7 +4044,7 @@ int bi_trap(Shell &sh, const std::vector<std::string> &argv) {
     std::string pseudo = trap_pseudo(only);
     if (!pseudo.empty()) {
       sh.traps.erase(pseudo);
-    } else {
+    } else if (!sh.hard_ignored.count(trap_key_for_spec(only))) {
       sh.traps.erase(trap_key_for_spec(only));
       sh.set_signal_trap(signame_to_num(only), false);
     }
@@ -4050,6 +4071,9 @@ int bi_trap(Shell &sh, const std::vector<std::string> &argv) {
     }
     int signo = signame_to_num(spec);
     std::string key = trap_key_for_spec(spec);
+    // A signal ignored when the shell started keeps that disposition: bash
+    // silently refuses to trap or reset it (trap1.sub).
+    if (sh.hard_ignored.count(key)) continue;
     if (reset) {
       sh.traps.erase(key);
       sh.set_signal_trap(signo, false);

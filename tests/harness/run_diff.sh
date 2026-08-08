@@ -442,6 +442,18 @@ echo "L=$LINENO"'
   'PS4="+ "; set -x; (echo sub)'
   'PS4="+ "; set -x; x=$(echo cs); echo "$x"'
   'PS4=""; set -x; echo empty'
+  # `declare -ft NAME'"'"' sets the TRACE attribute: that function inherits the DEBUG
+  # and RETURN traps with no `set -T'"'"'.  It sets rather than displays, and a
+  # missing function fails silently (unlike `readonly -f'"'"').
+  'f(){ echo in; }; declare -ft f; trap "echo D" DEBUG; f; trap "" DEBUG'
+  'f(){ echo in; }; trap "echo D" DEBUG; f; trap "" DEBUG'
+  'f(){ echo in; }; declare -ft f; trap "echo R" RETURN; f; trap - RETURN'
+  'f(){ :; }; declare -ft f; declare -F f'
+  'f(){ :; }; declare -ft f; declare +t f; echo "rc=$?"'
+  '{ declare -ft nosuch; } 2>&1; echo "rc=$?"'
+  # A signal ignored when the shell started can be neither trapped nor reset.
+  'trap "" USR2; "$0" -c '"'"'trap "echo USR2" USR2; trap -p USR2'"'"''
+  'trap "echo U" USR2; trap -p USR2; trap - USR2; trap -p USR2; echo end'
 )
 
 fails=0
