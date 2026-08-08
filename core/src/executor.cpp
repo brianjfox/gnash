@@ -860,8 +860,30 @@ int Executor::run(const Command *c) {
 
   sh_.run_pending_traps();  // deliver any signals received between commands
 
-  // $LINENO / error line for compound commands (run_simple sets its own).
-  if (c->line > 0 && !dynamic_cast<const SimpleCommand *>(c))
+  // $LINENO / error line.  bash installs a command's line for only a FEW
+  // command types -- SET_LINE_NUMBER() appears in execute_cmd.c for the simple
+  // command (run_simple sets its own, below), the subshell, `(( ))' and
+  // `[[ ]]', and `for'/`select' set it directly.  `while', `until', `if',
+  // `case', a `{ }' group and a function definition deliberately do NOT: they
+  // leave line_number wherever it already was, which is why a diagnostic from
+  // inside e.g. `(...)' reports the subshell's closing line rather than the
+  // line of the command that produced it.  Matching that set matters --
+  // updating it for every compound made redirection errors inside a subshell
+  // report the wrong line all through redir12.sub.
+  // ...and it is SCOPED: bash saves line_number, installs the command's, and
+  // restores it when the command finishes (the "simple_lineno" unwind frame).
+  // So the line in force is always the innermost enclosing construct that set
+  // one, not whatever the last command to run happened to leave behind.
+  struct LineGuard {
+    Shell &sh; int saved;
+    explicit LineGuard(Shell &s) : sh(s), saved(s.cur_lineno) {}
+    ~LineGuard() { sh.cur_lineno = saved; }
+  } lg(sh_);
+  // A subshell installs its line BEFORE its redirections, which bash applies in
+  // the forked child; the others install theirs only once redirections have
+  // succeeded, so a redirection error on `for ... done > f' inside a subshell
+  // still reports the subshell's line rather than the `for'.
+  if (c->line > 0 && dynamic_cast<const Subshell *>(c))
     sh_.cur_lineno = sh_.lineno_base + c->line;
 
   // A negated command (`! cmd') never triggers errexit, and neither do the
@@ -893,6 +915,10 @@ int Executor::run(const Command *c) {
     }
     return sh_.last_status;
   }
+  if (c->line > 0 && (dynamic_cast<const ArithCommand *>(c) ||
+                      dynamic_cast<const CondCommand *>(c) ||
+                      dynamic_cast<const ForCommand *>(c)))
+    sh_.cur_lineno = sh_.lineno_base + c->line;
   int st = sh_.last_status;
   if (auto *pa = dynamic_cast<const Subshell *>(c)) st = run_subshell(pa);
   else if (auto *pb = dynamic_cast<const Group *>(c)) st = run_group(pb);

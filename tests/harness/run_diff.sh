@@ -362,6 +362,34 @@ line1'
   'echo $(( x!!y )) 2>&1'
   'echo $(( 1+ )) 2>&1'
   'echo $(( x= )) 2>&1'
+  # The line a diagnostic reports.  A command that installs no line of its own
+  # -- `while'"'"', `if'"'"', a function definition -- is reported against the line the
+  # PARSER stopped on, so a redirection error on a multi-line `while ... done > f'"'"'
+  # names the `done'"'"'.  Inside a subshell that line is the subshell'"'"'s closing
+  # paren, which is why the `for'"'"' and the posix funcdef below both report it
+  # rather than their own line.  (These pipe stderr through sed because the
+  # harness compares stdout only, and the two shells name themselves.)
+  '{ d=$(mktemp -d); cd "$d"; touch nw; chmod a-w nw; while [ -z x ]; do
+ y=4
+done > nw
+cd /; rm -rf "$d"; } 2>&1 | sed "s/^[^ ]*: //"'
+  '{ d=$(mktemp -d); cd "$d"; touch nw; chmod a-w nw; (set -e
+for f in 1 2; do y=4; done > nw
+echo after: $?)
+cd /; rm -rf "$d"; } 2>&1 | sed "s/^[^ ]*: //"'
+  '{ set -o posix; ( break()
+{
+ :
+}
+); } 2>&1 | sed "s/^[^ ]*: //"'
+  '{ if true; then
+ y=1
+fi > /nonexistent-dir-xyz/f; } 2>&1 | sed "s/^[^ ]*: //"'
+  # $LINENO itself is unaffected: each simple command still reports its own line.
+  '( echo "L=$LINENO"
+echo "L=$LINENO"
+)
+echo "L=$LINENO"'
 )
 
 fails=0

@@ -2512,6 +2512,9 @@ int Shell::run_string(const std::string &script, const std::vector<int> *cont_li
     cur_lineno = save_ln;
   }
   if (!r.command) { subshell_leaf = false; return last_status; }
+  // The line the parser stopped on is the one in force for anything that does
+  // not install its own -- see ParseResult::end_line.
+  if (r.end_line > 0) cur_lineno = lineno_base + r.end_line;
   const Command *c = r.command.get();
   retained.push_back(std::move(r.command));
   // A disposable subshell child (command substitution) whose whole body is a
