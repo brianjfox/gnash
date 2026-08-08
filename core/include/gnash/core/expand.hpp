@@ -151,6 +151,18 @@ std::string mb_capitalize(const std::string &s);
 // (used by declare/local/readonly for array and scalar values).
 void apply_assignment_word(Shell &sh, const std::string &word);
 
+// True when S contains no shell metacharacters that require expansion in an
+// assignment context ($, `, \\, ~, single or double quotes).  Used as a fast
+// path to skip the full expansion pipeline for plain literal values.
+static inline bool is_plain_literal(const std::string &s) {
+  for (char c : s) {
+    if (c == '$' || c == '`' || c == '\\' || c == '~' ||
+        c == '\'' || c == '"')
+      return false;
+  }
+  return true;
+}
+
 }  // namespace gnash::core
 
 #endif  // GNASH_CORE_EXPAND_HPP

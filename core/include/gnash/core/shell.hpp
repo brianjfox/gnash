@@ -108,6 +108,16 @@ class Shell {
   // builtin, versus the bare form for a plain `r=X' assignment.
   bool set(const std::string &n, const std::string &v,
            const char *nameref_ctx = nullptr);
+  // Fast-path: assign a value to a known-existing plain scalar variable.
+  // Caller must ensure: name is already deref'd, no readonly/nameref/special
+  // var checks needed, no case-folding, no array handling.  Skips all guards
+  // in Shell::set for maximum speed on the common `s+=x' path.
+  void set_scalar_fast(const std::string &n, std::string &&v) {
+    Variable &var = vars[n];
+    var.value = std::move(v);
+    var.invisible = false;
+    if (opt_allexport) var.exported = true;
+  }
   void set_exported(const std::string &n, const std::string &v);
   void export_name(const std::string &n);
   // Remove N.  A readonly variable is left in place unless FORCE is set
