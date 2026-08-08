@@ -1559,6 +1559,7 @@ int Executor::run_simple(const SimpleCommand *c) {
     }
     sh_.push_scope();
     sh_.debug_frame.push_back(sh_.traps.count("DEBUG") ? sh_.traps["DEBUG"] : std::string());
+    sh_.return_frame.push_back(sh_.traps.count("RETURN") ? sh_.traps["RETURN"] : std::string());
     sh_.persona_restore.push_back(std::nullopt);  // for `personality -L' / `emulate -L'
     // Run the body under the lineno_base captured at definition time so $LINENO
     // reports absolute source lines regardless of the caller's input block.
@@ -1578,31 +1579,20 @@ int Executor::run_simple(const SimpleCommand *c) {
                                                        : sh_.lineno_base + 1;
       sh_.run_debug_trap(to_string(fit->second));
     }
-    // Snapshot the RETURN trap so we can tell one the function installs for
-    // itself from an inherited one (only inherited under functrace).
-    auto rtit = sh_.traps.find("RETURN");
-    bool had_return = rtit != sh_.traps.end();
-    std::string return_before = had_return ? rtit->second : std::string();
     status = unwinding() ? sh_.last_status : run(fit->second);
     // Deliver a signal caught during the body while the function scope is still
     // active, so its trap runs in-context (bash): a `return' in the trap then
     // returns from THIS function rather than erroring at the outer level.
     if (!unwinding()) sh_.run_pending_traps();
     // The RETURN trap fires when the function returns, in its own scope, with $?
-    // set to the return status.  It runs when inherited (functrace) or installed
-    // inside the function.  A function invoked while the DEBUG trap is running
-    // (e.g. the DEBUG-trap handler itself) does not inherit the RETURN trap --
-    // bash restores its default at entry when signal_in_progress(DEBUG_TRAP).
+    // set to the return status; return_trap_fires() holds bash's rule for when.
     {
       // Leaving the body, bash reports the function's DEFINITION line again --
       // the same line its entry DEBUG trap named -- rather than whatever the
       // last command inside happened to set.
       auto rlit = sh_.func_def_line.find(argv[0]);
       if (rlit != sh_.func_def_line.end()) sh_.cur_lineno = rlit->second;
-      auto rt = sh_.traps.find("RETURN");
-      bool set_now = rt != sh_.traps.end() && !rt->second.empty();
-      bool set_inside = set_now && (!had_return || rt->second != return_before);
-      if (set_now && (sh_.opt_functrace || set_inside) && !sh_.in_debug_trap) {
+      if (sh_.return_trap_fires()) {
         int ret_status = sh_.returning ? sh_.exit_status : status;
         bool save_ret = sh_.returning;
         int save_es = sh_.exit_status;
@@ -1620,6 +1610,7 @@ int Executor::run_simple(const SimpleCommand *c) {
     }
     sh_.pop_scope();
     sh_.debug_frame.pop_back();
+    sh_.return_frame.pop_back();
     if (pushed_argframe && !sh_.argframes.empty()) sh_.argframes.pop_back();
     sh_.pop_src_frame();
     sh_.call_stack.pop_back();

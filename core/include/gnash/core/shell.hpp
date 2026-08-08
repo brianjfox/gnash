@@ -292,6 +292,9 @@ class Shell {
   int run_debug_trap(const std::string &cmd_text);
   void run_err_trap(int status);              // run the ERR trap after a failure
   int run_return_trap(int status);            // run the RETURN trap on func/source return
+  // Does the RETURN trap fire as the innermost frame -- a function body or a
+  // sourced file -- finishes?  See the definition for bash's rule.
+  bool return_trap_fires() const;
 
   // --- job control -------------------------------------------------------
   struct Job {
@@ -500,6 +503,8 @@ class Shell {
   // DEBUG trap the function installs for itself (the body differs from entry)
   // fires without functrace; an inherited one does not.
   std::vector<std::string> debug_frame;
+  // The same, for the RETURN trap; see return_trap_fires().
+  std::vector<std::string> return_frame;
   int command_number = 1;     // \# prompt escape: commands entered this session
   bool opt_extdebug = false;  // `shopt -s extdebug': enables BASH_ARGC/BASH_ARGV
   // Call-argument stack for $BASH_ARGC/$BASH_ARGV (only maintained under
