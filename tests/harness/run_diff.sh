@@ -406,6 +406,19 @@ echo "L=$LINENO"'
   'd=$(mktemp -d); exec 4>"$d/t"; BASH_XTRACEFD=4; set -x; echo one; unset BASH_XTRACEFD; echo two; set +x; exec 4<&-; echo "file:"; cat "$d/t"; rm -rf "$d"'
   '{ BASH_XTRACEFD=9; } 2>&1 | sed "s|^[^ ]*: ||"'
   '{ BASH_XTRACEFD=abc; } 2>&1 | sed "s|^[^ ]*: ||"'
+  # An EMPTY array subscript is diagnosed but is NOT fatal: a read yields 0, a
+  # write is skipped while the assignment still evaluates to its right-hand
+  # side, and the command list keeps running.
+  '{ declare -a a; echo $(( a[""]=2+3 )); } 2>&1 | sed "s|^[^ ]*: ||"'
+  '{ declare -a a; echo $(( 7 + a[""] )); echo AFTER; } 2>&1 | sed "s|^[^ ]*: ||"'
+  'declare -a a; { (( a[""]=24 )); } 2>&1 | sed "s|^[^ ]*: ||"; declare -p a'
+  # ...but a subscript that fails to EVALUATE does unwind the list, even from
+  # `let'"'"', where a bad top-level expression merely returns non-zero.  Under
+  # assoc_expand_once the quotes survive into the evaluator, so this is a
+  # syntax error rather than a write to element 0.
+  'shopt -s assoc_expand_once; declare -a a; a[0]=0; { ( let "a[\" \"]"=18 ; echo AFTER ); } 2>&1 | sed "s|^[^ ]*: ||"; declare -p a'
+  'shopt -u assoc_expand_once; declare -a a; a[0]=0; { ( let "a[\" \"]"=18 ; echo AFTER ); } 2>&1 | sed "s|^[^ ]*: ||"; declare -p a'
+  '{ let "x+"; } 2>&1 | sed "s|^[^ ]*: ||"; echo AFTER'
 )
 
 fails=0
