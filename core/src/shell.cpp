@@ -403,6 +403,27 @@ int Shell::run_return_trap(int status) {
   return st;
 }
 
+// The traps a child process does not inherit.  bash does this in ONE place --
+// trap.c's reset_or_restore_signal_handlers(), reached whenever it builds a
+// "subshell environment" -- with the comment:
+//
+//   Command substitution and other child processes don't inherit the debug,
+//   error, or return traps.  If we're in the debugger, and the `functrace' or
+//   `errtrace' options have been set, then let command substitutions inherit
+//   them.
+//
+// So without functrace a command substitution runs none of the DEBUG traps its
+// body would otherwise fire, and -- because a comsub's stdout is the capture
+// pipe -- their output would otherwise land in the substituted VALUE rather
+// than on the terminal.
+void Shell::drop_child_traps() {
+  if (!opt_functrace) {
+    traps.erase("DEBUG");
+    traps.erase("RETURN");
+    traps.erase("ERR");  // bash gates this on errtrace (-E); gnash folds -E into -T
+  }
+}
+
 void Shell::note_child_reaped() {
   // bash runs the SIGCHLD trap once for each terminated child; only count while
   // such a trap is installed.
@@ -2646,7 +2667,7 @@ std::string Shell::run_and_capture(const std::string &script, int *status) {
     no_current_job = true;  // bash resets the current job in the subshell
     subshell_level++;  // $BASH_SUBSHELL
     traps.erase("CHLD");  // the parent fires CHLD for the substitution as a whole
-    if (!opt_functrace) traps.erase("ERR");  // ERR is not inherited without -E
+    drop_child_traps();
     pending_sigchld = 0;
     subshell_leaf = true;  // a lone external here can exec in place (no 2nd fork)
     // Command substitution unsets errexit in the subshell unless the caller has

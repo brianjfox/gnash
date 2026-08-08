@@ -969,6 +969,10 @@ int Executor::run_connection(const Connection *c) {
         sh_.job_control = false;  // background: descendants must not touch the tty
         sh_.subshell_level++;
         sh_.traps.erase("CHLD");  // the parent fires CHLD when it reaps this job
+        // Only ERR here, not drop_child_traps(): gnash fires a background job's
+        // own DEBUG trap in the CHILD, where bash fires it in the parent before
+        // forking.  Dropping DEBUG here would lose that trap altogether rather
+        // than merely stop it being inherited.
         if (!sh_.opt_functrace) sh_.traps.erase("ERR");  // not inherited without -E
         sh_.pending_sigchld = 0;
         Executor ex(sh_);
@@ -1045,6 +1049,8 @@ int Executor::run_pipeline(const Connection *c) {
       // A pipeline stage is a subshell: without errtrace it does not inherit the
       // ERR trap (the whole pipeline fires it once in the parent instead), and
       // it never inherits the parent's EXIT trap -- only one it sets itself runs.
+      // Not drop_child_traps(): as for a background job, gnash fires a stage's
+      // own DEBUG trap in the child, so dropping DEBUG here would lose it.
       if (!sh_.opt_functrace) sh_.traps.erase("ERR");
       sh_.traps.erase("EXIT");
       sh_.traps.erase("CHLD");  // the parent fires CHLD for the stage as a whole
@@ -1959,7 +1965,7 @@ int Executor::run_subshell(const Subshell *c) {
     // itself runs when it exits.
     sh_.traps.erase("EXIT");
     sh_.traps.erase("CHLD");  // the parent fires CHLD for the subshell as a whole
-    if (!sh_.opt_functrace) sh_.traps.erase("ERR");  // not inherited without -E
+    sh_.drop_child_traps();
     sh_.pending_sigchld = 0;
     // (external): a lone simple command can exec in place, no second fork.
     if (dynamic_cast<const SimpleCommand *>(c->body.get())) sh_.can_exec_replace = true;

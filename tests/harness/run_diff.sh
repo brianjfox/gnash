@@ -337,6 +337,20 @@ line1'
   'd=$(mktemp -d); printf "echo one\necho two\n" >"$d/s"; trap "echo DBG" DEBUG; source "$d/s"; trap - DEBUG; rm -rf "$d"'
   'd=$(mktemp -d); printf "echo one\n" >"$d/s"; set -T; trap "echo DBG" DEBUG; source "$d/s"; trap - DEBUG; set +T; rm -rf "$d"'
   'd=$(mktemp -d); printf "echo in-sub\n" >"$d/s"; f() { trap "echo RET" RETURN; source "$d/s"; }; f; echo after; rm -rf "$d"'
+  # A child process does not inherit the DEBUG/RETURN traps without functrace.
+  # For a command substitution that is visible in the VALUE: the trap would
+  # write into the capture pipe, so `x=$(echo hi)' would come back as "DBG hi".
+  'trap "echo DBG" DEBUG; x=$(echo hi; echo there); echo "x=[$x]"'
+  'trap "echo DBG" DEBUG; x=`echo hi`; echo "x=[$x]"'
+  'f(){ echo F; }; trap "echo DBG" DEBUG; x=$(f); echo "x=[$x]"'
+  'set -T; f(){ echo F; }; trap "echo DBG" DEBUG; x=$(f); echo "x=[$x]"'
+  'trap "echo RET" RETURN; f(){ echo F; }; x=$(f); echo "x=[$x]"'
+  'trap "echo DBG" DEBUG; (echo sub); echo after'
+  'set -T; trap "echo DBG" DEBUG; (echo sub); echo after'
+  # ...but a pipeline stage and a background job still report their own DEBUG
+  # trap, which gnash fires in the child rather than the parent.
+  'trap "echo DBG" DEBUG; echo a | cat'
+  'trap "echo DBG" DEBUG; echo a & wait'
 )
 
 fails=0
