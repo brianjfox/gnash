@@ -3573,6 +3573,7 @@ std::string Expander::expand_no_split(const std::string &text, bool do_glob, boo
 }
 
 std::string Expander::expand_assignment(const std::string &text) {
+  if (is_plain_literal(text)) return text;  // fast path: nothing to expand
   return expand_no_split(tilde_assign(sh_, text));
 }
 

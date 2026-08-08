@@ -1294,13 +1294,27 @@ int Executor::run_simple(const SimpleCommand *c) {
         std::string xtrace_rhs = v;
         // Only the old value is needed for `+=' / integer arithmetic; reading it
         // for a plain assignment would spuriously resolve a circular nameref.
-        std::string cur = (integer || a.append)
-                              ? (is_arr ? sh_.array_get(a.name, "0") : sh_.get_quiet(a.name))
-                              : std::string();
+        // Fast-path (Opt 3): for a known plain scalar (vit points to it, not a
+        // nameref), use vit->second.value directly to avoid the full deref_ex
+        // walk in get_quiet().
+        std::string cur;
+        if (integer || a.append) {
+          if (is_arr) {
+            cur = sh_.array_get(a.name, "0");
+          } else if (vit != sh_.vars.end() && !vit->second.nameref) {
+            cur = vit->second.value;  // plain scalar, no deref walk needed
+          } else {
+            cur = sh_.get_quiet(a.name);
+          }
+        } else {
+          cur = std::string();
+        }
         for (auto it = prior.rbegin(); it != prior.rend(); ++it) {
           if (it->second) sh_.vars[it->first] = *it->second;
           else sh_.vars.erase(it->first);
         }
+        // Fast-path flag (Opt 2): set when the direct-append path bypasses assigns[].
+        bool fast_path_applied = false;
         if (integer) {
           // An integer-attributed assignment evaluates the RHS as arithmetic;
           // a malformed value (`i=0#4') prints bash's diagnostic and aborts the
@@ -1313,13 +1327,36 @@ int Executor::run_simple(const SimpleCommand *c) {
           xtrace_rhs = v;
         } else if (a.append) {
           v = cur + v;
+          // Fast-path (Opt 2): if the variable is a plain scalar (not nameref,
+          // not array, not integer) and the RHS was a plain literal, append
+          // directly to avoid the temp-assign + set() overhead.
+          if (is_plain_literal(a.value) &&
+              vit != sh_.vars.end() &&
+              !vit->second.nameref &&
+              !vit->second.integer) {
+            std::string dn = sh_.deref(a.name);
+            Variable &var = sh_.vars[dn];
+            var.value = v;  // v already holds the full new value (cur + rhs)
+            var.invisible = false;
+            if (sh_.opt_allexport) var.exported = true;
+            fast_path_applied = true;
+          }
         }
         if (sh_.opt_xtrace)
           xtrace_lines.push_back(a.name + (a.append ? "+=" : "=") +
                                  (xtrace_rhs.empty() ? std::string()
                                                      : xtrace_quote_word(xtrace_rhs)));
         if (is_arr) sh_.array_set(a.name, "0", v);
-        else assigns.emplace_back(temp_assign_name(sh_, a.name), v);
+        else if (!fast_path_applied) {
+          // Skip temp_assign_name for plain scalars — no nameref to resolve.
+          // vit was captured before prior assignments (which are rolled back),
+          // so it still reflects the true state of the variable.
+          std::string store_name = a.name;
+          if (vit == sh_.vars.end() || !vit->second.nameref) {
+            store_name = sh_.deref(a.name);
+          }
+          assigns.emplace_back(std::move(store_name), v);
+        }
       }
     } else {
       prefix = false;
