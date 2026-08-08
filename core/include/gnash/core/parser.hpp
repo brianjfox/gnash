@@ -33,6 +33,12 @@ struct ParseResult {
   bool ok = true;
   std::string error;    // set when ok == false (may be multiple lines)
   int error_line = 0;   // 1-based source line of the failure
+  // The last source line this parse consumed.  bash leaves `line_number' here
+  // when it hands a command to the executor, and compound commands that do not
+  // install a line of their own (`while', `if', `case', `{ }', a function
+  // definition) report diagnostics against it -- so a redirection error on a
+  // multi-line `while ... done > f' names the `done' line, not the `while'.
+  int end_line = 0;
   bool incomplete = false;  // input ended mid-construct (needs more lines)
   bool assign_error = false;  // a compound-assignment syntax error (`a=(x & y)'): $?=1, not 2
   // A here-document body was delimited by end of input: ok stays true and the

@@ -614,6 +614,13 @@ struct Parser {
     expect(Tok::Lparen, "(");
     auto s = std::make_unique<Subshell>();
     s->body = parse_list({});
+    // bash's make_subshell_command() records `line_number' as it reduces
+    // `( compound_list )', so a subshell's line is the line of its CLOSING
+    // paren, not its opening one.  It is the only compound command whose line
+    // the executor installs, so this is what a diagnostic from anywhere inside
+    // the subshell reports.
+    s->line = i > 0 ? toks[i - 1].line : cur().line;
+    if (is(Tok::Rparen)) s->line = cur().line;
     expect(Tok::Rparen, ")");
     pop_open();
     parse_redirect_list(s->redirects);
@@ -1218,6 +1225,11 @@ struct Parser {
     newline_list();
     if (is(Tok::Eof)) return res;
     res.command = parse_list({});
+    // Where the parse ended: bash leaves `line_number' on the last line it
+    // consumed, and that is what a compound command which installs no line of
+    // its own reports.  Take it before newline_list() eats the trailing
+    // newlines, so a command ending at `done' names the `done' line.
+    res.end_line = i > 0 ? toks[i - 1].line : 0;
     newline_list();
     if (!err && !is(Tok::Eof))
       fail(is(Tok::Eof) ? std::string("unexpected end of file")
