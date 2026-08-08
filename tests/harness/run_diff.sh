@@ -454,6 +454,11 @@ echo "L=$LINENO"'
   # A signal ignored when the shell started can be neither trapped nor reset.
   'trap "" USR2; "$0" -c '"'"'trap "echo USR2" USR2; trap -p USR2'"'"''
   'trap "echo U" USR2; trap -p USR2; trap - USR2; trap -p USR2; echo end'
+  # `echo'"'"' reports a failed write.  Duplicating a READ-ONLY descriptor onto
+  # stdout succeeds, so `>&3'"'"' below fails only when the write happens.
+  '{ exec 3</etc/passwd; echo hi >&3; } 2>&1 | sed "s|^[^ ]*: ||"; echo "rc=$?"'
+  'exec 3>/dev/null; echo hi >&3; echo "rc=$?"'
+  'echo normal; echo "rc=$?"'
 )
 
 fails=0
