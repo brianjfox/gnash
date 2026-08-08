@@ -87,7 +87,10 @@ Shell::Shell() {
     const char *nm = signum_to_trapname(s);
     if (!nm) continue;
     struct sigaction cur;
-    if (sigaction(s, nullptr, &cur) == 0 && cur.sa_handler == SIG_IGN) traps[nm] = "";
+    if (sigaction(s, nullptr, &cur) == 0 && cur.sa_handler == SIG_IGN) {
+      traps[nm] = "";
+      hard_ignored.insert(nm);  // and it can never be trapped or reset
+    }
   }
 }
 
@@ -327,7 +330,7 @@ int Shell::run_debug_trap(const std::string &cmd_text) {
   // Without functrace a function does not inherit the DEBUG trap: inside one it
   // fires only if the function installed its own (the body differs from what it
   // was when the innermost function was entered).
-  if (!opt_functrace && in_function() &&
+  if (!opt_functrace && !in_traced_function() && in_function() &&
       (debug_frame.empty() || it->second == debug_frame.back()))
     return 0;
   in_debug_trap = true;
@@ -380,7 +383,7 @@ void Shell::run_err_trap(int status) {
 bool Shell::return_trap_fires() const {
   auto it = traps.find("RETURN");
   if (it == traps.end() || it->second.empty() || in_debug_trap) return false;
-  if (opt_functrace || return_frame.empty()) return true;
+  if (opt_functrace || in_traced_function() || return_frame.empty()) return true;
   return it->second != return_frame.back();  // installed inside this function
 }
 

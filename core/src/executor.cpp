@@ -1591,6 +1591,9 @@ int Executor::run_simple(const SimpleCommand *c) {
     sh_.push_scope();
     sh_.debug_frame.push_back(sh_.traps.count("DEBUG") ? sh_.traps["DEBUG"] : std::string());
     sh_.return_frame.push_back(sh_.traps.count("RETURN") ? sh_.traps["RETURN"] : std::string());
+    // `declare -ft NAME' traces this function specifically: it inherits the
+    // DEBUG and RETURN traps as though functrace were on.
+    sh_.traced_frame.push_back(sh_.traced_functions.count(argv[0]) > 0);
     sh_.persona_restore.push_back(std::nullopt);  // for `personality -L' / `emulate -L'
     // Run the body under the lineno_base captured at definition time so $LINENO
     // reports absolute source lines regardless of the caller's input block.
@@ -1603,7 +1606,8 @@ int Executor::run_simple(const SimpleCommand *c) {
     sh_.loop_depth = 0;
     // Under functrace, bash fires the DEBUG trap once for the function body as a
     // whole on entry, before the per-command traps inside it.
-    if (sh_.opt_functrace && sh_.traps.count("DEBUG") && !sh_.in_debug_trap) {
+    if ((sh_.opt_functrace || sh_.in_traced_function()) && sh_.traps.count("DEBUG") &&
+        !sh_.in_debug_trap) {
       // The whole-body DEBUG trap reports the function's definition line.
       auto dlit = sh_.func_def_line.find(argv[0]);
       sh_.cur_lineno = dlit != sh_.func_def_line.end() ? dlit->second
@@ -1642,6 +1646,7 @@ int Executor::run_simple(const SimpleCommand *c) {
     sh_.pop_scope();
     sh_.debug_frame.pop_back();
     sh_.return_frame.pop_back();
+    sh_.traced_frame.pop_back();
     if (pushed_argframe && !sh_.argframes.empty()) sh_.argframes.pop_back();
     sh_.pop_src_frame();
     sh_.call_stack.pop_back();
