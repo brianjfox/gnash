@@ -778,19 +778,29 @@ static bool resolve_sub(const Node *n, Ctx &ctx, std::string &out, bool writing 
   // result is arith-evaluated, a malformed one aborting with bash's
   // diagnostic naming the SUBSCRIPT.
   if (out.empty()) {
-    ctx.ok = false;
+    // An EMPTY subscript is reported but is NOT fatal to the expression: bash
+    // prints the diagnostic, then carries on -- a read yields 0, a write is
+    // skipped while the assignment still evaluates to its right-hand side, and
+    // the enclosing command list keeps running.  (A real syntax error, by
+    // contrast, still unwinds; see the arith_abort path in expand.cpp.)  So
+    // ctx.ok is deliberately left alone here: returning false already gives
+    // the caller both behaviours.
     if (writing) {
       // `(( a[""]=24 ))' -- an assignment target: `a[]': not a valid
       // identifier (with the command prefix).
-      ctx.full_msg = "`" + n->name + "[]': not a valid identifier";
+      // Unlike the read below, this one carries the command prefix (`((: ').
+      std::fprintf(stderr, "%s%s%s`%s[]': not a valid identifier\n",
+                   ctx.sh.err_prefix().c_str(),
+                   (ctx.cmd_name && *ctx.cmd_name) ? ctx.cmd_name : "",
+                   (ctx.cmd_name && *ctx.cmd_name) ? ": " : "", n->name.c_str());
     } else {
       // `(( y[$none] ))' -- a read: y[]: bad array subscript (bare).  bash
       // reports it TWICE: once while resolving the reference and again when
       // the arithmetic command reports the failed expression (array27.sub).
-      ctx.full_msg = n->name + "[]: bad array subscript";
-      ctx.full_msg_bare = true;
+      std::string m = n->name + "[]: bad array subscript";
+      std::fprintf(stderr, "%s%s\n", ctx.sh.err_prefix().c_str(), m.c_str());
       if (ctx.expand_subs == 1)
-        std::fprintf(stderr, "%s%s\n", ctx.sh.err_prefix().c_str(), ctx.full_msg.c_str());
+        std::fprintf(stderr, "%s%s\n", ctx.sh.err_prefix().c_str(), m.c_str());
     }
     return false;
   }
@@ -800,9 +810,22 @@ static bool resolve_sub(const Node *n, Ctx &ctx, std::string &out, bool writing 
     ctx.full_msg_bare = true;
     return false;
   }
+  // Double-quote CHARACTERS in an indexed subscript are removable arithmetic
+  // quoting -- EXCEPT under assoc_expand_once, whose literal-subscript rule
+  // keeps them for an indexed array too, so `let "a[\" \"]"=18' hands `" "' to
+  // the evaluator and is a syntax error rather than a write to element 0.
+  bool eo_idx = false;
+  {
+    auto eoit = ctx.sh.shopt_opts.find("assoc_expand_once");
+    eo_idx = eoit != ctx.sh.shopt_opts.end() && eoit->second;
+  }
   std::string ev;
-  for (char c : out)
-    if (c != '"') ev += c;
+  if (ctx.expand_subs == 2 && eo_idx) {
+    ev = out;
+  } else {
+    for (char c : out)
+      if (c != '"') ev += c;
+  }
   if (blank_expr(ev)) { out = "0"; return true; }
   long long k;
   if (!try_int(ev, k)) {
@@ -1032,6 +1055,10 @@ long long eval_arith_msg(Shell &sh, const std::string &expr, const char *cmd_nam
     // prints bare (no `((: ' prefix), as bash's array layer does.
     std::fprintf(stderr, "%s%s%s\n", sh.err_prefix().c_str(),
                  ctx.full_msg_bare ? "" : prefix.c_str(), rendere(ctx.full_msg).c_str());
+    // A failure raised by the ARRAY layer while evaluating a subscript unwinds
+    // the command list, even from `let', where a failure of the top-level
+    // expression (`let "x+"') merely returns non-zero and execution continues.
+    if (ctx.full_msg_bare) sh.arith_abort = true;
   } else if (!ctx.ok && ctx.err_pos != std::string::npos && ctx.err_pos <= expr.size()) {
     std::fprintf(stderr, "%s%s%s\n", sh.err_prefix().c_str(), prefix.c_str(),
                  rendere(format_arith_err(expr, ctx.err_msg, ctx.err_pos)).c_str());
