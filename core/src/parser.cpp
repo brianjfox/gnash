@@ -629,8 +629,11 @@ struct Parser {
 
   CommandPtr parse_group() {
     push_open("{");
+    int group_line = cur().line;  // the `{' line: bash's function_bstart when
+                                  // the group is a function body
     expect_reserved("{");
     auto g = std::make_unique<Group>();
+    g->line = group_line;
     g->body = parse_list({"}"});
     expect_reserved("}");
     pop_open();

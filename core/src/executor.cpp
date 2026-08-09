@@ -1640,6 +1640,17 @@ int Executor::run_simple(const SimpleCommand *c) {
                                                        : sh_.lineno_base + 1;
       sh_.run_debug_trap(to_string(fit->second));
     }
+    // Entering the body, bash sets `line_number = function_line_number =
+    // tc->line' -- the line the body STARTS on (execute_function).  That is
+    // the ambient line inside the function for any construct that does not
+    // install its own (a select's identifier check, redirection errors on
+    // if/while/case, ...).
+    if (fit->second && fit->second->line > 0) {
+      auto blit = sh_.func_lineno_base.find(argv[0]);
+      sh_.cur_lineno = (blit != sh_.func_lineno_base.end() ? blit->second
+                                                           : sh_.lineno_base) +
+                       fit->second->line;
+    }
     status = unwinding() ? sh_.last_status : run(fit->second);
     // Deliver a signal caught during the body while the function scope is still
     // active, so its trap runs in-context (bash): a `return' in the trap then
