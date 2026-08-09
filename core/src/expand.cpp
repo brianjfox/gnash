@@ -3602,7 +3602,18 @@ std::string Expander::expand_no_split(const std::string &text, bool do_glob, boo
   return joined;
 }
 
+// Nothing in TEXT can be touched by assignment-context expansion: no parameter
+// or command substitution, no arithmetic, no quoting to remove, no tilde, and
+// no process substitution (`<(cmd)' / `>(cmd)', which expand_no_split performs
+// by default).  A value made only of ordinary characters expands to itself, so
+// the whole pipeline can be skipped -- worth doing because string building in a
+// loop hits this path once per iteration.
+static bool assignment_expands_to_itself(const std::string &s) {
+  return s.find_first_of("$`\\~'\"<>") == std::string::npos;
+}
+
 std::string Expander::expand_assignment(const std::string &text) {
+  if (assignment_expands_to_itself(text)) return text;
   return expand_no_split(tilde_assign(sh_, text));
 }
 
