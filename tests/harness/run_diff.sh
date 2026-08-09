@@ -529,6 +529,20 @@ echo "L=$LINENO"'
   'exec <&-; read abcde 2>&1 | grep -q "read error"; echo rc=$?'
   # read(2) failing outright (closed fd) is a reported error, not a quiet EOF.
   '{ exec <&-; read x; echo rc=$?; } 2>&1 | sed "s|^[^ ]*: ||"'
+  # \u/\U escapes encode via the locale charset (bash u32cconv) in printf,
+  # %b and echo -e; >= 0x80000000 encodes to nothing.
+  'export LC_ALL=en_US.UTF-8; printf "\uff\n" | od -An -b | tr -s " "'
+  'export LC_ALL=en_US.UTF-8; printf "%b\n" "\uff" | od -An -b | tr -s " "'
+  'export LC_ALL=en_US.UTF-8; echo -e "\\u0152" | od -An -b | tr -s " "'
+  'export LC_ALL=en_US.UTF-8; printf "[%s]\n" "$(printf "\Uffffffff")"'
+  # %ls/%lc: width and precision count wide characters, space-padded.
+  'export LC_ALL=en_US.UTF-8; V=ಇಳಿಕೆಗಳು; printf "%4.2ls|%-4.2ls|%4.2lc|\n" "$V" "$V" "$V"'
+  # LC_NUMERIC follows LANG/LC_ALL, including after a temp-env teardown.
+  'unset LC_ALL; export LANG=de_DE.UTF-8; printf "%.2f\n" 1; LANG=C printf "%.2f\n" 1; printf "%.2f\n" 1'
+  # IFS splits on characters (a trail byte of € is not a delimiter)...
+  'export LC_ALL=en_US.UTF-8; IFS=$'"'"'\254'"'"'; t="+$'"'"'\342\202\254'"'"'+"; set -- $t; echo $#'
+  # ...but ${x##pat} drops to bytes when the pattern is invalid multibyte.
+  'export LC_ALL=en_US.UTF-8; e=$'"'"'\342\202\254'"'"'; echo "${e##*$'"'"'\202'"'"'}" | od -An -b | tr -s " "'
 )
 
 fails=0
