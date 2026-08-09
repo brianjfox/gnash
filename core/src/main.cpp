@@ -230,7 +230,9 @@ void apply_set_o(Shell &sh, const std::string &name, bool set) {
   else if (name == "verbose") sh.opt_verbose = set;
   else if (name == "noexec") sh.opt_noexec = set;
   else if (name == "posix") sh.opt_posix = set;
-  // Other -o names (pipefail, vi, emacs, ...) are accepted and ignored.
+  // Everything else (braceexpand, pipefail, vi, ...) goes through the full
+  // `set -o' table so $SHELLOPTS reflects it; unknown names are ignored.
+  else apply_set_o_option(sh, name, set);
 }
 
 // Configure the shell's personality (which other shell it behaves as) and the
@@ -376,7 +378,8 @@ int main(int argc, char **argv) {
         case 'r': if (set) sh.opt_restricted = true; break;  // restricted shell
         case 'C': sh.opt_noclobber = set; break;  // noclobber: `>' won't overwrite
         case 'h': sh.opt_hashall = set; break;  // hashall (on by default)
-        case 'm': case 'B': case 'H':
+        case 'B': apply_set_o_option(sh, "braceexpand", set); break;
+        case 'm': case 'H':
           break;  // accepted, not (yet) acted on
         // `-c' takes its command from the next word, but other flags grouped in
         // the same word still apply -- `-ce cmd' means both `-c' and `-e'.  So
