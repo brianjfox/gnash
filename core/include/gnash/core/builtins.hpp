@@ -20,6 +20,10 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status);
 // when it contains nonprinting/invalid bytes, otherwise the name unchanged.
 std::string printable_name(const std::string &s);
 
+// Apply one `set -o NAME' state change; false (silently) for an unknown name.
+// Used by invocation flags and the env SHELLOPTS import as well as `set'.
+bool apply_set_o_option(Shell &sh, const std::string &o, bool on);
+
 // Would NAME run as a command (builtin/keyword/function/alias/PATH)?  Used by
 // interactive syntax highlighting.
 bool command_is_valid(Shell &sh, const std::string &name);

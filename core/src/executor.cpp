@@ -1782,6 +1782,36 @@ int Executor::run_simple(const SimpleCommand *c) {
     sh_.arith_error = false;
   } else {
     undo_temp();  // not a builtin after all: the external path sets its own env
+    // On an exec failure for a file that EXISTS and starts `#!', bash blames
+    // the interpreter: `./x23: nosuchfile: bad interpreter: No such file or
+    // directory' -- prefixed by the script name alone, with NO line number
+    // (shell_execve).  Returns false when this isn't that case, so the
+    // caller falls back to the plain strerror report.
+    auto report_bad_interpreter = [&](const std::string &file) -> bool {
+      int saved_errno = errno;
+      if (saved_errno != ENOENT && saved_errno != EACCES) return false;
+      std::FILE *fp = std::fopen(file.c_str(), "r");
+      if (fp == nullptr) { errno = saved_errno; return false; }
+      char line[256];
+      bool ok = std::fgets(line, sizeof line, fp) != nullptr;
+      std::fclose(fp);
+      errno = saved_errno;
+      if (!ok || line[0] != '#' || line[1] != '!') return false;
+      std::string interp;
+      size_t p = 2;
+      while (line[p] == ' ' || line[p] == '\t') p++;
+      while (line[p] != '\0' && line[p] != ' ' && line[p] != '\t' &&
+             line[p] != '\n')
+        interp += line[p++];
+      if (interp.empty()) return false;
+      // The interpreter itself must be the missing piece; an executable
+      // interpreter means the failure was something else.
+      if (access(interp.c_str(), X_OK) == 0) return false;
+      std::fprintf(stderr, "%s: %s: %s: bad interpreter: %s\n",
+                   sh_.shell_name.c_str(), file.c_str(), interp.c_str(),
+                   std::strerror(saved_errno));
+      return true;
+    };
     // A command name without `/' that has been hashed (`hash -p', BASH_CMDS)
     // execs the remembered path, as bash does; execvp() still falls back to a
     // $PATH search for the (unhashed) common case.
@@ -1876,7 +1906,7 @@ int Executor::run_simple(const SimpleCommand *c) {
       if (errno == ENOENT && exec_file.find('/') == std::string::npos)
         std::fprintf(stderr, "%s%s: %s\n", sh_.err_prefix().c_str(), printable_name(exec_file).c_str(),
                      exec_file == argv[0] ? "command not found" : "not found");
-      else
+      else if (!report_bad_interpreter(exec_file))
         std::fprintf(stderr, "%s%s: %s\n", sh_.err_prefix().c_str(),
                      printable_name(exec_file).c_str(), std::strerror(errno));
       _exit(errno == EACCES ? 126 : 127);
@@ -1912,7 +1942,7 @@ int Executor::run_simple(const SimpleCommand *c) {
       if (errno == ENOENT && exec_file.find('/') == std::string::npos)
         std::fprintf(stderr, "%s%s: %s\n", sh_.err_prefix().c_str(), printable_name(exec_file).c_str(),
                      exec_file == argv[0] ? "command not found" : "not found");
-      else
+      else if (!report_bad_interpreter(exec_file))
         std::fprintf(stderr, "%s%s: %s\n", sh_.err_prefix().c_str(),
                      printable_name(exec_file).c_str(), std::strerror(errno));
       _exit(errno == EACCES ? 126 : 127);
