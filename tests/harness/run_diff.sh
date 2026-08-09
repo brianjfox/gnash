@@ -473,6 +473,13 @@ echo "L=$LINENO"'
   '{ a=(x); readonly a; f() { readonly "a=(5)"; }; f; } 2>&1 | sed "s|^[^ ]*: ||"'
   '{ a=(x); readonly a; readonly -a a=(2); } 2>&1 | sed "s|^[^ ]*: ||"'
   '{ a=x; readonly a; f() { readonly a=9; }; f; } 2>&1 | sed "s|^[^ ]*: ||"'
+  # `unset -n'"'"' names a NAMEREF to remove; applied to a variable that is not one
+  # it does NOTHING, rather than falling back to unsetting it.
+  'y=2; unset -n y; declare -p y'
+  'declare -n r=t; t=5; unset -n r; { declare -p r; } 2>&1 | sed "s|^[^ ]*: ||"; declare -p t'
+  '{ y=2; unset y; declare -p y; } 2>&1 | sed "s|^[^ ]*: ||"'
+  'unset -n nosuch; echo "rc=$?"'
+  '{ y=2; typeset -n y; unset -n y; typeset -n y; } 2>&1 | sed "s|^[^ ]*: ||"; echo "rc=$?"'
 )
 
 fails=0

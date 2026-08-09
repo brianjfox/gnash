@@ -1751,6 +1751,15 @@ void Shell::unset(const std::string &n_in, bool force, bool noref) {
   // removes the nameref variable itself.  Following the ref matches common
   // usage.  FORCE mirrors bash's unbind_variable_noref: remove the named
   // variable itself (no nameref following) even when it is readonly.
+  // `unset -n' names a NAMEREF to remove.  Applied to a variable that is not
+  // one, bash does nothing at all -- it does not fall back to unsetting it, as
+  // plain `unset' would.  gnash used to remove it, which quietly destroyed the
+  // variable and, in nameref11.sub, made a later `typeset -n' on it succeed
+  // where bash rejects the value it still holds.
+  if (noref && !force) {
+    auto nit = vars.find(n_in);
+    if (nit != vars.end() && !nit->second.nameref) return;
+  }
   std::string n = (force || noref) ? n_in : deref(n_in);
   // A nameref aimed at an array ELEMENT unsets that element, not a variable
   // literally named `v[1]' (`declare -n n=v[1]; unset n' -- nameref15.sub).
