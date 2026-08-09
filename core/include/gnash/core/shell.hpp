@@ -465,6 +465,7 @@ class Shell {
   // advertised once the process behind them is gone.
   std::string coproc_name;
   long coproc_pid = 0;
+  int coproc_rfd = -1, coproc_wfd = -1;  // parent ends; closed when reaped
   // Unset the coproc variables if its process has been reaped; a no-op while
   // it is still running, or when there is no coproc.
   void reap_coproc();

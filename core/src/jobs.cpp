@@ -210,12 +210,36 @@ int wait_job(Shell::Job &j) {
 // readonly array reports and survives.
 void Shell::reap_coproc() {
   if (coproc_pid == 0) return;
-  for (const auto &j : jobs)
+  // Poll for the coprocess's death (bash notices via SIGCHLD before the next
+  // command runs): a job entry not yet marked done gets one WNOHANG check
+  // here, so a coproc that exited immediately (`coproc nosuchcmd') is torn
+  // down before the following command reads its variables (coproc.tests).
+  bool alive = false;
+  for (auto &j : jobs)
     for (long p : j.pids)
-      if (p == coproc_pid && !j.done) return;  // still running
+      if (p == coproc_pid && !j.done) {
+        int wst = 0;
+        if (waitpid(static_cast<pid_t>(coproc_pid), &wst, WNOHANG) ==
+            static_cast<pid_t>(coproc_pid)) {
+          j.done = true;
+          j.running = false;
+          j.status = WIFEXITED(wst) ? WEXITSTATUS(wst)
+                                    : (WIFSIGNALED(wst) ? 128 + WTERMSIG(wst) : 128);
+          note_child_reaped();
+        } else {
+          alive = true;
+        }
+      }
+  if (alive) return;
   std::string nm = coproc_name;
   coproc_name.clear();
   coproc_pid = 0;
+  // bash's coproc_dispose closes the shell's ends of the pipes; without this
+  // the descriptors leak and the NEXT coproc gets lower numbers than bash's
+  // (a fresh one reuses 63/60 once these are gone -- coproc.tests).
+  if (coproc_rfd >= 0) close(coproc_rfd);
+  if (coproc_wfd >= 0) close(coproc_wfd);
+  coproc_rfd = coproc_wfd = -1;
   // Both names are resolved the way an ordinary `unset' would resolve them, so
   // `declare -n ref=x; coproc ref' tears down `x' and leaves `ref' alone.
   std::string tgt = deref(nm);
