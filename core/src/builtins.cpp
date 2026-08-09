@@ -500,6 +500,60 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
           out += decode_b(next(), stop);
           consumed_any = true;
           if (stop) { argi = argv.size(); i = fmt.size(); break; }
+        } else if (conv == 'l' && j + 1 < fmt.size() &&
+                   (fmt[j + 1] == 's' || fmt[j + 1] == 'c') && MB_CUR_MAX > 1) {
+          // %ls / %lc: field width and precision count wide CHARACTERS, and
+          // padding is always spaces -- bash's printwidestr, not the C
+          // library's byte-counting %ls.
+          char wconv = fmt[j + 1];
+          std::string a = next();
+          std::wstring ws;
+          {
+            std::wstring buf(a.size() + 1, L'\0');
+            std::mbstate_t st{};
+            const char *src = a.c_str();
+            size_t wn = std::mbsrtowcs(&buf[0], &src, a.size() + 1, &st);
+            if (wn == static_cast<size_t>(-1)) {
+              // Invalid multibyte text: bash getwidestr zero-extends each byte.
+              buf.clear();
+              for (unsigned char b : a) buf += static_cast<wchar_t>(b);
+              ws = buf;
+            } else {
+              buf.resize(wn);
+              ws = buf;
+            }
+          }
+          // %lc uses only the first character; a null/empty argument produces
+          // a single null byte (posix interp 1647).
+          if (wconv == 'c') ws = ws.empty() ? std::wstring(1, L'\0') : ws.substr(0, 1);
+          // Parse `-', field width and precision out of the spec text.
+          bool ljust = false;
+          size_t sp = i + 1;
+          while (sp < j && std::strchr("-+ #0", fmt[sp])) { if (fmt[sp] == '-') ljust = true; sp++; }
+          long fw = 0;
+          while (sp < j && std::isdigit(static_cast<unsigned char>(fmt[sp])))
+            fw = fw * 10 + (fmt[sp++] - '0');
+          long pr = -1;
+          if (sp < j && fmt[sp] == '.') {
+            pr = 0;
+            sp++;
+            while (sp < j && std::isdigit(static_cast<unsigned char>(fmt[sp])))
+              pr = pr * 10 + (fmt[sp++] - '0');
+          }
+          long nc = (pr >= 0 && pr <= static_cast<long>(ws.size()))
+                        ? pr : static_cast<long>(ws.size());
+          long pad = fw - nc;
+          if (pad < 0) pad = 0;
+          if (!ljust) out.append(pad, ' ');
+          for (long k = 0; k < nc; k++) {
+            char mb[MB_LEN_MAX];
+            int r = std::wctomb(mb, ws[k]);
+            if (r > 0) out.append(mb, r);
+            else out += static_cast<char>(ws[k]);  // bash convwidestr fallback
+          }
+          if (ljust) out.append(pad, ' ');
+          consumed_any = true;
+          j++;  // the conversion consumed two characters (`ls' / `lc')
         } else if (conv == 's') {
           if (!append_formatted(out, spec, next().c_str())) oversize = true;
           consumed_any = true;
