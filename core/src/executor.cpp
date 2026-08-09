@@ -571,6 +571,15 @@ parse_array_elems(Shell &sh, Expander &ex, const std::string &name, bool integer
       bool plain = rb != std::string::npos && rb + 1 < e.size() && e[rb + 1] == '=';
       if (app || plain) {
         std::string sub = ex.expand_no_split(e.substr(1, rb - 1));
+        // Bug-compat: in the ARITHMETIC (indexed) path a \001 byte in the
+        // expanded subscript collides with bash's internal CTLESC and
+        // vanishes (quoting the byte after it), so `[$'x\001y\177z']=foo'
+        // errors on `xy^?z', not `x^Ay^?z'.  An ASSOCIATIVE key keeps its
+        // bytes intact (exp8.sub tests both).
+        if (!assoc)
+          for (size_t cb = 0; cb < sub.size();)
+            if (sub[cb] == '\001') sub.erase(cb, 1), cb++;
+            else cb++;
         // The value of a `[sub]=value' element is an assignment RHS, so a `~'
         // tilde-expands at the start and after each unquoted `:' (bash); a bare
         // word element, handled below, only gets leading-tilde expansion.
