@@ -720,7 +720,17 @@ struct Parser {
       newline_list();
     }
     if (reserved("{")) {  // bash allows a brace group as the body
-      n->body = parse_command({});
+      // The braces are grammar here, not a group command: bash's grammar
+      // (FOR WORD ... '{' compound_list '}') takes the inner LIST as the
+      // body, so pretty-print/declare -f show do/done, and a redirection
+      // after the `}' belongs to the loop itself (`{ ...; } <<<a').
+      CommandPtr body = parse_command({});
+      if (auto *g = dynamic_cast<Group *>(body.get())) {
+        n->redirects = std::move(g->redirects);
+        n->body = std::move(g->body);
+      } else {
+        n->body = std::move(body);
+      }
       parse_redirect_list(n->redirects);
       return n;
     }

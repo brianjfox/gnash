@@ -246,6 +246,7 @@ std::string canonical_word(const std::string &w);
 
 struct MPrinter {
   std::string out;
+  bool pretty = false;  // --pretty-print (top level): `;' lists join inline
   std::vector<const Redirect *> pending_heredocs;
   bool last_was_heredoc = false;   // a simple command ended with a here-document
   bool compound_heredoc = false;   // a for/while/if body ended with a here-document
@@ -322,6 +323,10 @@ struct MPrinter {
         if (last_was_heredoc) { out += '\n'; nl(I); }  // simple heredoc: blank line
         else if (compound_heredoc) { nl(I); }          // compound heredoc: no `;', no blank
         else if (last_was_amp) { nl(I); }
+        // Outside a function definition bash joins a `;'/newline list inline
+        // (`done <<< a; echo done;'); inside one, each command starts its own
+        // line (print_cmd.c: the_printed_command's inside_function_def test).
+        else if (pretty) { out += "; "; }
         else { out += ';'; nl(I); }
         list(cn->second.get(), I);
       }
@@ -853,6 +858,24 @@ static bool func_name_is_assignment(const std::string &s) {
     i = j + 1;
   }
   return i < s.size() && s[i] == '=';
+}
+
+// bash --pretty-print: each top-level command renders in the multiline
+// (declare -f) format followed by a blank line; a top-level newline list
+// prints as separate commands, exactly as bash's one-command-per-read loop.
+std::string pretty_print_string(const Command *c) {
+  if (c == nullptr) return std::string();
+  if (const auto *cn = dynamic_cast<const Connection *>(c)) {
+    if (cn->conn == Connector::Newline)
+      return pretty_print_string(cn->first.get()) +
+             pretty_print_string(cn->second.get());
+  }
+  MPrinter p;
+  p.pretty = true;
+  p.inline_cmd(c, 0);
+  p.flush_heredocs();
+  p.out += "\n\n";
+  return p.out;
 }
 
 std::string named_function_string(const std::string &name, const Command *body,

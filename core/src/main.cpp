@@ -30,8 +30,10 @@
 #include <unistd.h>
 #include <vector>
 
+#include "gnash/core/ast.hpp"
 #include "gnash/core/builtins.hpp"
 #include "gnash/core/expand.hpp"
+#include "gnash/core/parser.hpp"
 #include "gnash/core/shell.hpp"
 
 namespace {
@@ -107,6 +109,7 @@ std::string resolve_exec_path(std::string a0) {
 struct StartupOpts {
   bool norc = false;
   bool noprofile = false;
+  bool pretty_print = false;  // --pretty-print: parse and print, don't execute
   std::string rcfile;  // --rcfile / --init-file override for the personal rc
 };
 
@@ -368,7 +371,8 @@ int main(int argc, char **argv) {
       else if (lo == "norc") sopts.norc = true;
       else if (lo == "noprofile") sopts.noprofile = true;
       else if (lo == "posix") sh.opt_posix = true;
-      else if (lo == "noediting" || lo == "pretty-print" ||
+      else if (lo == "pretty-print") sopts.pretty_print = true;
+      else if (lo == "noediting" ||
                lo == "dump-strings" || lo == "dump-po-strings" || lo == "verbose" ||
                lo == "debug" || lo == "debugger" || lo == "restricted") {
         /* accepted (some not yet acted on), but recognized so they do not fall
@@ -516,6 +520,16 @@ int main(int argc, char **argv) {
       std::fprintf(stderr, "%s: %s: cannot execute binary file\n",
                    sh.shell_name.c_str(), args[idx].c_str());
       return 126;
+    }
+    if (sopts.pretty_print) {  // parse and print; nothing runs
+      gnash::core::ParseResult pr = gnash::core::parse(stext);
+      if (!pr.ok) {
+        std::fprintf(stderr, "%s: %s\n", sh.shell_name.c_str(), pr.error.c_str());
+        return 2;
+      }
+      if (pr.command)
+        std::fputs(gnash::core::pretty_print_string(pr.command.get()).c_str(), stdout);
+      return 0;
     }
     sh.arg0 = args[idx];
     sh.shell_name = args[idx];  // scripts report errors as "SCRIPT: line N: ..."
