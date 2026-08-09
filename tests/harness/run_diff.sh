@@ -485,6 +485,13 @@ echo "L=$LINENO"'
   '{ declare -n r; exec {r}>/dev/null; } 2>&1 | sed "s|^[^ ]*: ||"; echo "rc=$?"'
   '{ declare -n r; { echo hi; } {r}>/dev/null; } 2>&1 | sed "s|^[^ ]*: ||"; echo "rc=$?"'
   'exec {fd}>/dev/null; echo "ok=$((fd>2))"; exec {fd}>&-'
+  # `${!ref[sub]}'"'"' on a NAMEREF indirects through that element of the target.
+  # An element naming nothing is an invalid indirect expansion; `[@]'"'"'/`[*]'"'"' stay
+  # the list-the-indices forms, and a plain variable subscripts to nothing.
+  '{ declare -n foo=bar; echo ${!foo[2]}; } 2>&1 | sed "s|^[^ ]*: ||"'
+  'declare -n foo=bar; bar=(a q c); q=HIT; echo "${!foo[1]}"'
+  'declare -n foo=bar; bar=(x y z); echo "${!foo[@]}"'
+  'foo=bar; echo "[${!foo[2]}]"'
 )
 
 fails=0
