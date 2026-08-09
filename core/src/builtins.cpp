@@ -3810,10 +3810,16 @@ int bi_type(Shell &sh, const std::vector<std::string> &argv) {
   for (; i < argv.size(); i++) {
     const std::string &n = argv[i];
 
-    // -P forces a PATH search and ignores everything else.
+    // -P skips aliases/keywords/functions/builtins -- but NOT the hash table:
+    // describe_command's phash_search guard is `all == 0 || CDESC_FORCE_PATH',
+    // so `type -P NAME' reports a hashed path first, then (under -a) the $PATH
+    // matches as well.
     if (fP) {
+      const std::string *hp = sh.hash_lookup(n);
+      if (hp) std::printf("%s\n", ft ? "file" : hp->c_str());
+      if (hp && !fa) continue;
       auto files = find_all_in_path(sh, n);
-      if (files.empty()) { st = 1; continue; }
+      if (files.empty()) { if (!hp) st = 1; continue; }
       for (size_t k = 0; k < (fa ? files.size() : 1u); k++)
         std::printf("%s\n", ft ? "file" : files[k].c_str());
       continue;
@@ -3833,6 +3839,14 @@ int bi_type(Shell &sh, const std::vector<std::string> &argv) {
       locs.insert(locs.end() - ((!ff && sh.functions.count(n)) ? 1 : 0), {'b', {}});
     else if (have_b)
       locs.push_back({'b', {}});
+    // The hash table is consulted only when none of the above matched and this
+    // is not `type -a' (bash returns from describe_command before reaching
+    // phash_search otherwise); the lookup itself counts as a hash-table hit.
+    // A hashed entry needs no existence check -- `hash -p /nosuch x; type x'
+    // reports the bogus path (bash).
+    if (locs.empty() && !fa) {
+      if (const std::string *hp = sh.hash_lookup(n)) locs.push_back({'H', *hp});
+    }
     for (const std::string &f : find_all_in_path(sh, n)) locs.push_back({'F', f});
 
     if (locs.empty()) {
@@ -3857,7 +3871,7 @@ int bi_type(Shell &sh, const std::vector<std::string> &argv) {
                           : L.kind == 'b' ? "builtin"
                                           : "file");
       } else if (fp) {
-        if (L.kind == 'F') std::printf("%s\n", L.text.c_str());
+        if (L.kind == 'F' || L.kind == 'H') std::printf("%s\n", L.text.c_str());
       } else {
         switch (L.kind) {
           case 'a':
@@ -3871,6 +3885,9 @@ int bi_type(Shell &sh, const std::vector<std::string> &argv) {
           case 'b':
             std::printf("%s is a %sshell builtin\n", n.c_str(),
                         (sh.opt_posix && is_special_builtin(n)) ? "special " : "");
+            break;
+          case 'H':
+            std::printf("%s is hashed (%s)\n", n.c_str(), L.text.c_str());
             break;
           case 'F': std::printf("%s is %s\n", n.c_str(), L.text.c_str()); break;
         }
