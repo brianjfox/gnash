@@ -390,7 +390,7 @@ int main(int argc, char **argv) {
         return 0;
       } else {
         std::fprintf(stderr, "%s: %s: invalid option\n", sh.shell_name.c_str(), a.c_str());
-        show_shell_usage(sh.shell_name);
+        show_shell_usage(prog);  // usage names the shell as invoked (full path)
         return 2;
       }
       continue;
@@ -443,7 +443,7 @@ int main(int argc, char **argv) {
         }
         default:
           std::fprintf(stderr, "%s: -%c: invalid option\n", sh.shell_name.c_str(), o);
-          show_shell_usage(sh.shell_name);
+          show_shell_usage(prog);  // usage names the shell as invoked (full path)
           return 2;
       }
       if (stop_after) break;
