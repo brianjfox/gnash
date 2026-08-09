@@ -5454,6 +5454,23 @@ static std::string hist_file(Shell &sh) {
   return home ? std::string(home) + "/.gnash_history" : std::string();
 }
 
+// Write the history list back to $HISTFILE and truncate it to $HISTFILESIZE,
+// as the shell does when it exits.  bash also does this from `exec' -- the
+// process image is about to be replaced, so an interactive session's history
+// would otherwise be lost (builtins/exec.def calls maybe_save_shell_history()).
+void save_shell_history(Shell &sh) {
+  if (!sh.history_loaded) return;  // nothing was read in, so nothing to write back
+  std::string savefile = hist_file(sh);
+  if (savefile.empty()) return;
+  history_write_timestamps = sh.is_set("HISTTIMEFORMAT") ? 1 : 0;
+  write_history(savefile.c_str());
+  const std::string hfs_s = sh.get("HISTFILESIZE");
+  char *hfe = nullptr;
+  long hfs = std::strtol(hfs_s.c_str(), &hfe, 10);
+  if (!hfs_s.empty() && hfe && *hfe == '\0' && hfs >= 0)
+    history_truncate_file(savefile.c_str(), static_cast<int>(hfs));
+}
+
 int bi_history(Shell &sh, const std::vector<std::string> &argv) {
   static const char *kUsage =
       "history: usage: history [-c] [-d offset] [n] or history -anrw [filename] "
@@ -7190,6 +7207,10 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
 
       int code = 127;
       if (found) {
+        // The process image is about to be replaced, so an interactive
+        // session's history has to reach $HISTFILE now or be lost.  Not from a
+        // subshell: that history belongs to the parent, which will write it.
+        if (sh.interactive && sh.subshell_level == 0) save_shell_history(sh);
         std::fflush(nullptr);
         execve(full.c_str(), cargv.data(), envp.data());
         // execve returned: it failed.  bash reports this as "<path>: <error>"
