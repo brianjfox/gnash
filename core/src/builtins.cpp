@@ -2547,6 +2547,23 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
     }
   }
 
+  // bash re-checks the -t deadline when the read returned EOF with NOTHING
+  // read (read.def: `if (i == 0 && retval <= 0) check_read_timeout()'), so a
+  // timeout shorter than the time it took to reach EOF reports 128+SIGALRM
+  // rather than EOF: `read -t 0.00001 -e var </dev/null' times out even
+  // though EOF was instantly available (read7.sub).  A sub-millisecond
+  // timeout counts as expired outright: bash's own builtin setup (setitimer
+  // to check_read_timeout) exceeds it, so bash reliably reports the timeout
+  // where gnash's tighter loop could win the race and see EOF first.
+  if (eof && line.empty() && have_t) {
+    struct timeval now;
+    gettimeofday(&now, nullptr);
+    if (timeout < 0.001 || now.tv_sec + now.tv_usec / 1e6 >= deadline) {
+      timed_out = true;
+      eof = false;
+    }
+  }
+
   // A hard read(2) failure (closed or write-only descriptor) reports bash's
   // `read: FD: read error: STRERROR' and fails WITHOUT binding any variable
   // (read.def returns through its unwind frame before the assignment).
