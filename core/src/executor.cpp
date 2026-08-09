@@ -298,7 +298,18 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved,
       }
       case RedirOp::HereDoc:
       case RedirOp::HereDocStrip: {
+        bool saved_ae = sh.arith_error;
+        sh.arith_error = false;
         std::string body = r.heredoc_quoted ? r.heredoc_body : ex.expand_heredoc(r.heredoc_body);
+        // An expansion failure in the body (`${'x1'%'t'}: bad substitution')
+        // aborts the redirection -- and with it the command -- as bash does
+        // (posixexp7.sub); the diagnostic was already printed, and later
+        // commands are unaffected.
+        if (sh.arith_error) {
+          sh.arith_error = saved_ae;
+          return false;
+        }
+        sh.arith_error = saved_ae;
         int f = heredoc_fd(body);
         if (f < 0) return false;
         return assign_fd(f);
@@ -430,7 +441,15 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved,
     }
     case RedirOp::HereDoc:
     case RedirOp::HereDocStrip: {
+      bool saved_ae = sh.arith_error;
+      sh.arith_error = false;
       std::string body = r.heredoc_quoted ? r.heredoc_body : ex.expand_heredoc(r.heredoc_body);
+      // A bad substitution in the body aborts the redirection (bash).
+      if (sh.arith_error) {
+        sh.arith_error = saved_ae;
+        return false;
+      }
+      sh.arith_error = saved_ae;
       int f = heredoc_fd(body);
       if (f < 0) return false;
       redir_to(f, target_fd < 0 ? 0 : target_fd);
