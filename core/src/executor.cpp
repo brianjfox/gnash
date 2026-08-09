@@ -136,7 +136,8 @@ static int open_redir_output(Shell &sh, const std::string &fn, bool clobbering) 
 }
 
 // Apply one redirect in-process; returns false on error.
-bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved) {
+bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved,
+                    const char *fdvar_ctx = nullptr) {
   Expander ex(sh);
   int target_fd = r.source_fd;
   // Install NEWFD as FD, saving FD's previous state, and consume NEWFD.  When
@@ -206,7 +207,7 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved) {
         ok = !(it != sh.vars.end() && it->second.readonly);
         if (ok) sh.array_set(base, sub, std::to_string(f));
       } else {
-        ok = sh.set(r.fd_var, std::to_string(f));
+        ok = sh.set(r.fd_var, std::to_string(f), fdvar_ctx);
       }
       if (!ok) {
         std::fprintf(stderr, "%s%s: cannot assign fd to variable\n", sh.err_prefix().c_str(),
@@ -446,9 +447,10 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved) {
   return true;
 }
 
-bool apply_redirects(Shell &sh, const std::vector<Redirect> &redirs, std::vector<SavedFd> &saved) {
+bool apply_redirects(Shell &sh, const std::vector<Redirect> &redirs, std::vector<SavedFd> &saved,
+                     const char *fdvar_ctx = nullptr) {
   for (const Redirect &r : redirs)
-    if (!apply_redirect(sh, r, saved)) return false;
+    if (!apply_redirect(sh, r, saved, fdvar_ctx)) return false;
   return true;
 }
 
@@ -1517,7 +1519,12 @@ int Executor::run_simple(const SimpleCommand *c) {
   (void)dummy;
 
   std::vector<SavedFd> saved;
-  if (!apply_redirects(sh_, c->redirects, saved)) {
+  // A `{var}' target that cannot be assigned is blamed on `exec' when the
+  // redirection is exec's own; the same redirection on a compound command is
+  // reported bare (bash).
+  const char *fdvar_ctx =
+      (!argv.empty() && argv[0] == "exec") ? "exec" : nullptr;
+  if (!apply_redirects(sh_, c->redirects, saved, fdvar_ctx)) {
     restore_fds(saved);
     return (sh_.last_status = 1);
   }
