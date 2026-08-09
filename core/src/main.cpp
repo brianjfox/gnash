@@ -614,10 +614,19 @@ int main(int argc, char **argv) {
     sh.run_string(cmd);
   }
 
-  // A login shell reads ~/.<prefix>_logout as it exits.
+  // A login shell reads ~/.<prefix>_logout as it exits.  Like the startup
+  // files, the gnash persona falls back to the bash name: ~/.gnash_logout if
+  // present, else ~/.bash_logout.
   if (login && !sopts.noprofile) {
     const char *home = std::getenv("HOME");
-    if (home) source_if_exists(sh, std::string(home) + "/." + prefix + "_logout");
+    if (home) {
+      std::string own = std::string(home) + "/." + startup_prefix + "_logout";
+      struct stat lst;
+      if (startup_prefix == "gnash" && stat(own.c_str(), &lst) != 0)
+        own = std::string(home) + "/.bash_logout";
+      sh.exiting = false;  // `exit'/`logout' got us here; the file must still run
+      source_if_exists(sh, own);
+    }
   }
   return rc;
 }
