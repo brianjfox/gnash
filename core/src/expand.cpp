@@ -2629,12 +2629,20 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
     // Try only CHARACTER-boundary split points, so `${x%?}' removes one whole
     // multibyte character rather than a single trailing byte (which would leave
     // a broken sequence).  cb lists the byte offsets of every boundary, 0..size.
+    // EXCEPT: bash drops to byte-wise matching (remove_upattern) when either
+    // the value or the pattern is not valid multibyte text -- so a pattern
+    // holding a bare continuation byte can strip mid-character:
+    // `${euro##*$'\202'}' leaves only euro's last byte (intl3.sub).
+    auto mb_valid = [](const std::string &t) {
+      return std::mbstowcs(nullptr, t.c_str(), 0) != static_cast<size_t>(-1);
+    };
+    bool bytewise = MB_CUR_MAX > 1 && (!mb_valid(val) || !mb_valid(pat));
     std::vector<size_t> cb;
     for (size_t i = 0;; ) {
       cb.push_back(i);
       if (i >= val.size()) break;
       size_t len = 1;
-      mb_decode(val, i, len);
+      if (!bytewise) mb_decode(val, i, len);
       i += len;
     }
     if (rest[0] == '#') {  // prefix removal (shortest = first, longest = last)
