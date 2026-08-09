@@ -286,6 +286,33 @@ int main(int argc, char **argv) {
   shopt_seed(sh);  // seed default shopt states so $BASHOPTS is populated
   sh.import_env_functions();  // pull in any BASH_FUNC_*%% exported functions
 
+  // SHELLOPTS / BASHOPTS inherited through the environment pre-enable the
+  // options they list -- BEFORE the invocation flags are parsed, so a flag
+  // overrides (`SHELLOPTS=braceexpand bash +B' ends with braceexpand off).
+  // Unknown names are skipped silently (the exporter may be a different
+  // shell).  The variables themselves keep reading dynamically; the imported
+  // entry only carries the exported flag.
+  {
+    auto import_opts = [&sh](const char *nm, bool shellopts) {
+      auto it = sh.vars.find(nm);
+      if (it == sh.vars.end()) return;
+      const std::string v = it->second.value;
+      size_t p = 0;
+      while (p <= v.size()) {
+        size_t q = v.find(':', p);
+        std::string name = v.substr(p, (q == std::string::npos ? v.size() : q) - p);
+        if (!name.empty()) {
+          if (shellopts) apply_set_o_option(sh, name, true);
+          else if (sh.shopt_opts.count(name)) sh.shopt_opts[name] = true;
+        }
+        if (q == std::string::npos) break;
+        p = q + 1;
+      }
+    };
+    import_opts("SHELLOPTS", true);
+    import_opts("BASHOPTS", false);
+  }
+
   // Invocation name: basename of argv[0], minus a leading '-' (which marks a
   // login shell).  Drives error-message prefixes and startup-file names.
   std::string prog = argc > 0 ? argv[0] : "gnash";
@@ -296,8 +323,13 @@ int main(int argc, char **argv) {
   if (base.empty()) base = "gnash";
   sh.shell_name = base;
   // $0 defaults to argv[0] (as bash: `bash -c' shows "bash", "/bin/bash", etc.);
-  // a script path or a -c name argument overrides it below.
+  // a script path or a -c name argument overrides it below.  An exported
+  // BASH_ARGV0 overrides the default $0 at startup (bash's inherited ARGV0).
   sh.arg0 = prog;
+  {
+    auto av0 = sh.vars.find("BASH_ARGV0");
+    if (av0 != sh.vars.end() && !av0->second.value.empty()) sh.arg0 = av0->second.value;
+  }
   // Invoked as rbash / rsh / rksh (a leading `r'): a restricted shell.
   {
     auto sl = base.rfind('/');
