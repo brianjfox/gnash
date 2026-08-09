@@ -1592,13 +1592,20 @@ int Executor::run_simple(const SimpleCommand *c) {
       else sh_.vars.erase(it->first);
     }
     restore.clear();
+    bool relocale = false;
     for (const auto &a : assigns) {
       sh_.temp_env_active.erase(a.first);
       sh_.temp_prior.erase(a.first);
       sh_.temp_consumed.erase(a.first);
       auto d = sh_.temp_env_depth.find(a.first);
       if (d != sh_.temp_env_depth.end() && --d->second <= 0) sh_.temp_env_depth.erase(d);
+      // Applying `LC_ALL=C printf ...' went through Shell::set (which resets
+      // the locale); the teardown above wrote vars directly, so re-derive.
+      if (a.first == "LC_ALL" || a.first == "LC_CTYPE" || a.first == "LC_NUMERIC" ||
+          a.first == "LANG")
+        relocale = true;
     }
+    if (relocale) sh_.reapply_locale();
   };
 
   int status = 0;
