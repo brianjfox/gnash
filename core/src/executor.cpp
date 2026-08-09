@@ -1288,10 +1288,24 @@ int Executor::run_simple(const SimpleCommand *c) {
         // `var[0]=X' assigns).
         pending_elem.push_back(a);
       } else if (a.is_array) {
-        // NOTE: an array/element assignment is not xtrace'd here -- bash prints it
-        // via its compound-assignment word-list deparser (each element expanded
-        // then re-quoted, e.g. source `$'\t'' -> `'<tab>''), which gnash does not
-        // reproduce; tracing the verbatim source word would not match.  Deferred.
+        if (sh_.opt_xtrace) {
+          // bash traces a compound assignment via its word-list deparser: the
+          // PARSED elements re-printed -- `$' '' shows as `' '' (lex-time
+          // ANSI expansion), `$@' stays unexpanded -- single-space separated
+          // (set-x2.sub).
+          std::string line = a.name + (a.append ? "+=(" : "=(");
+          bool first = true;
+          std::string inner = a.value.size() >= 2 ? a.value.substr(1, a.value.size() - 2)
+                                                  : std::string();
+          for (const Token &tk : tokenize(inner)) {
+            if (tk.type != Tok::Word || tk.text.empty()) continue;
+            if (!first) line += ' ';
+            line += canonical_word_text(tk.text);
+            first = false;
+          }
+          line += ')';
+          xtrace_lines.push_back(line);
+        }
         apply_array_assign(sh_, ex, a);  // array literal: applied now
       } else {
         auto vit = sh_.vars.find(a.name);
