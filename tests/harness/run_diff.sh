@@ -498,6 +498,15 @@ echo "L=$LINENO"'
   '{ set -u; a=(); "${a[0]}"; } 2>&1 | sed "s|^[^ ]*: ||"'
   '{ set -u; declare -A m; m=(); "${m[key]}"; } 2>&1 | sed "s|^[^ ]*: ||"'
   'set -u; a=(1 2); k=1; echo "${a[k]}"'
+  # Resolving a nameref EVALUATES its subscript, so a `set -u'"'"' failure there is
+  # reported against that variable -- once -- and not against the nameref.  An
+  # associative subscript is a key, not arithmetic, so the nameref is blamed.
+  '{ set -u; declare -n r="a[k]"; : "$r"; } 2>&1 | sed "s|^[^ ]*: ||"'
+  '{ set -u; a=(1 2); declare -n r="a[k]"; : "$r"; } 2>&1 | sed "s|^[^ ]*: ||"'
+  'set -u; a=(1 2); k=1; declare -n r="a[k]"; echo "$r"'
+  '{ set -u; declare -A m; declare -n r="m[key]"; : "$r"; } 2>&1 | sed "s|^[^ ]*: ||"'
+  'set -u; declare -A m=([key]=V); declare -n r="m[key]"; echo "$r"'
+  '{ set -u; unset zz; : "$zz"; } 2>&1 | sed "s|^[^ ]*: ||"'
 )
 
 fails=0

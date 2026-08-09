@@ -1438,6 +1438,19 @@ bool Shell::make_local(const std::string &n, bool inherit_force) {
 bool Shell::get_if_set(const std::string &n_in, std::string &out) const {
   std::string base, sub;
   if (nameref_elt(n_in, base, sub)) {
+    // Resolving the reference EVALUATES the subscript, and under `set -u' an
+    // unset variable inside it is the error bash reports -- naming that
+    // variable, not the nameref.  Evaluate it once, here: is_set() skips the
+    // evaluation entirely when the base array does not exist (so the failure
+    // was lost and the nameref got blamed instead), while array_get() would
+    // otherwise evaluate it a second time and report twice.  An associative
+    // subscript is a KEY, not arithmetic, so it is left alone.
+    auto bit = vars.find(base);
+    if (bit == vars.end() || bit->second.kind != VarKind::Assoc) {
+      bool sok = true;
+      (void)eval_arith(const_cast<Shell &>(*this), sub, &sok);
+      if (exiting) return false;
+    }
     if (!is_set(n_in)) return false;
     out = array_get(base, sub);
     return true;

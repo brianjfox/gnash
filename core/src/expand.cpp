@@ -636,6 +636,10 @@ std::string Expander::param_value(const std::string &name, bool &set, bool defau
   if (sh_.get_if_set(name, v)) return v;
   if (sh_.dynamic_var(name, v)) return v;  // RANDOM/SECONDS/LINENO/BASHPID/EPOCH*
   set = false;
+  // An unbound variable found while RESOLVING this one (a `set -u' failure in a
+  // nameref's subscript) has already been reported against its own name; do not
+  // blame the nameref for it as well.
+  if (sh_.exiting) return std::string();
   if (sh_.opt_nounset && !defaulting_op) {
     std::fprintf(stderr, "%s%s: unbound variable\n", sh_.err_prefix().c_str(), name.c_str());
     sh_.exiting = true;
