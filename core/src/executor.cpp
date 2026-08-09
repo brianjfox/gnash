@@ -629,7 +629,8 @@ parse_array_elems(Shell &sh, Expander &ex, const std::string &name, bool integer
 
 namespace {
 
-void apply_array_assign(Shell &sh, Expander &ex, const Assign &a) {
+void apply_array_assign(Shell &sh, Expander &ex, const Assign &a,
+                        const char *ctx = nullptr) {
   // Assigning to any part of a readonly array is an error (bash names the array,
   // not the element).  For an ELEMENT assignment the subscript validates
   // FIRST: `readonly -a c; c[-2]=4' is the bad-subscript error, so let
@@ -637,8 +638,11 @@ void apply_array_assign(Shell &sh, Expander &ex, const Assign &a) {
   {
     auto rit = sh.vars.find(sh.deref(a.name));
     if (!a.sub && rit != sh.vars.end() && rit->second.readonly) {
-      std::fprintf(stderr, "%s%s: readonly variable\n", sh.err_prefix().c_str(),
-                   a.name.c_str());
+      const std::string &fn =
+          sh.call_stack.empty() ? std::string() : sh.call_stack.back().func;
+      std::string who = ctx ? std::string(ctx) : fn;
+      std::fprintf(stderr, "%s%s%s%s: readonly variable\n", sh.err_prefix().c_str(),
+                   who.c_str(), who.empty() ? "" : ": ", a.name.c_str());
       sh.last_status = 1;
       return;
     }
@@ -753,18 +757,32 @@ bool is_assignment_word_text(const std::string &w) {
   return i < w.size() && w[i] == '=';
 }
 
+// Is WORD a compound assignment as WRITTEN -- `NAME=(' with the `=' and the
+// `(' both outside quoting?  See Shell::RawArg::compound_assign.
+bool is_compound_assignment_source(const std::string &w) {
+  char q = 0;
+  for (size_t i = 0; i < w.size(); i++) {
+    char c = w[i];
+    if (q) { if (c == q) q = 0; else if (c == '\\' && q == '"') i++; continue; }
+    if (c == '\'' || c == '"') { q = c; continue; }
+    if (c == '\\') { i++; continue; }
+    if (c == '=') return i + 1 < w.size() && w[i + 1] == '(';
+  }
+  return false;
+}
+
 bool is_assignment_builtin(const std::string &cmd) {
   return cmd == "declare" || cmd == "typeset" || cmd == "local" ||
          cmd == "readonly" || cmd == "export";
 }
 }  // namespace
 
-void apply_assignment_word(Shell &sh, const std::string &word) {
+void apply_assignment_word(Shell &sh, const std::string &word, const char *ctx) {
   Expander ex(sh);
   Assign a;
   if (!parse_assign(word, a)) return;
   if (a.sub || a.is_array)
-    apply_array_assign(sh, ex, a);
+    apply_array_assign(sh, ex, a, ctx);
   else
     sh.set(a.name, ex.expand_assignment(a.value));
 }
@@ -1329,7 +1347,8 @@ int Executor::run_simple(const SimpleCommand *c) {
       // and parses it itself.
       if (!argv.empty() && is_assignment_builtin(argv[0]) && is_assignment_word_text(w.text)) {
         argv.push_back(w.text);
-        raw_prov.push_back({w.text, (w.flags & W_QUOTED) != 0});
+        raw_prov.push_back({w.text, (w.flags & W_QUOTED) != 0,
+                            is_compound_assignment_source(w.text)});
       } else {
         size_t before = argv.size();
         for (const std::string &f : ex.expand_args({w})) argv.push_back(f);

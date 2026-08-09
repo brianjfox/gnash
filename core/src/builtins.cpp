@@ -3256,6 +3256,17 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
                        a.substr(nend, (append ? eq - 1 : eq) - nend).c_str(), ev.c_str());
       }
       if (exval_compound) {
+        // A QUOTED compound reaches here rather than the assignment-word path
+        // above, and it IS this builtin's own assignment, so the builtin
+        // answers for it.  Checked here because array_assign cannot know who
+        // called it and must stay bare for the command machinery's own path.
+        auto rok = sh.vars.find(sh.deref(name));
+        if (rok != sh.vars.end() && rok->second.readonly) {
+          std::fprintf(stderr, "%s%s: %s: readonly variable\n", sh.err_prefix().c_str(),
+                       argv[0].c_str(), name.c_str());
+          ret = 1;
+          continue;
+        }
         Expander pex2(sh);
         auto elems2 = parse_array_elems(sh, pex2, name, integer, append, exval);
         auto ivk = sh.vars.find(name);
@@ -3284,7 +3295,20 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
         // compound (`declare -n array='(...)'`) is instead a nameref-target value
         // -- the unwrap above is gated on !nameref so it falls to the branch
         // below and is rejected as an invalid target.
-        apply_assignment_word(sh, a);  // NAME=(...) or NAME[i]=...
+        // A compound assignment WORD is the command's own -- bash performs it
+        // before this builtin is entered, so a failure names the enclosing
+        // function.  Otherwise the builtin is assigning for itself: it names
+        // itself when an explicit -a/-A asked for an array, and reports bare
+        // for the plain `readonly "a=(3)"' form.
+        // Without an explicit -a/-A there is no attribution at all.  With one,
+        // a compound assignment WORD is the command's own -- bash performs it
+        // before this builtin is entered, so the enclosing function answers --
+        // while a quoted compound is the builtin assigning for itself.
+        bool word_assign = i < sh.raw_args.size() && sh.raw_args[i].compound_assign;
+        const char *who = !(mk_array || mk_assoc) ? ""
+                          : word_assign           ? nullptr
+                                                  : argv[0].c_str();
+        apply_assignment_word(sh, a, who);  // NAME=(...) or NAME[i]=...
       } else if (nameref) {
         // `declare -n ref=target': store the target NAME as ref's own value.
         // Bypass Shell::set's deref so retargeting an existing nameref rewrites
