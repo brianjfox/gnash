@@ -3164,9 +3164,13 @@ std::vector<std::pair<std::string, std::string>> Expander::split_ifs(const std::
   while (i < n) {
     std::string cur, curm;
     while (i < n && !soft_ifs(i) && !(mask[i] == MMARK && s[i] == FIELD_SEP)) {
-      cur += s[i];
-      curm += mask[i];
-      i++;
+      // Advance by whole characters: a trail byte of a valid multibyte char
+      // must never be tested against IFS (IFS=$'\254' does not split `€',
+      // whose last byte is 254 -- intl3.sub).
+      size_t len = clen(i);
+      cur.append(s, i, len);
+      curm.append(mask, i, len);
+      i += len;
     }
     fields.emplace_back(cur, curm);
     if (i >= n) break;
