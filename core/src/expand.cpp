@@ -2253,6 +2253,30 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
       while (q < b.size() && (std::isalnum(static_cast<unsigned char>(b[q])) || b[q] == '_')) q++;
       iname = b.substr(1, q - 1);
     }
+    // `${!ref[sub]}' where REF is a NAMEREF indirects through that element of
+    // the target array; an element holding no name to reference is bash's
+    // `NAME[sub]: invalid indirect expansion'.  Checked before the gate below,
+    // which otherwise drops the whole form through to the generic `${...}'
+    // path -- where a leading `!' reads as the $! special parameter and the
+    // expansion silently becomes the last background pid.  `[@]'/`[*]' are the
+    // list-the-indices forms and are left to the array machinery, and a plain
+    // (non-nameref) variable subscripts to nothing without complaint, as bash.
+    {
+      auto nrit = sh.vars.find(iname);
+      if (nrit != sh.vars.end() && nrit->second.nameref && q + 2 < b.size() &&
+          b[q] == '[' && b.back() == ']' && b[q + 1] != '@' && b[q + 1] != '*') {
+        std::string sub = b.substr(q + 1, b.size() - q - 2);
+        std::string elem = sh.array_get(sh.deref(iname), sub);
+        if (elem.empty()) {
+          std::fprintf(stderr, "%s%s%s: invalid indirect expansion\n", sh.err_prefix().c_str(),
+                       iname.c_str(), b.substr(q).c_str());
+          sh.arith_error = true;
+          return std::string();
+        }
+        return length ? std::to_string(mb_charlen(expand_brace_body(ex, sh, elem, dq)))
+                      : expand_brace_body(ex, sh, elem, dq);
+      }
+    }
     if (q == b.size() || b[q] != '[') {
       if (q + 1 == b.size() && (b[q] == '*' || b[q] == '@')) {
         std::string names;
