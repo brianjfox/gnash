@@ -2479,8 +2479,10 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
     // `set -u': an unset ELEMENT is an unbound-variable error naming the
     // element (`narray[4]: unbound variable'), like param_value's for scalars.
     if (!set && sh.opt_nounset && !defaulting_op && tsub != "@" && tsub != "*") {
+      // bash names the subscript as WRITTEN, not the index it evaluated to:
+      // `a=() k=; "${a[k]}"' reports `a[k]', not `a[0]'.
       std::fprintf(stderr, "%s%s[%s]: unbound variable\n", sh.err_prefix().c_str(),
-                   name.c_str(), tsub.c_str());
+                   name.c_str(), sub.c_str());
       sh.exiting = true;
       sh.exit_status = 127;
       return std::string();

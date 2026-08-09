@@ -492,6 +492,12 @@ echo "L=$LINENO"'
   'declare -n foo=bar; bar=(a q c); q=HIT; echo "${!foo[1]}"'
   'declare -n foo=bar; bar=(x y z); echo "${!foo[@]}"'
   'foo=bar; echo "[${!foo[2]}]"'
+  # Under `set -u'"'"' an unset element is named by the subscript as WRITTEN, not by
+  # the index it evaluated to.
+  '{ set -u; a=() k=; "${a[k]}"; } 2>&1 | sed "s|^[^ ]*: ||"'
+  '{ set -u; a=(); "${a[0]}"; } 2>&1 | sed "s|^[^ ]*: ||"'
+  '{ set -u; declare -A m; m=(); "${m[key]}"; } 2>&1 | sed "s|^[^ ]*: ||"'
+  'set -u; a=(1 2); k=1; echo "${a[k]}"'
 )
 
 fails=0
