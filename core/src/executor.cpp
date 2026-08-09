@@ -1096,8 +1096,20 @@ int Executor::run_pipeline(const Connection *c) {
         signal(SIGTTIN, SIG_DFL);
         signal(SIGTTOU, SIG_DFL);
       }
-      if (prev_read != -1) { dup2(prev_read, 0); close(prev_read); }
-      if (i + 1 < n) { close(pipefd[0]); dup2(pipefd[1], 1); close(pipefd[1]); }
+      // With stdin (or stdout) closed in the shell, pipe() hands out fd 0 (or
+      // 1) as a pipe end, so the end may already BE the target of the dup2 --
+      // a blind dup2-then-close would close the fd just put in place.  Guard
+      // exactly as bash's do_piping does: `if (pipe_in > 0) close', and for
+      // the write side `if (pipe_out == 0 || pipe_out > 1) close'.
+      if (prev_read != -1) {
+        dup2(prev_read, 0);
+        if (prev_read > 0) close(prev_read);
+      }
+      if (i + 1 < n) {
+        close(pipefd[0]);
+        dup2(pipefd[1], 1);
+        if (pipefd[1] == 0 || pipefd[1] > 1) close(pipefd[1]);
+      }
       sh_.job_control = false;  // pipeline stage: no nested tty control
       // A pipeline stage is a subshell: without errtrace it does not inherit the
       // ERR trap (the whole pipeline fires it once in the parent instead), and

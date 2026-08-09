@@ -2360,7 +2360,9 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
       : 0.0;
 
   bool eof = false, timed_out = false;
-  // Read a byte, honoring the deadline: 1 = got byte, 0 = EOF/error, -1 = timeout.
+  int read_errno = 0;  // a non-EINTR read(2) failure (closed/write-only fd)
+  // Read a byte, honoring the deadline: 1 = got byte, 0 = EOF, -1 = timeout,
+  // -2 = read error (read(2) failed with other than EINTR; errno saved).
   auto read_byte = [&](char &ch) -> int {
     if (have_t) {
       struct timeval now;
@@ -2375,7 +2377,13 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
       tv.tv_usec = static_cast<suseconds_t>((remain - static_cast<double>(tv.tv_sec)) * 1e6);
       if (select(fd + 1, &rfds, nullptr, nullptr, &tv) <= 0) return -1;
     }
-    return ::read(fd, &ch, 1) == 1 ? 1 : 0;
+    ssize_t r = ::read(fd, &ch, 1);
+    if (r == 1) return 1;
+    // A failure other than EINTR is a hard read error, reported as such
+    // (bash read.def: `read: FD: read error: STRERROR', status 1); EINTR
+    // keeps the EOF path so a pending trap is honored as before.
+    if (r < 0 && errno != EINTR) { read_errno = errno; return -2; }
+    return 0;
   };
 
   // Read up to the delimiter (or `nchars' with -n/-N) byte by byte so we don't
@@ -2421,7 +2429,7 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
     for (;;) {
       char ch;
       int r = read_byte(ch);
-      if (r <= 0) { eof = (r == 0); timed_out = (r < 0); break; }
+      if (r <= 0) { eof = (r == 0); timed_out = (r == -1); break; }
       if (ch == '\0' && delim != 0) continue;    // stray NULs are discarded
       if (mb_data_byte(ch)) {
         line += ch;
@@ -2432,7 +2440,7 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
       if (!raw && ch == '\\') {                  // backslash escaping (unless -r)
         char nx;
         int r2 = read_byte(nx);
-        if (r2 <= 0) { eof = (r2 == 0); timed_out = (r2 < 0); break; }  // trailing \ dropped
+        if (r2 <= 0) { eof = (r2 == 0); timed_out = (r2 == -1); break; }  // trailing \ dropped
         if (nx == '\n') continue;                // line continuation: drop both
         line += nx;
         quoted += '\1';
@@ -2444,6 +2452,16 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
       quoted += '\0';
       if (have_n && mb_count(line) >= nchars) break;
     }
+  }
+
+  // A hard read(2) failure (closed or write-only descriptor) reports bash's
+  // `read: FD: read error: STRERROR' and fails WITHOUT binding any variable
+  // (read.def returns through its unwind frame before the assignment).
+  if (read_errno != 0) {
+    std::fflush(stdout);
+    std::fprintf(stderr, "%sread: %d: read error: %s\n", sh.err_prefix().c_str(),
+                 fd, std::strerror(read_errno));
+    return 1;
   }
 
   const std::string ifs = sh.ifs();
