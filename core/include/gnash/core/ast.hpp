@@ -83,6 +83,10 @@ std::string to_string(const Command *c);
 
 // bash's multi-line function rendering (print_cmd.c named_function_string),
 // used by `type', `declare -f', and `set' -- byte-identical to bash.
+// bash --pretty-print rendering: each top-level command in multiline format
+// followed by a blank line (newline lists split into separate commands).
+std::string pretty_print_string(const Command *cmd);
+
 std::string named_function_string(const std::string &name, const Command *body,
                                   bool posix = false);  // full canonical rendering
 

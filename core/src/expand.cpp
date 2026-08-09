@@ -3498,7 +3498,11 @@ static std::string tilde_assign(Shell &sh, const std::string &text);
 std::vector<std::string> Expander::expand_args(const std::vector<Word> &words) {
   std::vector<std::string> result;
   for (const Word &w : words) {
-    for (const std::string &braced : brace_expand(w.text)) {
+    // `set +B' turns brace expansion off entirely (bash's brace_expansion
+    // flag); the word passes through with its braces literal.
+    std::vector<std::string> braces =
+        sh_.opt_braceexpand ? brace_expand(w.text) : std::vector<std::string>{w.text};
+    for (const std::string &braced : braces) {
       // A word shaped like an assignment (name=value) gets assignment-style
       // tilde expansion -- after the `=' and after each `:' -- unless posix
       // mode is on.  (bash's W_ASSIGNMENT tilde rule.)

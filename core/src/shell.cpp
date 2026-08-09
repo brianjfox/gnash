@@ -1436,6 +1436,11 @@ bool Shell::make_local(const std::string &n, bool inherit_force) {
 }
 
 bool Shell::get_if_set(const std::string &n_in, std::string &out) const {
+  // $SHELLOPTS / $BASHOPTS always read the LIVE option state, even when an
+  // env-imported or `export'-created table entry exists (its stored value is
+  // stale; bash keeps these variables in sync with the options).
+  if (!is_zsh() && (n_in == "SHELLOPTS" || n_in == "BASHOPTS") && vars.count(n_in))
+    return const_cast<Shell *>(this)->dynamic_var(n_in, out);
   std::string base, sub;
   if (nameref_elt(n_in, base, sub)) {
     // Resolving the reference EVALUATES the subscript, and under `set -u' an
@@ -1881,6 +1886,10 @@ std::vector<std::string> Shell::environ_block() const {
           }
     }
     if (!emit) continue;
+    // An exported SHELLOPTS/BASHOPTS serializes its LIVE value: `export
+    // SHELLOPTS' then `set -o noglob' passes noglob to every child (bash).
+    if (kv.first == "SHELLOPTS" || kv.first == "BASHOPTS")
+      const_cast<Shell *>(this)->dynamic_var(kv.first, val);
     out.push_back(kv.first + "=" + val);
   }
   // Exported functions travel as BASH_FUNC_<name>%%=() {  body  }, which a

@@ -2135,8 +2135,8 @@ bool set_o_option(Shell &sh, const std::string &o, bool on) {
   // Valid bash `set -o' names whose behavior is unimplemented: accept as no-ops
   // (a script may set them; erroring would diverge from bash, which knows them).
   else if (o == "allexport") sh.opt_allexport = on;
-  else if (o == "braceexpand" ||
-           o == "interactive-comments" || o == "nolog" ||
+  else if (o == "braceexpand") sh.opt_braceexpand = on;
+  else if (o == "interactive-comments" || o == "nolog" ||
            o == "notify" || o == "onecmd")
     ;  // no-op
   else return false;
@@ -2151,7 +2151,7 @@ bool set_o_option(Shell &sh, const std::string &o, bool on) {
 std::vector<std::pair<std::string, bool>> set_option_states(Shell &sh) {
   bool i = sh.interactive;
   return {
-      {"allexport", sh.opt_allexport},   {"braceexpand", true},
+      {"allexport", sh.opt_allexport},   {"braceexpand", sh.opt_braceexpand},
       {"emacs", i ? (rl_editing_mode == 1) : sh.opt_emacs},
       {"errexit", sh.opt_errexit},
       {"errtrace", sh.opt_functrace}, {"functrace", sh.opt_functrace},
@@ -2245,10 +2245,11 @@ int bi_set(Shell &sh, const std::vector<std::string> &argv) {
             break;
           }
           case 'h': sh.opt_hashall = on; break;  // -h/+h: hashall
+          case 'B': sh.opt_braceexpand = on; break;  // -B/+B: brace expansion
           // Flags accepted as no-ops where the behavior is unimplemented:
-          // allexport/notify/onecmd/braceexpand.
+          // allexport/notify/onecmd.
           case 'a': sh.opt_allexport = on; break;  // allexport: assignments export
-          case 'b': case 't': case 'B': break;
+          case 'b': case 't': break;
           default:
             std::fprintf(stderr, "%sset: %c%c: invalid option\n", sh.err_prefix().c_str(),
                          a[0], a[k]);
@@ -2543,6 +2544,23 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
       line += ch;
       quoted += '\0';
       if (have_n && mb_count(line) >= nchars) break;
+    }
+  }
+
+  // bash re-checks the -t deadline when the read returned EOF with NOTHING
+  // read (read.def: `if (i == 0 && retval <= 0) check_read_timeout()'), so a
+  // timeout shorter than the time it took to reach EOF reports 128+SIGALRM
+  // rather than EOF: `read -t 0.00001 -e var </dev/null' times out even
+  // though EOF was instantly available (read7.sub).  A sub-millisecond
+  // timeout counts as expired outright: bash's own builtin setup (setitimer
+  // to check_read_timeout) exceeds it, so bash reliably reports the timeout
+  // where gnash's tighter loop could win the race and see EOF first.
+  if (eof && line.empty() && have_t) {
+    struct timeval now;
+    gettimeofday(&now, nullptr);
+    if (timeout < 0.001 || now.tv_sec + now.tv_usec / 1e6 >= deadline) {
+      timed_out = true;
+      eof = false;
     }
   }
 

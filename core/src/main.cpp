@@ -30,8 +30,10 @@
 #include <unistd.h>
 #include <vector>
 
+#include "gnash/core/ast.hpp"
 #include "gnash/core/builtins.hpp"
 #include "gnash/core/expand.hpp"
+#include "gnash/core/parser.hpp"
 #include "gnash/core/shell.hpp"
 
 namespace {
@@ -107,6 +109,7 @@ std::string resolve_exec_path(std::string a0) {
 struct StartupOpts {
   bool norc = false;
   bool noprofile = false;
+  bool pretty_print = false;  // --pretty-print: parse and print, don't execute
   std::string rcfile;  // --rcfile / --init-file override for the personal rc
 };
 
@@ -230,7 +233,9 @@ void apply_set_o(Shell &sh, const std::string &name, bool set) {
   else if (name == "verbose") sh.opt_verbose = set;
   else if (name == "noexec") sh.opt_noexec = set;
   else if (name == "posix") sh.opt_posix = set;
-  // Other -o names (pipefail, vi, emacs, ...) are accepted and ignored.
+  // Everything else (braceexpand, pipefail, vi, ...) goes through the full
+  // `set -o' table so $SHELLOPTS reflects it; unknown names are ignored.
+  else apply_set_o_option(sh, name, set);
 }
 
 // Configure the shell's personality (which other shell it behaves as) and the
@@ -284,6 +289,33 @@ int main(int argc, char **argv) {
   shopt_seed(sh);  // seed default shopt states so $BASHOPTS is populated
   sh.import_env_functions();  // pull in any BASH_FUNC_*%% exported functions
 
+  // SHELLOPTS / BASHOPTS inherited through the environment pre-enable the
+  // options they list -- BEFORE the invocation flags are parsed, so a flag
+  // overrides (`SHELLOPTS=braceexpand bash +B' ends with braceexpand off).
+  // Unknown names are skipped silently (the exporter may be a different
+  // shell).  The variables themselves keep reading dynamically; the imported
+  // entry only carries the exported flag.
+  {
+    auto import_opts = [&sh](const char *nm, bool shellopts) {
+      auto it = sh.vars.find(nm);
+      if (it == sh.vars.end()) return;
+      const std::string v = it->second.value;
+      size_t p = 0;
+      while (p <= v.size()) {
+        size_t q = v.find(':', p);
+        std::string name = v.substr(p, (q == std::string::npos ? v.size() : q) - p);
+        if (!name.empty()) {
+          if (shellopts) apply_set_o_option(sh, name, true);
+          else if (sh.shopt_opts.count(name)) sh.shopt_opts[name] = true;
+        }
+        if (q == std::string::npos) break;
+        p = q + 1;
+      }
+    };
+    import_opts("SHELLOPTS", true);
+    import_opts("BASHOPTS", false);
+  }
+
   // Invocation name: basename of argv[0], minus a leading '-' (which marks a
   // login shell).  Drives error-message prefixes and startup-file names.
   std::string prog = argc > 0 ? argv[0] : "gnash";
@@ -294,8 +326,13 @@ int main(int argc, char **argv) {
   if (base.empty()) base = "gnash";
   sh.shell_name = base;
   // $0 defaults to argv[0] (as bash: `bash -c' shows "bash", "/bin/bash", etc.);
-  // a script path or a -c name argument overrides it below.
+  // a script path or a -c name argument overrides it below.  An exported
+  // BASH_ARGV0 overrides the default $0 at startup (bash's inherited ARGV0).
   sh.arg0 = prog;
+  {
+    auto av0 = sh.vars.find("BASH_ARGV0");
+    if (av0 != sh.vars.end() && !av0->second.value.empty()) sh.arg0 = av0->second.value;
+  }
   // Invoked as rbash / rsh / rksh (a leading `r'): a restricted shell.
   {
     auto sl = base.rfind('/');
@@ -334,7 +371,8 @@ int main(int argc, char **argv) {
       else if (lo == "norc") sopts.norc = true;
       else if (lo == "noprofile") sopts.noprofile = true;
       else if (lo == "posix") sh.opt_posix = true;
-      else if (lo == "noediting" || lo == "pretty-print" ||
+      else if (lo == "pretty-print") sopts.pretty_print = true;
+      else if (lo == "noediting" ||
                lo == "dump-strings" || lo == "dump-po-strings" || lo == "verbose" ||
                lo == "debug" || lo == "debugger" || lo == "restricted") {
         /* accepted (some not yet acted on), but recognized so they do not fall
@@ -352,7 +390,7 @@ int main(int argc, char **argv) {
         return 0;
       } else {
         std::fprintf(stderr, "%s: %s: invalid option\n", sh.shell_name.c_str(), a.c_str());
-        show_shell_usage(sh.shell_name);
+        show_shell_usage(prog);  // usage names the shell as invoked (full path)
         return 2;
       }
       continue;
@@ -376,7 +414,8 @@ int main(int argc, char **argv) {
         case 'r': if (set) sh.opt_restricted = true; break;  // restricted shell
         case 'C': sh.opt_noclobber = set; break;  // noclobber: `>' won't overwrite
         case 'h': sh.opt_hashall = set; break;  // hashall (on by default)
-        case 'm': case 'B': case 'H':
+        case 'B': apply_set_o_option(sh, "braceexpand", set); break;
+        case 'm': case 'H':
           break;  // accepted, not (yet) acted on
         // `-c' takes its command from the next word, but other flags grouped in
         // the same word still apply -- `-ce cmd' means both `-c' and `-e'.  So
@@ -404,7 +443,7 @@ int main(int argc, char **argv) {
         }
         default:
           std::fprintf(stderr, "%s: -%c: invalid option\n", sh.shell_name.c_str(), o);
-          show_shell_usage(sh.shell_name);
+          show_shell_usage(prog);  // usage names the shell as invoked (full path)
           return 2;
       }
       if (stop_after) break;
@@ -453,7 +492,17 @@ int main(int argc, char **argv) {
       std::fprintf(stderr, "%s: %s: Is a directory\n", args[idx].c_str(), args[idx].c_str());
       return 126;
     }
-    std::ifstream f(args[idx]);
+    // A script operand with no slash that is not in the current directory is
+    // searched for on $PATH (bash's find_path_file): `bash ls' finds /bin/ls.
+    std::string spath = args[idx];
+    {
+      struct stat pst;
+      if (spath.find('/') == std::string::npos && stat(spath.c_str(), &pst) != 0) {
+        std::string found = find_in_path(sh, spath);
+        if (!found.empty()) spath = found;
+      }
+    }
+    std::ifstream f(spath);
     if (!f) {
       std::fprintf(stderr, "%s: %s: %s\n", sh.shell_name.c_str(), args[idx].c_str(),
                    std::strerror(errno));
@@ -463,6 +512,25 @@ int main(int argc, char **argv) {
     ss << f.rdbuf();
     f.close();  // free the descriptor: the script must not occupy a low fd
                 // for its whole run (bash parks its script fd high)
+    const std::string &stext = ss.str();
+    // A binary is not a script: NUL bytes in the first 80 bytes (bash's
+    // check_binary_file sample) abort with status 126.
+    if (stext.compare(0, 2, "#!") != 0 &&
+        stext.find('\0') != std::string::npos && stext.find('\0') < 80) {
+      std::fprintf(stderr, "%s: %s: cannot execute binary file\n",
+                   sh.shell_name.c_str(), args[idx].c_str());
+      return 126;
+    }
+    if (sopts.pretty_print) {  // parse and print; nothing runs
+      gnash::core::ParseResult pr = gnash::core::parse(stext);
+      if (!pr.ok) {
+        std::fprintf(stderr, "%s: %s\n", sh.shell_name.c_str(), pr.error.c_str());
+        return 2;
+      }
+      if (pr.command)
+        std::fputs(gnash::core::pretty_print_string(pr.command.get()).c_str(), stdout);
+      return 0;
+    }
     sh.arg0 = args[idx];
     sh.shell_name = args[idx];  // scripts report errors as "SCRIPT: line N: ..."
     sh.positional.assign(args.begin() + idx + 1, args.end());
@@ -546,10 +614,19 @@ int main(int argc, char **argv) {
     sh.run_string(cmd);
   }
 
-  // A login shell reads ~/.<prefix>_logout as it exits.
+  // A login shell reads ~/.<prefix>_logout as it exits.  Like the startup
+  // files, the gnash persona falls back to the bash name: ~/.gnash_logout if
+  // present, else ~/.bash_logout.
   if (login && !sopts.noprofile) {
     const char *home = std::getenv("HOME");
-    if (home) source_if_exists(sh, std::string(home) + "/." + prefix + "_logout");
+    if (home) {
+      std::string own = std::string(home) + "/." + startup_prefix + "_logout";
+      struct stat lst;
+      if (startup_prefix == "gnash" && stat(own.c_str(), &lst) != 0)
+        own = std::string(home) + "/.bash_logout";
+      sh.exiting = false;  // `exit'/`logout' got us here; the file must still run
+      source_if_exists(sh, own);
+    }
   }
   return rc;
 }

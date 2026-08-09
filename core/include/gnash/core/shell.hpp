@@ -218,6 +218,7 @@ class Shell {
 
   // --- shell state for builtins -----------------------------------------
   bool login_shell = false;                  // logout only works in a login shell
+  bool opt_braceexpand = true;               // set -B / +B (brace expansion)
   std::map<std::string, std::string> hashed;  // `hash': command name -> full path
   std::vector<std::string> hashed_seq;        // insertion order (bash hash-walk)
   std::map<std::string, int> hashed_hits;     // `hash' hits column (times_found)
