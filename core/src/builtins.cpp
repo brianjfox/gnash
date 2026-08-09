@@ -1678,7 +1678,19 @@ int bi_export(Shell &sh, const std::vector<std::string> &argv) {
       std::string opt = "-xg";
       if (array_flag) opt.push_back(array_flag);
       std::vector<std::string> d = {"export", opt, a};
+      // Rebuild the raw-provenance table to match the delegated argv, so
+      // bi_declare's quoted-vs-compound decision still sees whether THIS
+      // argument's parentheses were quoted in the source (attr2.sub:
+      // `export r=(4)' is a compound, `export r='(5)'' a literal string).
+      std::vector<Shell::RawArg> saved_raw = sh.raw_args;
+      std::vector<Shell::RawArg> draw(3);
+      draw[0] = {"export", false, false};
+      draw[1] = {opt, false, false};
+      if (i < saved_raw.size()) draw[2] = saved_raw[i];
+      else draw[2] = {a, false, a.find("=(") != std::string::npos};
+      sh.raw_args = draw;
       int r = bi_declare(sh, d, false, false);
+      sh.raw_args = saved_raw;
       if (r) st = r;
       // `export -n NAME=VALUE' still performs the assignment; it just does not
       // leave the name exported.
@@ -3416,6 +3428,20 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
             e.second = std::to_string(eval_arith(sh, e.second, &iok));
           }
         sh.array_assign(name, pre_elems, append, as_assoc);
+      } else if (arraylit && !subscript && !unwrap_quoted &&
+                 !(i < sh.raw_args.size() && sh.raw_args[i].compound_assign)) {
+        // The parentheses were QUOTED (`readonly 'c=(3)''): with no explicit
+        // -a/-A this is not a compound assignment at all -- the literal
+        // string is the value, landing in element 0 when the variable is
+        // already an array (bash declare.def; attr.tests f3).  declare and
+        // typeset are excluded when the variable is already an array: they
+        // REPARSE a quoted compound there (`declare 'a=(1 2 3)'' --
+        // array19.sub), which is what unwrap_quoted captures.
+        Expander sex(sh);
+        if (!sh.set(name, sex.expand_assignment(val))) {
+          ret = 1;
+          continue;
+        }
       } else if (arraylit || subscript) {
         // An UNQUOTED compound (`declare -n array=(one two three)') is assigned
         // as an array literal even under -n; the "reference variable cannot be an
