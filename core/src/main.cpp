@@ -488,7 +488,17 @@ int main(int argc, char **argv) {
       std::fprintf(stderr, "%s: %s: Is a directory\n", args[idx].c_str(), args[idx].c_str());
       return 126;
     }
-    std::ifstream f(args[idx]);
+    // A script operand with no slash that is not in the current directory is
+    // searched for on $PATH (bash's find_path_file): `bash ls' finds /bin/ls.
+    std::string spath = args[idx];
+    {
+      struct stat pst;
+      if (spath.find('/') == std::string::npos && stat(spath.c_str(), &pst) != 0) {
+        std::string found = find_in_path(sh, spath);
+        if (!found.empty()) spath = found;
+      }
+    }
+    std::ifstream f(spath);
     if (!f) {
       std::fprintf(stderr, "%s: %s: %s\n", sh.shell_name.c_str(), args[idx].c_str(),
                    std::strerror(errno));
@@ -498,6 +508,15 @@ int main(int argc, char **argv) {
     ss << f.rdbuf();
     f.close();  // free the descriptor: the script must not occupy a low fd
                 // for its whole run (bash parks its script fd high)
+    const std::string &stext = ss.str();
+    // A binary is not a script: NUL bytes in the first 80 bytes (bash's
+    // check_binary_file sample) abort with status 126.
+    if (stext.compare(0, 2, "#!") != 0 &&
+        stext.find('\0') != std::string::npos && stext.find('\0') < 80) {
+      std::fprintf(stderr, "%s: %s: cannot execute binary file\n",
+                   sh.shell_name.c_str(), args[idx].c_str());
+      return 126;
+    }
     sh.arg0 = args[idx];
     sh.shell_name = args[idx];  // scripts report errors as "SCRIPT: line N: ..."
     sh.positional.assign(args.begin() + idx + 1, args.end());
