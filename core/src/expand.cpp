@@ -1206,6 +1206,20 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
     }
     if (end != std::string::npos) {
       std::string inner = t.substr(i + 2, end - (i + 2));
+      // bash parses `$(...)' up front (parse_comsub), so the text it executes
+      // does not begin with the opener line's newline: the substitution's
+      // first command reports the ENCLOSING command's line (`foobar: command
+      // not found' on the `grep $(' line -- heredoc7.sub).  Strip the leading
+      // newlines; old-style backquotes keep their raw text (and its lines).
+      // NOT when the text carries a here-document: bash reports a heredoc
+      // delimited by the substitution's end at parse time with PHYSICAL
+      // lines (comsub-eof5.sub), and gnash's equivalent warning comes from
+      // the child's parse of this text -- the lines must stay put.
+      if (inner.find("<<") == std::string::npos) {
+        size_t lead = 0;
+        while (lead < inner.size() && inner[lead] == '\n') lead++;
+        if (lead > 0) inner.erase(0, lead);
+      }
       int st = 0;
       std::string res = sh_.run_and_capture(inner, &st);
       sh_.last_status = st;
