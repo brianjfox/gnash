@@ -298,7 +298,18 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved,
       }
       case RedirOp::HereDoc:
       case RedirOp::HereDocStrip: {
+        bool saved_ae = sh.arith_error;
+        sh.arith_error = false;
         std::string body = r.heredoc_quoted ? r.heredoc_body : ex.expand_heredoc(r.heredoc_body);
+        // An expansion failure in the body (`${'x1'%'t'}: bad substitution')
+        // aborts the redirection -- and with it the command -- as bash does
+        // (posixexp7.sub); the diagnostic was already printed, and later
+        // commands are unaffected.
+        if (sh.arith_error) {
+          sh.arith_error = saved_ae;
+          return false;
+        }
+        sh.arith_error = saved_ae;
         int f = heredoc_fd(body);
         if (f < 0) return false;
         return assign_fd(f);
@@ -430,7 +441,15 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved,
     }
     case RedirOp::HereDoc:
     case RedirOp::HereDocStrip: {
+      bool saved_ae = sh.arith_error;
+      sh.arith_error = false;
       std::string body = r.heredoc_quoted ? r.heredoc_body : ex.expand_heredoc(r.heredoc_body);
+      // A bad substitution in the body aborts the redirection (bash).
+      if (sh.arith_error) {
+        sh.arith_error = saved_ae;
+        return false;
+      }
+      sh.arith_error = saved_ae;
       int f = heredoc_fd(body);
       if (f < 0) return false;
       redir_to(f, target_fd < 0 ? 0 : target_fd);
@@ -552,6 +571,15 @@ parse_array_elems(Shell &sh, Expander &ex, const std::string &name, bool integer
       bool plain = rb != std::string::npos && rb + 1 < e.size() && e[rb + 1] == '=';
       if (app || plain) {
         std::string sub = ex.expand_no_split(e.substr(1, rb - 1));
+        // Bug-compat: in the ARITHMETIC (indexed) path a \001 byte in the
+        // expanded subscript collides with bash's internal CTLESC and
+        // vanishes (quoting the byte after it), so `[$'x\001y\177z']=foo'
+        // errors on `xy^?z', not `x^Ay^?z'.  An ASSOCIATIVE key keeps its
+        // bytes intact (exp8.sub tests both).
+        if (!assoc)
+          for (size_t cb = 0; cb < sub.size();)
+            if (sub[cb] == '\001') sub.erase(cb, 1), cb++;
+            else cb++;
         // The value of a `[sub]=value' element is an assignment RHS, so a `~'
         // tilde-expands at the start and after each unquoted `:' (bash); a bare
         // word element, handled below, only gets leading-tilde expansion.
@@ -1288,10 +1316,24 @@ int Executor::run_simple(const SimpleCommand *c) {
         // `var[0]=X' assigns).
         pending_elem.push_back(a);
       } else if (a.is_array) {
-        // NOTE: an array/element assignment is not xtrace'd here -- bash prints it
-        // via its compound-assignment word-list deparser (each element expanded
-        // then re-quoted, e.g. source `$'\t'' -> `'<tab>''), which gnash does not
-        // reproduce; tracing the verbatim source word would not match.  Deferred.
+        if (sh_.opt_xtrace) {
+          // bash traces a compound assignment via its word-list deparser: the
+          // PARSED elements re-printed -- `$' '' shows as `' '' (lex-time
+          // ANSI expansion), `$@' stays unexpanded -- single-space separated
+          // (set-x2.sub).
+          std::string line = a.name + (a.append ? "+=(" : "=(");
+          bool first = true;
+          std::string inner = a.value.size() >= 2 ? a.value.substr(1, a.value.size() - 2)
+                                                  : std::string();
+          for (const Token &tk : tokenize(inner)) {
+            if (tk.type != Tok::Word || tk.text.empty()) continue;
+            if (!first) line += ' ';
+            line += canonical_word_text(tk.text);
+            first = false;
+          }
+          line += ')';
+          xtrace_lines.push_back(line);
+        }
         apply_array_assign(sh_, ex, a);  // array literal: applied now
       } else {
         auto vit = sh_.vars.find(a.name);

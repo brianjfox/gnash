@@ -87,6 +87,9 @@ std::string to_string(const Command *c);
 // followed by a blank line (newline lists split into separate commands).
 std::string pretty_print_string(const Command *cmd);
 
+// One word's bash-canonical display text ($'...' decoded, $(...) re-rendered).
+std::string canonical_word_text(const std::string &w);
+
 std::string named_function_string(const std::string &name, const Command *body,
                                   bool posix = false);  // full canonical rendering
 

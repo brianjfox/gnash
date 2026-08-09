@@ -860,6 +860,11 @@ static bool func_name_is_assignment(const std::string &s) {
   return i < s.size() && s[i] == '=';
 }
 
+// The bash-canonical display text of one word ($'...' decoded, command
+// substitutions re-rendered) -- what xtrace's compound-assignment printer
+// shows for each element.
+std::string canonical_word_text(const std::string &w) { return canonical_word(w); }
+
 // bash --pretty-print: each top-level command renders in the multiline
 // (declare -f) format followed by a blank line; a top-level newline list
 // prints as separate commands, exactly as bash's one-command-per-read loop.
