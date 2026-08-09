@@ -7125,13 +7125,23 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
       t.insert(t.end(), argv.begin() + i, argv.end());
       st = bi_type(sh, t);
     } else if (desc_v) {
-      // For each name print the name (function/builtin/keyword) or its full path
-      // (external), 0 if all resolved, 1 otherwise.
+      // For each name print the alias definition (reusable form), the name
+      // (function/builtin/keyword), or the full path (hashed, then $PATH);
+      // 0 if all resolved, 1 otherwise.  Like `type', an alias is reported
+      // only when aliases would actually expand, and a hashed path is
+      // reported (and counted as a hit) before any $PATH search.
+      bool aliases_on = sh.interactive;
+      auto eit = sh.shopt_opts.find("expand_aliases");
+      if (eit != sh.shopt_opts.end() && eit->second) aliases_on = true;
       st = (i < argv.size()) ? 0 : 1;
       for (size_t j = i; j < argv.size(); j++) {
         const std::string &n = argv[j];
-        if (sh.functions.count(n) || is_builtin_name(n) || is_reserved_word(n)) {
+        if (aliases_on && sh.aliases.count(n)) {
+          std::printf("alias %s=%s\n", n.c_str(), alias_quote(sh.aliases.at(n)).c_str());
+        } else if (sh.functions.count(n) || is_builtin_name(n) || is_reserved_word(n)) {
           std::printf("%s\n", n.c_str());
+        } else if (const std::string *hp = sh.hash_lookup(n)) {
+          std::printf("%s\n", hp->c_str());
         } else {
           std::string p = find_in_path(sh, n);
           if (!p.empty()) std::printf("%s\n", p.c_str());
