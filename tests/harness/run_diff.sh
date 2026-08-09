@@ -480,6 +480,11 @@ echo "L=$LINENO"'
   '{ y=2; unset y; declare -p y; } 2>&1 | sed "s|^[^ ]*: ||"'
   'unset -n nosuch; echo "rc=$?"'
   '{ y=2; typeset -n y; unset -n y; typeset -n y; } 2>&1 | sed "s|^[^ ]*: ||"; echo "rc=$?"'
+  # A `{var}'"'"' redirection target that cannot be assigned is blamed on `exec'"'"' when
+  # the redirection is exec'"'"'s own; on a compound command it is reported bare.
+  '{ declare -n r; exec {r}>/dev/null; } 2>&1 | sed "s|^[^ ]*: ||"; echo "rc=$?"'
+  '{ declare -n r; { echo hi; } {r}>/dev/null; } 2>&1 | sed "s|^[^ ]*: ||"; echo "rc=$?"'
+  'exec {fd}>/dev/null; echo "ok=$((fd>2))"; exec {fd}>&-'
 )
 
 fails=0
