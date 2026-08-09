@@ -1750,9 +1750,9 @@ int Executor::run_simple(const SimpleCommand *c) {
     // $PATH search for the (unhashed) common case.
     std::string exec_file = argv[0];
     if (argv[0].find('/') == std::string::npos) {
-      auto h = sh_.hashed.find(argv[0]);
-      if (h != sh_.hashed.end()) {
-        exec_file = h->second;
+      const std::string *h = sh_.hash_lookup(argv[0]);  // a hit bumps `hash' hits
+      if (h != nullptr) {
+        exec_file = *h;
         // `shopt -s checkhash': verify the remembered path still names an
         // executable before using it; a stale entry falls back to a fresh
         // $PATH search and is re-remembered (bash).  Without checkhash the

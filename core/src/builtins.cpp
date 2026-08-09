@@ -4884,7 +4884,7 @@ int bi_hash(Shell &sh, const std::vector<std::string> &argv) {
     bool consumed = false;
     for (size_t k = 1; k < a.size(); k++) {
       char o = a[k];
-      if (o == 'r') { sh.hashed.clear(); sh.hashed_seq.clear(); expunge = true; }
+      if (o == 'r') { sh.hashed.clear(); sh.hashed_seq.clear(); sh.hashed_hits.clear(); expunge = true; }
       else if (o == 'l') list_l = true;
       else if (o == 'd') del_d = true;
       else if (o == 't') print_t = true;
@@ -4942,7 +4942,11 @@ int bi_hash(Shell &sh, const std::vector<std::string> &argv) {
         std::printf("builtin hash -p %s %s\n", sh.hashed.at(k).c_str(), k.c_str());
     else {
       std::printf("hits\tcommand\n");
-      for (const auto &k : sh.hashed_order()) std::printf("%4d\t%s\n", 0, sh.hashed.at(k).c_str());
+      for (const auto &k : sh.hashed_order()) {
+        auto h = sh.hashed_hits.find(k);
+        std::printf("%4d\t%s\n", h == sh.hashed_hits.end() ? 0 : h->second,
+                    sh.hashed.at(k).c_str());
+      }
     }
     return 0;
   }
@@ -4950,6 +4954,7 @@ int bi_hash(Shell &sh, const std::vector<std::string> &argv) {
   for (; i < argv.size(); i++) {
     const std::string &n = argv[i];
     if (del_d) {  // `hash -d NAME': error if NAME is not hashed
+      sh.hashed_hits.erase(n);
       if (sh.hashed.erase(n) == 0) {
         std::fflush(stdout);
         std::fprintf(stderr, "%shash: %s: not found\n", sh.err_prefix().c_str(), n.c_str());
@@ -4958,12 +4963,12 @@ int bi_hash(Shell &sh, const std::vector<std::string> &argv) {
       continue;
     }
     if (print_t) {
-      auto it = sh.hashed.find(n);
+      const std::string *hp = sh.hash_lookup(n);  // a -t lookup counts as a hit
       // With -l too, -t prints the reusable form (`hash -lt cat' ->
       // `builtin hash -p /path cat'), as bash does.
-      if (it == sh.hashed.end()) { std::fflush(stdout); std::fprintf(stderr, "%shash: %s: not found\n", sh.err_prefix().c_str(), n.c_str()); st = 1; }
-      else if (list_l) std::printf("builtin hash -p %s %s\n", it->second.c_str(), n.c_str());
-      else std::printf("%s\n", it->second.c_str());
+      if (hp == nullptr) { std::fflush(stdout); std::fprintf(stderr, "%shash: %s: not found\n", sh.err_prefix().c_str(), n.c_str()); st = 1; }
+      else if (list_l) std::printf("builtin hash -p %s %s\n", hp->c_str(), n.c_str());
+      else std::printf("%s\n", hp->c_str());
       continue;
     }
     std::string p = find_in_path(sh, n);

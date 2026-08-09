@@ -220,6 +220,7 @@ class Shell {
   bool login_shell = false;                  // logout only works in a login shell
   std::map<std::string, std::string> hashed;  // `hash': command name -> full path
   std::vector<std::string> hashed_seq;        // insertion order (bash hash-walk)
+  std::map<std::string, int> hashed_hits;     // `hash' hits column (times_found)
   std::map<std::string, bool> shopt_opts;     // `shopt' option states
   std::set<std::string> disabled_builtins;    // `enable -n': builtins turned off
   std::map<std::string, std::string> aliases;  // `alias': name -> expansion
@@ -230,6 +231,16 @@ class Shell {
   void hash_remember(const std::string &name, const std::string &path) {
     if (!hashed.count(name)) hashed_seq.push_back(name);
     hashed[name] = path;
+    hashed_hits[name] = 0;  // (re)insertion resets times_found (bash phash_insert)
+  }
+  // Look NAME up in the command hash table.  A hit bumps the hits counter --
+  // bash's hash_search increments times_found on every successful lookup, so
+  // `type', `command -v', and command execution all count as hits.
+  const std::string *hash_lookup(const std::string &name) {
+    auto it = hashed.find(name);
+    if (it == hashed.end()) return nullptr;
+    hashed_hits[name]++;
+    return &it->second;
   }
   void alias_remember(const std::string &name, const std::string &val) {
     if (!aliases.count(name)) alias_seq.push_back(name);
