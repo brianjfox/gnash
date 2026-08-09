@@ -6,6 +6,7 @@
 #include "gnash/core/parser.hpp"
 #include "gnash/core/subscript.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
