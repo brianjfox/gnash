@@ -155,6 +155,12 @@ std::string mb_capitalize(const std::string &s);
 // since bash performs it before the builtin is entered.
 void apply_assignment_word(Shell &sh, const std::string &word, const char *ctx = nullptr);
 
+// Encode a Unicode code point for \u/\U (bash u32cconv): the locale charset's
+// bytes when LC_CTYPE is not UTF-8 (via iconv), UTF-8 otherwise; a code point
+// iconv cannot represent appends the ISO C99 escape text (\uXXXX/\UXXXXXXXX)
+// and one >= 0x80000000 appends nothing.  Used by $'...', printf, echo -e.
+void append_utf8(std::string &out, unsigned long cp);
+
 }  // namespace gnash::core
 
 #endif  // GNASH_CORE_EXPAND_HPP

@@ -334,12 +334,15 @@ static std::string mb_case_fold(const std::string &val, const std::string &pat,
   return out;
 }
 
+}  // namespace
+
 // Encode a Unicode code point for \u / \U, matching bash's u32cconv: in the
 // active LC_CTYPE locale's charset when it is not UTF-8 (Big5, EUC, ...), with
 // UTF-8 as both the common case and the can't-convert fallback.  wcrtomb is
 // no use here: on the BSDs (macOS included) wchar_t in a Big5 locale is the
 // zero-extended multibyte value, not a Unicode code point, so like bash we
-// convert the UTF-8 form with iconv.
+// convert the UTF-8 form with iconv.  (External linkage: printf's format
+// escapes and echo -e/%b use the same encoder.)
 void append_utf8_raw(std::string &out, unsigned long v);
 
 void append_utf8(std::string &out, unsigned long v) {
@@ -380,6 +383,9 @@ void append_utf8(std::string &out, unsigned long v) {
 }
 
 // The plain UTF-8 encoding (also the fallback when iconv can't convert).
+// The full bash u32toutf8 ladder: the historic 5- and 6-byte forms encode
+// values past the Unicode range, and anything >= 0x80000000 encodes to
+// NOTHING at all ($'\Uffffffff' is empty in bash).
 void append_utf8_raw(std::string &out, unsigned long v) {
   if (v <= 0x7f) {
     out += static_cast<char>(v);
@@ -390,13 +396,28 @@ void append_utf8_raw(std::string &out, unsigned long v) {
     out += static_cast<char>(0xe0 | (v >> 12));
     out += static_cast<char>(0x80 | ((v >> 6) & 0x3f));
     out += static_cast<char>(0x80 | (v & 0x3f));
-  } else {
+  } else if (v <= 0x1fffff) {
     out += static_cast<char>(0xf0 | (v >> 18));
+    out += static_cast<char>(0x80 | ((v >> 12) & 0x3f));
+    out += static_cast<char>(0x80 | ((v >> 6) & 0x3f));
+    out += static_cast<char>(0x80 | (v & 0x3f));
+  } else if (v <= 0x3ffffff) {
+    out += static_cast<char>(0xf8 | (v >> 24));
+    out += static_cast<char>(0x80 | ((v >> 18) & 0x3f));
+    out += static_cast<char>(0x80 | ((v >> 12) & 0x3f));
+    out += static_cast<char>(0x80 | ((v >> 6) & 0x3f));
+    out += static_cast<char>(0x80 | (v & 0x3f));
+  } else if (v <= 0x7fffffff) {
+    out += static_cast<char>(0xfc | (v >> 30));
+    out += static_cast<char>(0x80 | ((v >> 24) & 0x3f));
+    out += static_cast<char>(0x80 | ((v >> 18) & 0x3f));
     out += static_cast<char>(0x80 | ((v >> 12) & 0x3f));
     out += static_cast<char>(0x80 | ((v >> 6) & 0x3f));
     out += static_cast<char>(0x80 | (v & 0x3f));
   }
 }
+
+namespace {
 
 // ANSI-C dequoting for $'...' -- matches bash's ansicstr(..., flags=2).  Beyond
 // the single-letter escapes it decodes octal (\nnn), hex (\xHH and \x{...}),
