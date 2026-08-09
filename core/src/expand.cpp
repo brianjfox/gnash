@@ -633,8 +633,26 @@ std::string Expander::param_value(const std::string &name, bool &set, bool defau
     return std::string();
   }
   std::string v;
-  if (sh_.get_if_set(name, v)) return v;
-  if (sh_.dynamic_var(name, v)) return v;  // RANDOM/SECONDS/LINENO/BASHPID/EPOCH*
+  bool nr_elt = false;
+  {
+    // A nameref to an array element re-expands the SUBSCRIPT on every
+    // dereference: bash's array_expand_index performs parameter and command
+    // substitution, so `declare -n r='x[i=0$(cmd)]'; : $r' runs cmd each
+    // time (nameref10.sub).  Shell::get has no expander down at its level --
+    // its raw arithmetic evaluation would silently drop the substitution --
+    // so a subscript that still needs expansion is handled here.
+    std::string nrbase, nrsub;
+    if (sh_.nameref_elt(name, nrbase, nrsub) &&
+        nrsub.find_first_of("$`") != std::string::npos) {
+      nr_elt = true;
+      std::string esub = expand_no_split(nrsub, false, false);
+      if (sh_.array_elem_set(nrbase, esub)) return sh_.array_get(nrbase, esub);
+    }
+  }
+  if (!nr_elt) {
+    if (sh_.get_if_set(name, v)) return v;
+    if (sh_.dynamic_var(name, v)) return v;  // RANDOM/SECONDS/LINENO/BASHPID/EPOCH*
+  }
   set = false;
   // An unbound variable found while RESOLVING this one (a `set -u' failure in a
   // nameref's subscript) has already been reported against its own name; do not
