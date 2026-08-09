@@ -935,10 +935,17 @@ int Executor::run(const Command *c) {
     }
     return sh_.last_status;
   }
-  if (c->line > 0 && (dynamic_cast<const ArithCommand *>(c) ||
-                      dynamic_cast<const CondCommand *>(c) ||
-                      dynamic_cast<const ForCommand *>(c)))
-    sh_.cur_lineno = sh_.lineno_base + c->line;
+  // (`select' installs its line INSIDE run_select, after the loop-variable
+  // identifier check: bash's execute_select_command calls check_identifier
+  // before `line_number = select_command->line', so that diagnostic reports
+  // the ambient line -- errors.tests `bad-select'.)
+  {
+    auto *fc = dynamic_cast<const ForCommand *>(c);
+    if (c->line > 0 && (dynamic_cast<const ArithCommand *>(c) ||
+                        dynamic_cast<const CondCommand *>(c) ||
+                        (fc && !fc->is_select)))
+      sh_.cur_lineno = sh_.lineno_base + c->line;
+  }
   int st = sh_.last_status;
   if (auto *pa = dynamic_cast<const Subshell *>(c)) st = run_subshell(pa);
   else if (auto *pb = dynamic_cast<const Group *>(c)) st = run_group(pb);
@@ -2227,7 +2234,10 @@ int Executor::run_for(const ForCommand *c) {
 // layout and the KSH_COMPATIBLE reprint-only-after-an-empty-line behavior.
 int Executor::run_select(const ForCommand *c) {
   // The loop variable must be a valid identifier, validated at run time as bash
-  // does (`NAME: line N: `x-y': not a valid identifier').
+  // does (`NAME: line N: `x-y': not a valid identifier').  The check runs
+  // BEFORE the select's own line is installed (bash's execute_select_command
+  // calls check_identifier first), so the diagnostic carries the ambient line
+  // -- inside a function, the line its body starts on.
   if (!c->var.empty()) {
     bool okname = std::isalpha(static_cast<unsigned char>(c->var[0])) || c->var[0] == '_';
     for (char ch : c->var)
@@ -2239,6 +2249,7 @@ int Executor::run_select(const ForCommand *c) {
       return (sh_.last_status = 1);
     }
   }
+  if (c->line > 0) sh_.cur_lineno = sh_.lineno_base + c->line;  // $LINENO / errors
   Expander ex(sh_);
   std::vector<std::string> items =
       c->words_present ? ex.expand_args(c->words) : sh_.positional;
