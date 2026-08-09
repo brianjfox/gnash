@@ -179,7 +179,9 @@ struct Lexer {
     if (pos < n) w += in[pos++];
     else { unterminated = true; if (!unterm_close) { unterm_close = '`'; unterm_line = startln; } }
   }
-  void scan_paren(std::string &w, bool comsub_ctx = false) {  // pos at '('
+  void scan_paren(std::string &w, bool comsub_ctx = false,
+                  bool array_lit = false) {  // pos at '('
+    int startln = line_for(pos);  // the open line, reported for an unterminated array literal
     int depth = 0;
     struct PHd { std::string delim; bool strip; int depth; bool quoted; };
     std::vector<PHd> paren_heredocs;  // pending heredocs inside the parens
@@ -381,6 +383,30 @@ struct Lexer {
       } else if (c == '#' && !saw_word) {
         // A comment runs to the end of the line: a `)' in it is not the closer.
         while (pos < n && in[pos] != '\n') { w += in[pos]; pos++; }
+      } else if (array_lit && c == '[' && !saw_word) {
+        // A subscript at ELEMENT START of a compound assignment: bash scans
+        // the `[...]' as one unit (P_ARRAYSUB), so a `)' inside the brackets
+        // belongs to the subscript, not the literal -- `((X=([))]' therefore
+        // runs out of input still looking for the compound's `)'
+        // (parser.tests).
+        saw_word = true;
+        word_plain = false;
+        int bdepth = 0;
+        while (pos < n) {
+          char bc = in[pos];
+          if (bc == '\\' && pos + 1 < n) { w += bc; w += in[pos + 1]; pos += 2; continue; }
+          if (bc == '\'') { scan_single(w); continue; }
+          if (bc == '"') { scan_double(w); continue; }
+          if (bc == '[') bdepth++;
+          else if (bc == ']') {
+            w += bc;
+            pos++;
+            if (--bdepth == 0) break;
+            continue;
+          }
+          w += bc;
+          pos++;
+        }
       } else if (c == '\'') {
         saw_word = true; word_plain = false;
         scan_single(w);
@@ -411,7 +437,13 @@ struct Lexer {
     } while (pos < n && depth > 0);
     if (depth > 0) {
       unterminated = true;
-      if (!unterm_close) unterm_close = ')';
+      if (!unterm_close) {
+        unterm_close = ')';
+        // An unterminated ARRAY LITERAL reports its open line, like a quote
+        // (bash parse_matched_pair start_lineno); `$(' keeps the end-of-input
+        // line (parse_comsub) via unterm_line staying 0.
+        if (array_lit) unterm_line = startln;
+      }
       // NOTE: a here-document registered but whose BODY has not started is
       // deliberately not flagged here -- the `\' ending the delimiter word
       // itself (`<<\EOT\' + `4') is a line continuation that builds the
@@ -660,7 +692,7 @@ struct Lexer {
         // bash's parser treats `printf "%s\n" -a a=(a 'b  c')' (array1.sub);
         // leaving it unconsumed makes it an operator token the parser rejects.
         if (!assignment_acceptable()) break;
-        scan_paren(w);  // compound (array) assignment value: name=(...)
+        scan_paren(w, false, true);  // compound (array) assignment value: name=(...)
         quoted = true;
         continue;
       }
