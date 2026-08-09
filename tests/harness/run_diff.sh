@@ -507,6 +507,21 @@ echo "L=$LINENO"'
   '{ set -u; declare -A m; declare -n r="m[key]"; : "$r"; } 2>&1 | sed "s|^[^ ]*: ||"'
   'set -u; declare -A m=([key]=V); declare -n r="m[key]"; echo "$r"'
   '{ set -u; unset zz; : "$zz"; } 2>&1 | sed "s|^[^ ]*: ||"'
+  # An assignment value made only of ordinary characters expands to itself and
+  # skips the expansion pipeline.  These pin what must NOT take that path --
+  # process substitution in particular, which has no `$'"'"' or quote to give it away.
+  'v=<(echo hi); echo "${v%%[0-9]*}"'
+  'v=plainvalue; echo "$v"'
+  'x=9; v=$x-lit; echo "$v"'
+  'v=~; [ "$v" = "$HOME" ] && echo tilde-ok'
+  'v=a\ b; echo "[$v]"'
+  # ...and what an append must still honour, whatever fast path it takes.
+  '{ readonly s=a; s+=b; } 2>&1 | sed "s|^[^ ]*: ||"; echo "[$s]"'
+  'declare -l s=A; s+=BC; echo "[$s]"'
+  's=a; s+=b true; echo "[$s]"'
+  'declare -a v=(1 2); v+=x; declare -p v'
+  'PATH=/bin; PATH+=:/xyz; echo "$PATH"'
+  'declare -n r=t; t=a; r+=b; echo "[$t]"'
 )
 
 fails=0
