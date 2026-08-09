@@ -295,6 +295,7 @@ class Shell {
   void end_interruptible_wait();
   int pending_trapped_signal();               // a pending signal that has a trap, or 0
   void note_child_reaped();                   // count a reaped child for the SIGCHLD trap
+  void reapply_locale();  // re-derive LC_CTYPE/LC_NUMERIC from LC_*/LANG vars
   // Where `set -x' output goes.  stderr unless $BASH_XTRACEFD names an open
   // file descriptor; see apply_xtracefd().
   std::FILE *xtrace_out() const { return xtrace_fp ? xtrace_fp : stderr; }

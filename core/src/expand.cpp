@@ -334,12 +334,15 @@ static std::string mb_case_fold(const std::string &val, const std::string &pat,
   return out;
 }
 
+}  // namespace
+
 // Encode a Unicode code point for \u / \U, matching bash's u32cconv: in the
 // active LC_CTYPE locale's charset when it is not UTF-8 (Big5, EUC, ...), with
 // UTF-8 as both the common case and the can't-convert fallback.  wcrtomb is
 // no use here: on the BSDs (macOS included) wchar_t in a Big5 locale is the
 // zero-extended multibyte value, not a Unicode code point, so like bash we
-// convert the UTF-8 form with iconv.
+// convert the UTF-8 form with iconv.  (External linkage: printf's format
+// escapes and echo -e/%b use the same encoder.)
 void append_utf8_raw(std::string &out, unsigned long v);
 
 void append_utf8(std::string &out, unsigned long v) {
@@ -380,6 +383,9 @@ void append_utf8(std::string &out, unsigned long v) {
 }
 
 // The plain UTF-8 encoding (also the fallback when iconv can't convert).
+// The full bash u32toutf8 ladder: the historic 5- and 6-byte forms encode
+// values past the Unicode range, and anything >= 0x80000000 encodes to
+// NOTHING at all ($'\Uffffffff' is empty in bash).
 void append_utf8_raw(std::string &out, unsigned long v) {
   if (v <= 0x7f) {
     out += static_cast<char>(v);
@@ -390,13 +396,28 @@ void append_utf8_raw(std::string &out, unsigned long v) {
     out += static_cast<char>(0xe0 | (v >> 12));
     out += static_cast<char>(0x80 | ((v >> 6) & 0x3f));
     out += static_cast<char>(0x80 | (v & 0x3f));
-  } else {
+  } else if (v <= 0x1fffff) {
     out += static_cast<char>(0xf0 | (v >> 18));
+    out += static_cast<char>(0x80 | ((v >> 12) & 0x3f));
+    out += static_cast<char>(0x80 | ((v >> 6) & 0x3f));
+    out += static_cast<char>(0x80 | (v & 0x3f));
+  } else if (v <= 0x3ffffff) {
+    out += static_cast<char>(0xf8 | (v >> 24));
+    out += static_cast<char>(0x80 | ((v >> 18) & 0x3f));
+    out += static_cast<char>(0x80 | ((v >> 12) & 0x3f));
+    out += static_cast<char>(0x80 | ((v >> 6) & 0x3f));
+    out += static_cast<char>(0x80 | (v & 0x3f));
+  } else if (v <= 0x7fffffff) {
+    out += static_cast<char>(0xfc | (v >> 30));
+    out += static_cast<char>(0x80 | ((v >> 24) & 0x3f));
+    out += static_cast<char>(0x80 | ((v >> 18) & 0x3f));
     out += static_cast<char>(0x80 | ((v >> 12) & 0x3f));
     out += static_cast<char>(0x80 | ((v >> 6) & 0x3f));
     out += static_cast<char>(0x80 | (v & 0x3f));
   }
 }
+
+namespace {
 
 // ANSI-C dequoting for $'...' -- matches bash's ansicstr(..., flags=2).  Beyond
 // the single-letter escapes it decodes octal (\nnn), hex (\xHH and \x{...}),
@@ -2608,12 +2629,20 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
     // Try only CHARACTER-boundary split points, so `${x%?}' removes one whole
     // multibyte character rather than a single trailing byte (which would leave
     // a broken sequence).  cb lists the byte offsets of every boundary, 0..size.
+    // EXCEPT: bash drops to byte-wise matching (remove_upattern) when either
+    // the value or the pattern is not valid multibyte text -- so a pattern
+    // holding a bare continuation byte can strip mid-character:
+    // `${euro##*$'\202'}' leaves only euro's last byte (intl3.sub).
+    auto mb_valid = [](const std::string &t) {
+      return std::mbstowcs(nullptr, t.c_str(), 0) != static_cast<size_t>(-1);
+    };
+    bool bytewise = MB_CUR_MAX > 1 && (!mb_valid(val) || !mb_valid(pat));
     std::vector<size_t> cb;
     for (size_t i = 0;; ) {
       cb.push_back(i);
       if (i >= val.size()) break;
       size_t len = 1;
-      mb_decode(val, i, len);
+      if (!bytewise) mb_decode(val, i, len);
       i += len;
     }
     if (rest[0] == '#') {  // prefix removal (shortest = first, longest = last)
@@ -3143,9 +3172,13 @@ std::vector<std::pair<std::string, std::string>> Expander::split_ifs(const std::
   while (i < n) {
     std::string cur, curm;
     while (i < n && !soft_ifs(i) && !(mask[i] == MMARK && s[i] == FIELD_SEP)) {
-      cur += s[i];
-      curm += mask[i];
-      i++;
+      // Advance by whole characters: a trail byte of a valid multibyte char
+      // must never be tested against IFS (IFS=$'\254' does not split `€',
+      // whose last byte is 254 -- intl3.sub).
+      size_t len = clen(i);
+      cur.append(s, i, len);
+      curm.append(mask, i, len);
+      i += len;
     }
     fields.emplace_back(cur, curm);
     if (i >= n) break;

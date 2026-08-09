@@ -1592,13 +1592,20 @@ int Executor::run_simple(const SimpleCommand *c) {
       else sh_.vars.erase(it->first);
     }
     restore.clear();
+    bool relocale = false;
     for (const auto &a : assigns) {
       sh_.temp_env_active.erase(a.first);
       sh_.temp_prior.erase(a.first);
       sh_.temp_consumed.erase(a.first);
       auto d = sh_.temp_env_depth.find(a.first);
       if (d != sh_.temp_env_depth.end() && --d->second <= 0) sh_.temp_env_depth.erase(d);
+      // Applying `LC_ALL=C printf ...' went through Shell::set (which resets
+      // the locale); the teardown above wrote vars directly, so re-derive.
+      if (a.first == "LC_ALL" || a.first == "LC_CTYPE" || a.first == "LC_NUMERIC" ||
+          a.first == "LANG")
+        relocale = true;
     }
+    if (relocale) sh_.reapply_locale();
   };
 
   int status = 0;
@@ -1867,10 +1874,11 @@ int Executor::run_simple(const SimpleCommand *c) {
       std::fflush(nullptr);
       do_exec(cargv);
       if (errno == ENOENT && exec_file.find('/') == std::string::npos)
-        std::fprintf(stderr, "%s%s: %s\n", sh_.err_prefix().c_str(), exec_file.c_str(),
+        std::fprintf(stderr, "%s%s: %s\n", sh_.err_prefix().c_str(), printable_name(exec_file).c_str(),
                      exec_file == argv[0] ? "command not found" : "not found");
       else
-        std::fprintf(stderr, "%s%s: %s\n", sh_.err_prefix().c_str(), exec_file.c_str(), std::strerror(errno));
+        std::fprintf(stderr, "%s%s: %s\n", sh_.err_prefix().c_str(),
+                     printable_name(exec_file).c_str(), std::strerror(errno));
       _exit(errno == EACCES ? 126 : 127);
     }
     // external command, in its own process group
@@ -1902,11 +1910,11 @@ int Executor::run_simple(const SimpleCommand *c) {
       cargv.push_back(nullptr);
       do_exec(cargv);
       if (errno == ENOENT && exec_file.find('/') == std::string::npos)
-        std::fprintf(stderr, "%s%s: %s\n", sh_.err_prefix().c_str(), exec_file.c_str(),
+        std::fprintf(stderr, "%s%s: %s\n", sh_.err_prefix().c_str(), printable_name(exec_file).c_str(),
                      exec_file == argv[0] ? "command not found" : "not found");
       else
-        std::fprintf(stderr, "%s%s: %s\n", sh_.err_prefix().c_str(), exec_file.c_str(),
-                     std::strerror(errno));
+        std::fprintf(stderr, "%s%s: %s\n", sh_.err_prefix().c_str(),
+                     printable_name(exec_file).c_str(), std::strerror(errno));
       _exit(errno == EACCES ? 126 : 127);
     }
     if (sh_.job_control) setpgid(pid, pid);

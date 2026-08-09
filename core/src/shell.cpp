@@ -1509,23 +1509,34 @@ bool Shell::get_if_set(const std::string &n_in, std::string &out) const {
 }
 
 static bool is_locale_var(const std::string &n) {
-  return n == "LC_ALL" || n == "LC_CTYPE" || n == "LANG";
+  return n == "LC_ALL" || n == "LC_CTYPE" || n == "LC_NUMERIC" || n == "LANG";
 }
 
-// Re-apply the LC_CTYPE locale from the shell's own LC_ALL/LC_CTYPE/LANG
-// variables, in POSIX precedence order, so a runtime `export LC_ALL=en_US.UTF-8'
-// makes subsequent ${#var}/substring operations count characters.  Only the
-// LC_CTYPE category (which governs MB_CUR_MAX / mbrtowc) is changed.
+// Re-apply the locale from the shell's own LC_ALL/LC_*/LANG variables, in
+// POSIX precedence order, so a runtime `export LC_ALL=en_US.UTF-8' makes
+// subsequent ${#var}/substring operations count characters.  Two categories
+// are tracked: LC_CTYPE (MB_CUR_MAX / mbrtowc / \u encoding) and LC_NUMERIC
+// (printf's radix character -- de_DE formats %.4f as `1,0000').
 static void apply_ctype_locale(Shell &sh) {
   auto val = [&](const char *k) -> std::string {
     auto it = sh.vars.find(k);
     return it != sh.vars.end() ? it->second.value : std::string();
   };
-  std::string loc = val("LC_ALL");
+  std::string all = val("LC_ALL"), lang = val("LANG");
+  std::string loc = all;
   if (loc.empty()) loc = val("LC_CTYPE");
-  if (loc.empty()) loc = val("LANG");
+  if (loc.empty()) loc = lang;
   if (!loc.empty()) std::setlocale(LC_CTYPE, loc.c_str());
+  loc = all;
+  if (loc.empty()) loc = val("LC_NUMERIC");
+  if (loc.empty()) loc = lang;
+  if (!loc.empty()) std::setlocale(LC_NUMERIC, loc.c_str());
 }
+
+// Public re-application hook: the executor calls this after a temporary
+// environment (`LC_ALL=C printf ...') is torn down, since the teardown
+// restores the variables without going through Shell::set.
+void Shell::reapply_locale() { apply_ctype_locale(*this); }
 
 bool Shell::set(const std::string &n_in, const std::string &v,
                 const char *nameref_ctx) {

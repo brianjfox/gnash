@@ -92,6 +92,19 @@ std::string decode_b(const std::string &s, bool &stop, bool bare_octal = true) {
         out += static_cast<char>(v);
         break;
       }
+      case 'u': case 'U': {
+        // \uHHHH / \UHHHHHHHH: encode via the locale charset (bash u32cconv).
+        int maxd = (e == 'u') ? 4 : 8, k = 0;
+        unsigned long v = 0;
+        while (k < maxd && i + 1 < s.size() && std::isxdigit((unsigned char)s[i + 1])) {
+          char h = s[++i];
+          v = v * 16 + (h <= '9' ? h - '0' : (std::tolower(h) - 'a' + 10));
+          k++;
+        }
+        if (k == 0) { out += '\\'; out += e; break; }
+        append_utf8(out, v);
+        break;
+      }
       case '0': {
         // \0nnn : the 0 is a prefix; up to 3 octal digits follow.
         int v = 0, k = 0;
@@ -241,6 +254,18 @@ std::string q_ansic(const std::string &s) {
   r += '\'';
   return r;
 }
+}  // namespace (close anon: printable_name is used by the executor's error paths)
+
+// bash's printable_filename: a name quoted for an error message.  One with
+// nonprinting characters (or bytes invalid in the locale) is shown in ANSI-C
+// form -- `$'5\247@...': command not found` -- and any other name is shown
+// as-is, NOT backslash-quoted.
+std::string printable_name(const std::string &s) {
+  return q_needs_ansic(s) ? q_ansic(s) : s;
+}
+
+namespace {
+
 std::string shell_quote(const std::string &s) {
   if (s.empty()) return "''";
   if (q_needs_ansic(s)) return q_ansic(s);
@@ -292,6 +317,19 @@ void decode_fmt_escape(const std::string &fmt, size_t &i, std::string &out) {
       }
       if (k == 0) { out += "\\x"; return; }
       out += static_cast<char>(v);
+      return;
+    }
+    case 'u': case 'U': {
+      // \uHHHH / \UHHHHHHHH: encode via the locale charset (bash u32cconv).
+      int maxd = (e == 'u') ? 4 : 8, k = 0;
+      unsigned long v = 0;
+      while (k < maxd && i < fmt.size() && std::isxdigit(static_cast<unsigned char>(fmt[i]))) {
+        char h = fmt[i++];
+        v = v * 16 + (h <= '9' ? h - '0' : (std::tolower(h) - 'a' + 10));
+        k++;
+      }
+      if (k == 0) { out += '\\'; out += e; return; }
+      append_utf8(out, v);
       return;
     }
     case '0': case '1': case '2': case '3':
@@ -474,6 +512,60 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
           out += decode_b(next(), stop);
           consumed_any = true;
           if (stop) { argi = argv.size(); i = fmt.size(); break; }
+        } else if (conv == 'l' && j + 1 < fmt.size() &&
+                   (fmt[j + 1] == 's' || fmt[j + 1] == 'c') && MB_CUR_MAX > 1) {
+          // %ls / %lc: field width and precision count wide CHARACTERS, and
+          // padding is always spaces -- bash's printwidestr, not the C
+          // library's byte-counting %ls.
+          char wconv = fmt[j + 1];
+          std::string a = next();
+          std::wstring ws;
+          {
+            std::wstring buf(a.size() + 1, L'\0');
+            std::mbstate_t st{};
+            const char *src = a.c_str();
+            size_t wn = std::mbsrtowcs(&buf[0], &src, a.size() + 1, &st);
+            if (wn == static_cast<size_t>(-1)) {
+              // Invalid multibyte text: bash getwidestr zero-extends each byte.
+              buf.clear();
+              for (unsigned char b : a) buf += static_cast<wchar_t>(b);
+              ws = buf;
+            } else {
+              buf.resize(wn);
+              ws = buf;
+            }
+          }
+          // %lc uses only the first character; a null/empty argument produces
+          // a single null byte (posix interp 1647).
+          if (wconv == 'c') ws = ws.empty() ? std::wstring(1, L'\0') : ws.substr(0, 1);
+          // Parse `-', field width and precision out of the spec text.
+          bool ljust = false;
+          size_t sp = i + 1;
+          while (sp < j && std::strchr("-+ #0", fmt[sp])) { if (fmt[sp] == '-') ljust = true; sp++; }
+          long fw = 0;
+          while (sp < j && std::isdigit(static_cast<unsigned char>(fmt[sp])))
+            fw = fw * 10 + (fmt[sp++] - '0');
+          long pr = -1;
+          if (sp < j && fmt[sp] == '.') {
+            pr = 0;
+            sp++;
+            while (sp < j && std::isdigit(static_cast<unsigned char>(fmt[sp])))
+              pr = pr * 10 + (fmt[sp++] - '0');
+          }
+          long nc = (pr >= 0 && pr <= static_cast<long>(ws.size()))
+                        ? pr : static_cast<long>(ws.size());
+          long pad = fw - nc;
+          if (pad < 0) pad = 0;
+          if (!ljust) out.append(pad, ' ');
+          for (long k = 0; k < nc; k++) {
+            char mb[MB_LEN_MAX];
+            int r = std::wctomb(mb, ws[k]);
+            if (r > 0) out.append(mb, r);
+            else out += static_cast<char>(ws[k]);  // bash convwidestr fallback
+          }
+          if (ljust) out.append(pad, ' ');
+          consumed_any = true;
+          j++;  // the conversion consumed two characters (`ls' / `lc')
         } else if (conv == 's') {
           if (!append_formatted(out, spec, next().c_str())) oversize = true;
           consumed_any = true;
@@ -1022,8 +1114,8 @@ int change_dir(Shell &sh, const std::string &dir, bool physical, const char *cal
   logical = canon_logical(logical);
   const std::string &target = physical ? dir : logical;
   if (chdir(target.c_str()) != 0) {
-    std::fprintf(stderr, "%s%s: %s: %s\n", sh.err_prefix().c_str(), caller, dir.c_str(),
-                 std::strerror(errno));
+    std::fprintf(stderr, "%s%s: %s: %s\n", sh.err_prefix().c_str(), caller,
+                 printable_name(dir).c_str(), std::strerror(errno));
     return 1;
   }
   // Updating a readonly PWD/OLDPWD fails (bash reports it and cd returns 1),

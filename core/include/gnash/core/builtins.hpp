@@ -16,6 +16,10 @@ namespace gnash::core {
 // return true.  Otherwise return false.
 bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status);
 
+// A name quoted for an error message (bash printable_filename): ANSI-C form
+// when it contains nonprinting/invalid bytes, otherwise the name unchanged.
+std::string printable_name(const std::string &s);
+
 // Would NAME run as a command (builtin/keyword/function/alias/PATH)?  Used by
 // interactive syntax highlighting.
 bool command_is_valid(Shell &sh, const std::string &name);
