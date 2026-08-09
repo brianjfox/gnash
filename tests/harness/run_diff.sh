@@ -522,6 +522,13 @@ echo "L=$LINENO"'
   'declare -a v=(1 2); v+=x; declare -p v'
   'PATH=/bin; PATH+=:/xyz; echo "$PATH"'
   'declare -n r=t; t=a; r+=b; echo "[$t]"'
+  # With stdin closed, pipe() hands out fd 0 as a pipe end; the child fd dance
+  # must not close the descriptor it just put in place (redir5.sub).
+  'exec <&-; echo hi | cat; echo rc=$?'
+  'exec <&-; echo a | cat | cat; echo rc=$?'
+  'exec <&-; read abcde 2>&1 | grep -q "read error"; echo rc=$?'
+  # read(2) failing outright (closed fd) is a reported error, not a quiet EOF.
+  '{ exec <&-; read x; echo rc=$?; } 2>&1 | sed "s|^[^ ]*: ||"'
 )
 
 fails=0
