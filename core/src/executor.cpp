@@ -908,6 +908,10 @@ int Executor::run(const Command *c) {
 
   sh_.run_pending_traps();  // deliver any signals received between commands
 
+  // A dead coprocess is torn down (fds closed, NAME/NAME_PID unset) before
+  // the next command runs, as bash's SIGCHLD-driven coproc_reap does.
+  if (sh_.coproc_pid) sh_.reap_coproc();
+
   // $LINENO / error line.  bash installs a command's line for only a FEW
   // command types -- SET_LINE_NUMBER() appears in execute_cmd.c for the simple
   // command (run_simple sets its own, below), the subshell, `(( ))' and
@@ -2059,11 +2063,29 @@ int Executor::run_coproc(const CoprocCommand *c) {
     std::fprintf(stderr, "%scoproc: pipe: %s\n", sh_.err_prefix().c_str(), std::strerror(errno));
     return (sh_.last_status = 1);
   }
+  // bash's sh_openpipe moves each pipe end to the HIGHEST free descriptor
+  // below 64 (move_to_high_fd with maxfd 64) as soon as the pipe is created:
+  // the first coproc allocates 63/62 + 61/60 and publishes 63/60; a second
+  // one, started with those still open, gets 62/58 (coproc.tests).
+  auto move_high64 = [](int fd) {
+    int nfds = 64;
+    for (nfds--; nfds > 3; nfds--)
+      if (fcntl(nfds, F_GETFD) == -1) break;
+    if (nfds > 3 && fd != nfds && dup2(fd, nfds) != -1) {
+      close(fd);
+      return nfds;
+    }
+    return fd;
+  };
+  out_pipe[0] = move_high64(out_pipe[0]);
+  out_pipe[1] = move_high64(out_pipe[1]);
   if (pipe(in_pipe) < 0) {
     std::fprintf(stderr, "%scoproc: pipe: %s\n", sh_.err_prefix().c_str(), std::strerror(errno));
     close(out_pipe[0]); close(out_pipe[1]);
     return (sh_.last_status = 1);
   }
+  in_pipe[0] = move_high64(in_pipe[0]);
+  in_pipe[1] = move_high64(in_pipe[1]);
   bool jc = sh_.job_control;
   std::string cmd = to_string(c->body.get());
   pid_t pid = fork();
@@ -2086,18 +2108,16 @@ int Executor::run_coproc(const CoprocCommand *c) {
     std::fflush(nullptr);
     _exit(s & 0xff);
   }
-  // Parent: keep the shell's read/write ends, move them to high descriptors (so
-  // they do not collide with user redirections) and mark them close-on-exec.
+  // Parent: keep the shell's read/write ends (already on their high
+  // descriptors) and mark them close-on-exec, as bash does.
   close(in_pipe[0]);
   close(out_pipe[1]);
-  auto move_high = [](int fd) {
-    int hi = fcntl(fd, F_DUPFD, 10);
-    if (hi >= 0) { close(fd); fd = hi; }
-    fcntl(fd, F_SETFD, FD_CLOEXEC);
-    return fd;
-  };
-  int read_fd = move_high(out_pipe[0]);
-  int write_fd = move_high(in_pipe[1]);
+  int read_fd = out_pipe[0];
+  int write_fd = in_pipe[1];
+  fcntl(read_fd, F_SETFD, FD_CLOEXEC);
+  fcntl(write_fd, F_SETFD, FD_CLOEXEC);
+  sh_.coproc_rfd = read_fd;
+  sh_.coproc_wfd = write_fd;
   if (jc) setpgid(pid, pid);
   sh_.last_bg_pid = pid;
   Shell::Job *j = sh_.add_job(pid, {pid}, cmd, true);
