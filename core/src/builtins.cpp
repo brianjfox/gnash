@@ -92,6 +92,19 @@ std::string decode_b(const std::string &s, bool &stop, bool bare_octal = true) {
         out += static_cast<char>(v);
         break;
       }
+      case 'u': case 'U': {
+        // \uHHHH / \UHHHHHHHH: encode via the locale charset (bash u32cconv).
+        int maxd = (e == 'u') ? 4 : 8, k = 0;
+        unsigned long v = 0;
+        while (k < maxd && i + 1 < s.size() && std::isxdigit((unsigned char)s[i + 1])) {
+          char h = s[++i];
+          v = v * 16 + (h <= '9' ? h - '0' : (std::tolower(h) - 'a' + 10));
+          k++;
+        }
+        if (k == 0) { out += '\\'; out += e; break; }
+        append_utf8(out, v);
+        break;
+      }
       case '0': {
         // \0nnn : the 0 is a prefix; up to 3 octal digits follow.
         int v = 0, k = 0;
@@ -292,6 +305,19 @@ void decode_fmt_escape(const std::string &fmt, size_t &i, std::string &out) {
       }
       if (k == 0) { out += "\\x"; return; }
       out += static_cast<char>(v);
+      return;
+    }
+    case 'u': case 'U': {
+      // \uHHHH / \UHHHHHHHH: encode via the locale charset (bash u32cconv).
+      int maxd = (e == 'u') ? 4 : 8, k = 0;
+      unsigned long v = 0;
+      while (k < maxd && i < fmt.size() && std::isxdigit(static_cast<unsigned char>(fmt[i]))) {
+        char h = fmt[i++];
+        v = v * 16 + (h <= '9' ? h - '0' : (std::tolower(h) - 'a' + 10));
+        k++;
+      }
+      if (k == 0) { out += '\\'; out += e; return; }
+      append_utf8(out, v);
       return;
     }
     case '0': case '1': case '2': case '3':
