@@ -827,6 +827,11 @@ struct Lexer {
   }
 
   void collect_heredocs() {
+    // The line whose newline TRIGGERED gathering -- bash's warning names it
+    // ("here-document at line %d delimited by end-of-file"): the redirect's
+    // own line for a one-line command, but the line of the `)' for
+    // `cat <<EOF && grep $(...\n...)' (heredoc7.sub).
+    int gather_line = line_for(pos > 0 ? pos - 1 : 0);
     for (Pending &pd : pending) {
       std::string body;
       bool found = false;
@@ -865,9 +870,12 @@ struct Lexer {
       if (!found && !heredoc_eof) {
         // Delimiter never seen: end-of-input delimits the body (bash warns).
         // Line readers treat this as incomplete and keep accumulating input.
+        // A regular here-document names the line whose newline triggered
+        // gathering; one embedded in a command substitution was gathered at
+        // parse time within the substitution and keeps its redirect's line.
         heredoc_eof = true;
         heredoc_eof_delim = pd.delim;
-        heredoc_eof_line = out[pd.index].line;
+        heredoc_eof_line = pd.comsub ? out[pd.index].line : gather_line;
         heredoc_eof_quoted = pd.quoted;
       }
       if (pd.comsub) {
