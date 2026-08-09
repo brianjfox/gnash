@@ -463,6 +463,16 @@ echo "L=$LINENO"'
   '{ OLDPWD=/tmp/cd-notthere; cd -; } 2>&1 | sed "s|^[^ ]*: ||"; echo "rc=$?"'
   'cd /tmp; cd /usr; cd -; echo "rc=$?"; pwd'
   '{ unset OLDPWD; cd -; } 2>&1 | sed "s|^[^ ]*: ||"; echo "rc=$?"'
+  # Who a readonly failure names depends on WHO performed the assignment.  With
+  # an explicit -a, an unquoted compound is the command'"'"'s own assignment word
+  # (the enclosing function answers) while a quoted one is the builtin'"'"'s own
+  # (it names itself).  Without -a there is no attribution at all.
+  '{ a=(x); readonly a; f() { readonly -a a=(2); }; f; } 2>&1 | sed "s|^[^ ]*: ||"'
+  '{ a=(x); readonly a; f() { readonly -a "a=(4)"; }; f; } 2>&1 | sed "s|^[^ ]*: ||"'
+  '{ a=(x); readonly a; f() { readonly a=(4); }; f; } 2>&1 | sed "s|^[^ ]*: ||"'
+  '{ a=(x); readonly a; f() { readonly "a=(5)"; }; f; } 2>&1 | sed "s|^[^ ]*: ||"'
+  '{ a=(x); readonly a; readonly -a a=(2); } 2>&1 | sed "s|^[^ ]*: ||"'
+  '{ a=x; readonly a; f() { readonly a=9; }; f; } 2>&1 | sed "s|^[^ ]*: ||"'
 )
 
 fails=0

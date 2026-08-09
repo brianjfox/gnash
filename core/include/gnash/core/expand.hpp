@@ -149,7 +149,11 @@ std::string mb_capitalize(const std::string &s);
 
 // Apply a NAME=VALUE / NAME[i]=VALUE / NAME=(...) assignment word to the shell
 // (used by declare/local/readonly for array and scalar values).
-void apply_assignment_word(Shell &sh, const std::string &word);
+// Apply a NAME=... / NAME=(...) word.  CTX names whoever is answerable for a
+// failure: a builtin's own name, "" for no attribution, or null to let the
+// enclosing function answer -- which is what a compound assignment WORD does,
+// since bash performs it before the builtin is entered.
+void apply_assignment_word(Shell &sh, const std::string &word, const char *ctx = nullptr);
 
 }  // namespace gnash::core
 

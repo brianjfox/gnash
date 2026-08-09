@@ -625,6 +625,13 @@ class Shell {
   struct RawArg {
     std::string text;
     bool quoted = false;
+    // A COMPOUND assignment word: `NAME=(' with both the `=' and the `(' outside
+    // any quoting, as written in the source.  bash processes such a word as the
+    // command's own assignment, before the builtin it is an argument to runs --
+    // which is why a failure names the enclosing function rather than the
+    // builtin.  `NAME='(...)'' and `'NAME=(...)'' are ordinary words the builtin
+    // assigns for itself, and are false here.
+    bool compound_assign = false;
   };
   std::vector<RawArg> raw_args;
   // bash valid_alias_name: no shell metacharacters, blanks, quoting
