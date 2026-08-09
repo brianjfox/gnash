@@ -1362,6 +1362,194 @@ static bool alias_wants_sentinel(const std::string &body) {
   return !ub && q == 0 && !comment;
 }
 
+// ...and bash also suppresses the virtual space when the alias text ends
+// while a HERE-DOCUMENT is being read (parse.y shell_getc END_ALIAS tests
+// `heredoc_string == 0'): for `alias h='cat <<EOF ... EOF'' the delimiter
+// must stay exactly `EOF', and for a body that CONTINUES past the alias
+// (`alias h='cat <<EOF\nhello'') the next script line follows it directly.
+// Track `<<'/`<<-' redirections through the body: bodies begin at the next
+// newline; the end of the text landing inside one (including on its
+// delimiter line) suppresses the sentinel.
+static bool alias_end_in_heredoc(const std::string &body) {
+  size_t i = 0;
+  const size_t n = body.size();
+  std::vector<std::pair<std::string, bool>> pending;  // delimiter, <<- strip-tabs
+  std::string cur;
+  bool cur_strip = false, in_body = false;
+  char q = 0;
+  bool comment = false;
+  while (i < n) {
+    if (in_body) {  // consume one body line; compare against the delimiter
+      size_t nl = body.find('\n', i);
+      std::string line = body.substr(i, nl == std::string::npos ? std::string::npos : nl - i);
+      if (cur_strip) {
+        size_t t = 0;
+        while (t < line.size() && line[t] == '\t') t++;
+        line.erase(0, t);
+      }
+      bool at_end = nl == std::string::npos;
+      i = at_end ? n : nl + 1;
+      if (at_end) return true;  // text ends inside gathering (even on the delimiter line)
+      if (line == cur) {
+        if (!pending.empty()) {
+          cur = pending.front().first;
+          cur_strip = pending.front().second;
+          pending.erase(pending.begin());
+        } else {
+          in_body = false;
+        }
+      }
+      continue;
+    }
+    char c = body[i];
+    if (comment) { if (c == '\n') comment = false; i++; continue; }
+    if (q == '\'') { if (c == '\'') q = 0; i++; continue; }
+    if (q == '"') {
+      if (c == '\\') i++;
+      else if (c == '"') q = 0;
+      i++;
+      continue;
+    }
+    if (c == '\\') { i += 2; continue; }
+    if (c == '\'' || c == '"') { q = c; i++; continue; }
+    if (c == '#' && (i == 0 || std::strchr(" \t\n;&|()<>", body[i - 1]))) {
+      comment = true;
+      i++;
+      continue;
+    }
+    if (c == '<' && i + 1 < n && body[i + 1] == '<' &&
+        (i + 2 >= n || (body[i + 2] != '<' && body[i + 2] != '(')) &&
+        (i == 0 || body[i - 1] != '<')) {
+      i += 2;
+      bool strip = i < n && body[i] == '-';
+      if (strip) i++;
+      while (i < n && (body[i] == ' ' || body[i] == '\t')) i++;
+      std::string d;
+      char dq = 0;
+      while (i < n) {
+        char dc = body[i];
+        if (dq) {
+          if (dc == dq) { dq = 0; i++; continue; }
+          d += dc;
+          i++;
+          continue;
+        }
+        if (dc == '\'' || dc == '"') { dq = dc; i++; continue; }
+        if (dc == '\\') { i++; if (i < n) { d += body[i]; i++; } continue; }
+        if (std::strchr(" \t\n;&|<>()", dc)) break;
+        d += dc;
+        i++;
+      }
+      if (!d.empty()) pending.push_back({d, strip});
+      continue;
+    }
+    if (c == '\n') {
+      if (!pending.empty()) {
+        cur = pending.front().first;
+        cur_strip = pending.front().second;
+        pending.erase(pending.begin());
+        in_body = true;
+      }
+      i++;
+      continue;
+    }
+    i++;
+  }
+  return in_body;
+}
+
+// Per-byte map of TEXT: true where the byte lies inside here-document
+// GATHERING (body lines including the delimiter line).  Same state machine
+// as alias_end_in_heredoc, used by the sentinel post-pass below.
+static std::vector<char> mark_heredoc_gathering(const std::string &body) {
+  const size_t n = body.size();
+  std::vector<char> mark(n, 0);
+  size_t i = 0;
+  std::vector<std::pair<std::string, bool>> pending;
+  std::string cur;
+  bool cur_strip = false, in_body = false;
+  char q = 0;
+  bool comment = false;
+  while (i < n) {
+    if (in_body) {
+      size_t nl = body.find('\n', i);
+      size_t stop = nl == std::string::npos ? n : nl;
+      for (size_t b = i; b < stop; b++) mark[b] = 1;
+      std::string line = body.substr(i, stop - i);
+      if (cur_strip) {
+        size_t t = 0;
+        while (t < line.size() && line[t] == '\t') t++;
+        line.erase(0, t);
+      }
+      i = nl == std::string::npos ? n : nl + 1;
+      if (line == cur) {
+        if (!pending.empty()) {
+          cur = pending.front().first;
+          cur_strip = pending.front().second;
+          pending.erase(pending.begin());
+        } else {
+          in_body = false;
+        }
+      }
+      continue;
+    }
+    char c = body[i];
+    if (comment) { if (c == '\n') comment = false; i++; continue; }
+    if (q == '\'') { if (c == '\'') q = 0; i++; continue; }
+    if (q == '"') {
+      if (c == '\\') i++;
+      else if (c == '"') q = 0;
+      i++;
+      continue;
+    }
+    if (c == '\\') { i += 2; continue; }
+    if (c == '\'' || c == '"') { q = c; i++; continue; }
+    if (c == '#' && (i == 0 || std::strchr(" \t\n;&|()<>", body[i - 1]))) {
+      comment = true;
+      i++;
+      continue;
+    }
+    if (c == '<' && i + 1 < n && body[i + 1] == '<' &&
+        (i + 2 >= n || (body[i + 2] != '<' && body[i + 2] != '(')) &&
+        (i == 0 || body[i - 1] != '<')) {
+      i += 2;
+      bool strip = i < n && body[i] == '-';
+      if (strip) i++;
+      while (i < n && (body[i] == ' ' || body[i] == '\t')) i++;
+      std::string d;
+      char dq = 0;
+      while (i < n) {
+        char dc = body[i];
+        if (dq) {
+          if (dc == dq) { dq = 0; i++; continue; }
+          d += dc;
+          i++;
+          continue;
+        }
+        if (dc == '\'' || dc == '"') { dq = dc; i++; continue; }
+        if (dc == '\\') { i++; if (i < n) { d += body[i]; i++; } continue; }
+        if (std::strchr(" \t\n;&|<>()", dc)) break;
+        d += dc;
+        i++;
+      }
+      if (!d.empty()) pending.push_back({d, strip});
+      continue;
+    }
+    if (c == '\n') {
+      if (!pending.empty()) {
+        cur = pending.front().first;
+        cur_strip = pending.front().second;
+        pending.erase(pending.begin());
+        in_body = true;
+      }
+      i++;
+      continue;
+    }
+    i++;
+  }
+  return mark;
+}
+
 // The result of textual alias expansion: the expanded input plus a per-byte
 // map of the line each byte should REPORT.  Bytes spliced in from an alias
 // body all report the line of the invoking word (bash does not advance
@@ -1405,6 +1593,11 @@ static AliasExpansion alias_splice_text(const std::string &input,
       "for", "case", "select", "fi", "esac", "!", "time", "function"};
 
   std::vector<AliasZone> zones;
+  // Positions of the virtual-space sentinels added after alias bodies; a
+  // post-pass strips any that ended up inside here-document gathering (a
+  // NESTED alias may open the here-document, so the per-splice check in
+  // alias_end_in_heredoc cannot see it).
+  std::vector<std::size_t> sentinels;
 
   // A word directly after a region whose alias value ended in a blank (only
   // blanks between) is eligible for expansion even outside command position.
@@ -1438,6 +1631,11 @@ static AliasExpansion alias_splice_text(const std::string &input,
       if (z.end <= start) continue;
       if (z.start >= end) { z.start += delta; z.end += delta; continue; }
       z.end += delta;  // the zone encloses the replaced span
+    }
+    for (std::size_t k = 0; k < sentinels.size();) {
+      if (sentinels[k] >= end) { sentinels[k] += delta; k++; }
+      else if (sentinels[k] >= start) sentinels.erase(sentinels.begin() + static_cast<long>(k));
+      else k++;
     }
     zones.push_back({start, start + rep.size(), name, ends_blank});
     ax.changed = true;
@@ -1492,7 +1690,9 @@ static AliasExpansion alias_splice_text(const std::string &input,
           if (!w.quoted && follows_blank_zone(w) && aliases.count(w.text) && !zone_blocked(w)) {
             const std::string &val = aliases.at(w.text);
             bool ends_blank = !val.empty() && (val.back() == ' ' || val.back() == '\t');
-            splice(w.start, w.end, val + (alias_wants_sentinel(val) ? " " : ""), w.text, ends_blank);
+            bool sent = alias_wants_sentinel(val) && !alias_end_in_heredoc(val);
+            splice(w.start, w.end, val + (sent ? " " : ""), w.text, ends_blank);
+            if (sent) sentinels.push_back(w.start + val.size());
             progress = true;
             continue;
           }
@@ -1525,7 +1725,9 @@ static AliasExpansion alias_splice_text(const std::string &input,
       if (!(posix_mode && is_kw) && eligible && aliases.count(t.text) && !zone_blocked(t)) {
         const std::string &val = aliases.at(t.text);
         bool ends_blank = !val.empty() && (val.back() == ' ' || val.back() == '\t');
-        splice(t.start, t.end, val + (alias_wants_sentinel(val) ? " " : ""), t.text, ends_blank);
+        bool sent = alias_wants_sentinel(val) && !alias_end_in_heredoc(val);
+        splice(t.start, t.end, val + (sent ? " " : ""), t.text, ends_blank);
+        if (sent) sentinels.push_back(t.start + val.size());
         progress = true;
         continue;
       }
@@ -1562,6 +1764,21 @@ static AliasExpansion alias_splice_text(const std::string &input,
       // A prefix assignment keeps command position for the following word.
       if (cmd_pos && !t.quoted && is_assignment_word(t.text)) continue;
       cmd_pos = false;
+    }
+  }
+  // Strip virtual-space sentinels that landed inside here-document gathering
+  // in the FINAL text: bash's shell_getc never returns the END_ALIAS space
+  // while a here-document is being read, and only now -- after nested
+  // aliases spliced in -- can that be decided (`alias head='cat <<\END'
+  // body='head ... END'; body' must see the delimiter line as `END').
+  if (!sentinels.empty()) {
+    std::vector<char> mark = mark_heredoc_gathering(ax.text);
+    std::sort(sentinels.rbegin(), sentinels.rend());
+    for (std::size_t pos : sentinels) {
+      if (pos < ax.text.size() && ax.text[pos] == ' ' && mark[pos]) {
+        ax.text.erase(pos, 1);
+        ax.linemap.erase(ax.linemap.begin() + static_cast<long>(pos));
+      }
     }
   }
   return ax;
