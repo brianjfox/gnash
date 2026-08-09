@@ -254,6 +254,18 @@ std::string q_ansic(const std::string &s) {
   r += '\'';
   return r;
 }
+}  // namespace (close anon: printable_name is used by the executor's error paths)
+
+// bash's printable_filename: a name quoted for an error message.  One with
+// nonprinting characters (or bytes invalid in the locale) is shown in ANSI-C
+// form -- `$'5\247@...': command not found` -- and any other name is shown
+// as-is, NOT backslash-quoted.
+std::string printable_name(const std::string &s) {
+  return q_needs_ansic(s) ? q_ansic(s) : s;
+}
+
+namespace {
+
 std::string shell_quote(const std::string &s) {
   if (s.empty()) return "''";
   if (q_needs_ansic(s)) return q_ansic(s);
@@ -1102,8 +1114,8 @@ int change_dir(Shell &sh, const std::string &dir, bool physical, const char *cal
   logical = canon_logical(logical);
   const std::string &target = physical ? dir : logical;
   if (chdir(target.c_str()) != 0) {
-    std::fprintf(stderr, "%s%s: %s: %s\n", sh.err_prefix().c_str(), caller, dir.c_str(),
-                 std::strerror(errno));
+    std::fprintf(stderr, "%s%s: %s: %s\n", sh.err_prefix().c_str(), caller,
+                 printable_name(dir).c_str(), std::strerror(errno));
     return 1;
   }
   // Updating a readonly PWD/OLDPWD fails (bash reports it and cd returns 1),
