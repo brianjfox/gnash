@@ -606,10 +606,197 @@ struct MPrinter {
   }
 };
 
+// bash's lexer expands `$'...'' (ansicstr) and `$"..."' at read_token_word
+// time, so a reconstructed word never shows the `$...' source: `v=$'\001''
+// displays as `v='^A'' and `v=$"msg"' as `v="msg"'.  gnash keeps the source
+// text in the AST, so the printer performs the same expansion.
+
+// bash's sh_single_quote: wrap S in single quotes, ' -> '\''.
+std::string ansi_single_quote(const std::string &s) {
+  std::string out = "'";
+  for (char c : s) {
+    if (c == '\'') out += "'\\''";
+    else out += c;
+  }
+  out += '\'';
+  return out;
+}
+
+void utf8_append(std::string &out, unsigned long cp) {
+  if (cp < 0x80) out += static_cast<char>(cp);
+  else if (cp < 0x800) {
+    out += static_cast<char>(0xC0 | (cp >> 6));
+    out += static_cast<char>(0x80 | (cp & 0x3F));
+  } else if (cp < 0x10000) {
+    out += static_cast<char>(0xE0 | (cp >> 12));
+    out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+    out += static_cast<char>(0x80 | (cp & 0x3F));
+  } else {
+    out += static_cast<char>(0xF0 | (cp >> 18));
+    out += static_cast<char>(0x80 | ((cp >> 12) & 0x3F));
+    out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+    out += static_cast<char>(0x80 | (cp & 0x3F));
+  }
+}
+
+// Decode the escapes of an ANSI-C string body (the text between $' and '),
+// bash's ansicstr: unknown escapes keep the backslash, a NUL truncates.
+std::string ansi_c_decode(const std::string &s) {
+  std::string out;
+  size_t i = 0;
+  auto hexval = [](char c) -> int {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+  };
+  while (i < s.size()) {
+    if (s[i] != '\\') { out += s[i++]; continue; }
+    if (i + 1 >= s.size()) { out += '\\'; break; }
+    char e = s[i + 1];
+    i += 2;
+    char c = 0;
+    switch (e) {
+      case 'a': c = '\a'; break;
+      case 'b': c = '\b'; break;
+      case 'e': case 'E': c = '\033'; break;
+      case 'f': c = '\f'; break;
+      case 'n': c = '\n'; break;
+      case 'r': c = '\r'; break;
+      case 't': c = '\t'; break;
+      case 'v': c = '\v'; break;
+      case '\\': case '\'': case '"': case '?': c = e; break;
+      case 'x': case 'u': case 'U': {
+        int maxd = e == 'x' ? 2 : e == 'u' ? 4 : 8;
+        unsigned long v = 0;
+        int nd = 0;
+        while (nd < maxd && i < s.size() && hexval(s[i]) >= 0) {
+          v = v * 16 + hexval(s[i]);
+          i++; nd++;
+        }
+        if (nd == 0) { out += '\\'; out += e; continue; }  // no digits: literal
+        if (e == 'x') c = static_cast<char>(v);
+        else { utf8_append(out, v); continue; }
+        break;
+      }
+      case '0': case '1': case '2': case '3':
+      case '4': case '5': case '6': case '7': {
+        int v = e - '0', nd = 1;
+        while (nd < 3 && i < s.size() && s[i] >= '0' && s[i] <= '7') {
+          v = v * 8 + (s[i] - '0');
+          i++; nd++;
+        }
+        c = static_cast<char>(v);
+        break;
+      }
+      case 'c': {
+        if (i >= s.size()) { out += "\\c"; continue; }
+        char ch = s[i++];
+        if (ch == '\\' && i < s.size() && s[i] == '\\') i++;  // \c\\ = ctrl-backslash
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)) & 0x1f);
+        break;
+      }
+      default: out += '\\'; out += e; continue;
+    }
+    if (c == '\0') return out;  // NUL truncates the decoded string (C string)
+    out += c;
+  }
+  return out;
+}
+
+// Expand $'...' / $"..." spans of a word into their lexed display form,
+// tracking the quoting contexts bash's lexer distinguishes: not inside '...'
+// or `...` or after $$; active at top level, inside "..."-embedded $(...),
+// inside ${...} and inside $(...).
+std::string ansi_expand_word(const std::string &w) {
+  std::string out;
+  size_t i = 0;
+  while (i < w.size()) {
+    char c = w[i];
+    if (c == '\\') {  // escaped char: copy both
+      out += c;
+      if (i + 1 < w.size()) out += w[i + 1];
+      i = std::min(i + 2, w.size());
+      continue;
+    }
+    if (c == '\'') {  // single-quoted span: verbatim
+      size_t j = w.find('\'', i + 1);
+      if (j == std::string::npos) { out += w.substr(i); break; }
+      out += w.substr(i, j - i + 1);
+      i = j + 1;
+      continue;
+    }
+    if (c == '`') {  // backquotes are re-lexed at expansion time: verbatim
+      out += c;
+      i++;
+      while (i < w.size()) {
+        if (w[i] == '\\' && i + 1 < w.size()) { out += w[i]; out += w[i + 1]; i += 2; continue; }
+        out += w[i];
+        if (w[i++] == '`') break;
+      }
+      continue;
+    }
+    if (c == '"') {  // double quotes: $'..' stays, but a nested $(..) re-lexes
+      out += c;
+      i++;
+      while (i < w.size()) {
+        if (w[i] == '\\' && i + 1 < w.size()) { out += w[i]; out += w[i + 1]; i += 2; continue; }
+        if (w[i] == '"') { out += '"'; i++; break; }
+        if (w[i] == '$' && i + 1 < w.size() && w[i + 1] == '(') {
+          size_t j = i + 1;
+          for (int depth = 0; j < w.size(); j++) {
+            if (w[j] == '(') depth++;
+            else if (w[j] == ')' && --depth == 0) break;
+          }
+          if (j >= w.size()) { out += w.substr(i); i = w.size(); break; }
+          out += "$(";
+          out += ansi_expand_word(w.substr(i + 2, j - (i + 2)));
+          out += ')';
+          i = j + 1;
+          continue;
+        }
+        out += w[i++];
+      }
+      continue;
+    }
+    if (c == '$' && i + 1 < w.size()) {
+      char n = w[i + 1];
+      if (n == '$') { out += "$$"; i += 2; continue; }  // PID, not a quote opener
+      if (n == '\'') {
+        size_t j = i + 2;  // find the closing ', honoring backslash escapes
+        while (j < w.size() && w[j] != '\'') j += (w[j] == '\\' && j + 1 < w.size()) ? 2 : 1;
+        if (j >= w.size()) { out += w.substr(i); break; }
+        out += ansi_single_quote(ansi_c_decode(w.substr(i + 2, j - (i + 2))));
+        i = j + 1;
+        continue;
+      }
+      if (n == '"') { i++; continue; }  // $"..." -> "..." (locale string)
+      if (n == '(') {  // re-lexed context: expand inside
+        size_t j = i + 1;
+        for (int depth = 0; j < w.size(); j++) {
+          if (w[j] == '(') depth++;
+          else if (w[j] == ')' && --depth == 0) break;
+        }
+        if (j >= w.size()) { out += w.substr(i); break; }
+        out += "$(";
+        out += ansi_expand_word(w.substr(i + 2, j - (i + 2)));
+        out += ')';
+        i = j + 1;
+        continue;
+      }
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+
 // Re-render `$(...)' command substitutions in W through the parser, as bash
 // prints the parsed form ("$( echo hi )" becomes "$(echo hi)").  On any parse
-// trouble the original text is kept.
-std::string canonical_word(const std::string &w) {
+// trouble the original text is kept.  ANSI-C / locale strings are expanded
+// first, as bash's lexer has already done that by the time it prints.
+std::string canonical_word(const std::string &w_in) {
+  std::string w = ansi_expand_word(w_in);
   size_t at = w.find("$(");
   if (at == std::string::npos) return w;
   std::string out;
