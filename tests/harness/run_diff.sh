@@ -582,6 +582,19 @@ echo ok16'
   # $GNASH_* tunables), so compare only the bash-derived portion up to the
   # last shared entry, which must still match bash byte-for-byte.
   'help variables | sed -n "/^variables:/,/should be saved on the history list/p"'
+  # Parameter-expansion validation (new-exp.tests).  Fold stderr and strip the
+  # `NAME: line N: ` prefix so the diagnostic text is what is compared.
+  'echo "${!1*}" 2>&1 | sed -E "s/.*line [0-9]+: //"'      # digit prefix listing
+  'echo "${!@*}" 2>&1 | sed -E "s/.*line [0-9]+: //"'      # doubled special
+  '_Qa=1; echo "${!_Q* }" 2>&1 | sed -E "s/.*line [0-9]+: //"'  # trailing junk
+  'echo "${!@}"; echo "${!*}"'                             # valid: empty prefix
+  'v=hi; echo "${v@}" 2>&1 | sed -E "s/.*line [0-9]+: //"' # empty transform op
+  'v=hi; echo "${v@C}" 2>&1 | sed -E "s/.*line [0-9]+: //"' # unknown transform op
+  'unset v; echo "[${v@C}]"'                               # unset: empty, no error
+  'echo "${$((1))}" 2>&1 | sed -E "s/.*line [0-9]+: //"'   # arith in name position
+  'echo "${$(echo x)}" 2>&1 | sed -E "s/.*line [0-9]+: //"' # comsub in name position
+  'set -u; echo "${9}" 2>&1 | sed -E "s/.*line [0-9]+: //"; set -u; echo "$9" 2>&1 | sed -E "s/.*line [0-9]+: //"'
+  'set a; echo "${@:1:$(($# - 2))}" 2>&1 | sed -E "s/.*line [0-9]+: //"'  # neg length raw text
 )
 
 fails=0
