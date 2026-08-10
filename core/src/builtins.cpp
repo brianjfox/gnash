@@ -508,7 +508,26 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
             continue;
           }
         }
-        std::string spec = fmt.substr(i, j - i + 1);
+        // A C length modifier (l, ll, h, hh, L, j, z, t) before a numeric or
+        // floating conversion is accepted and ignored: bash formats through
+        // intmax_t / long double regardless, and gnash promotes to long/double
+        // below.  Skip it so the real conversion char drives the dispatch and
+        // `spec' carries no length modifier -- otherwise `%ld' lands on `l',
+        // matches nothing, and the literal spec is printed.  (`q' is NOT a
+        // length modifier here: `%q' is bash's shell-quote conversion.)
+        // `%ls' / `%lc' in a multibyte locale are NOT length-modified -- they
+        // are the wide string/char forms handled specially below.
+        size_t flagsend = j;  // end of flags/width/precision
+        bool wide_lsc = conv == 'l' && j + 1 < fmt.size() &&
+                        (fmt[j + 1] == 's' || fmt[j + 1] == 'c') && MB_CUR_MAX > 1;
+        if (!wide_lsc) {
+          while (j < fmt.size() && std::strchr("lhLjzt", fmt[j])) j++;
+          if (j >= fmt.size()) { out += '%'; break; }  // dangling `%l' at end
+          conv = fmt[j];
+        }
+        std::string spec = wide_lsc
+            ? fmt.substr(i, j - i + 1)
+            : fmt.substr(i, flagsend - i) + std::string(1, conv);
         if (conv == '%') {
           out += '%';
         } else if (conv == 'q') {
@@ -578,7 +597,9 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
           consumed_any = true;
         } else if (conv == 'c') {
           std::string a = next();
-          if (!a.empty()) out += a[0];
+          // An empty argument (explicit "" or a missing one) prints a single
+          // NUL byte, as bash does -- not nothing.
+          out += a.empty() ? '\0' : a[0];
           consumed_any = true;
         } else if (conv == 'd' || conv == 'i' || conv == 'x' || conv == 'X' ||
                    conv == 'o' || conv == 'u') {
