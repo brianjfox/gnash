@@ -584,7 +584,8 @@ static std::string tilde_assign(Shell &sh, const std::string &text) {
   return out;
 }
 
-std::string Expander::param_value(const std::string &name, bool &set, bool defaulting_op) {
+std::string Expander::param_value(const std::string &name, bool &set, bool defaulting_op,
+                                  bool braced) {
   set = true;
   if (name == "?") return std::to_string(sh_.last_status);
   if (name == "$") return sh_.get("$");
@@ -647,7 +648,10 @@ std::string Expander::param_value(const std::string &name, bool &set, bool defau
     // `set -u': an unset positional is an unbound-variable error too
     // (`sh -uc 'echo $1'' -- posixexp1.sub).
     if (sh_.opt_nounset && !defaulting_op) {
-      std::fprintf(stderr, "%s$%s: unbound variable\n", sh_.err_prefix().c_str(), name.c_str());
+      // bash names an unbound positional `$N' for the bare `$N' form but `N'
+      // for the braced `${N}' form.
+      std::fprintf(stderr, "%s%s%s: unbound variable\n", sh_.err_prefix().c_str(),
+                   braced ? "" : "$", name.c_str());
       sh_.exiting = true;
       sh_.exit_status = 127;
     }
@@ -2584,7 +2588,7 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
       return std::string();
     }
   } else {
-    val = ex.param_value(name, set, defaulting_op);
+    val = ex.param_value(name, set, defaulting_op, /*braced=*/true);
   }
   if (length) return std::to_string(mb_charlen(val));
   return apply_param_op(ex, sh, name, val, set, rest, dq, have_sub, tsub, /*top_level=*/true);

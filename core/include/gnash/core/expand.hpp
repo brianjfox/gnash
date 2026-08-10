@@ -70,7 +70,8 @@ class Expander {
   // Value of a parameter (including specials); `set` reports whether it was set.
   // `defaulting_op' is set by ${x-…}/${x:-…}/${x=…}/${x+…}/${x?…} callers, where
   // an unset variable is handled by the operator and must NOT trip `set -u'.
-  std::string param_value(const std::string &name, bool &set, bool defaulting_op = false);
+  std::string param_value(const std::string &name, bool &set, bool defaulting_op = false,
+                          bool braced = false);
 
   // Replace any <(cmd) / >(cmd) in WORD with a /dev/fd/N path, forking the inner
   // command and recording it on the shell for later cleanup.
