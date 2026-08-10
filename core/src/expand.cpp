@@ -2291,6 +2291,31 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
     return std::string();
   }
 
+  // Validate the ${!...} prefix-listing form (${!PREFIX*} / ${!PREFIX@})
+  // up front.  It is well-formed only when the `*'/`@' is the final character
+  // and the prefix is empty (${!*}, ${!@}) or a valid identifier (${!x*}).
+  // A non-identifier prefix (${!1*}), a doubled special (${!@*}), or trailing
+  // junk (${!_Q* }) is a bad substitution.  Keys (${!a[@]}) have a `[' before
+  // the `@'/`*' and are left to the array path.
+  if (b.size() > 1 && b[0] == '!') {
+    size_t bracket = b.find('[', 1);
+    size_t sp = b.find_first_of("*@", 1);
+    if (sp != std::string::npos && (bracket == std::string::npos || sp < bracket)) {
+      std::string pre = b.substr(1, sp - 1);
+      // A valid identifier prefix starts with a letter or `_' (not a digit).
+      bool ident = !pre.empty() &&
+                   (std::isalpha(static_cast<unsigned char>(pre[0])) || pre[0] == '_');
+      for (char c : pre)
+        if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '_')) ident = false;
+      bool ok = (pre.empty() || ident) && sp + 1 == b.size();
+      if (!ok) {
+        std::fprintf(stderr, "%s${%s}: bad substitution\n", sh.err_prefix().c_str(), b.c_str());
+        sh.arith_error = true;
+        return std::string();
+      }
+    }
+  }
+
   // ${!name} indirection and ${!prefix*}/${!prefix@} name listing.  A `['
   // after the name is the ${!arr[@]} keys form, handled by the array path.
   if (b.size() > 1 && b[0] == '!' &&
