@@ -543,6 +543,27 @@ echo "L=$LINENO"'
   'export LC_ALL=en_US.UTF-8; IFS=$'"'"'\254'"'"'; t="+$'"'"'\342\202\254'"'"'+"; set -- $t; echo $#'
   # ...but ${x##pat} drops to bytes when the pattern is invalid multibyte.
   'export LC_ALL=en_US.UTF-8; e=$'"'"'\342\202\254'"'"'; echo "${e##*$'"'"'\202'"'"'}" | od -An -b | tr -s " "'
+  # HEREDOC_MAX (16): the 17th here-document on one command is fatal.
+  'cat <<A <<A <<A <<A <<A <<A <<A <<A <<A <<A <<A <<A <<A <<A <<A <<A <<A; echo unreached'
+  # ...but 16 on one command is fine.
+  'cat <<A <<A <<A <<A <<A <<A <<A <<A <<A <<A <<A <<A <<A <<A <<A <<A >/dev/null
+A
+A
+A
+A
+A
+A
+A
+A
+A
+A
+A
+A
+A
+A
+A
+A
+echo ok16'
 )
 
 fails=0
