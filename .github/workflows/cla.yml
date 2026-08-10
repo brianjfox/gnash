@@ -64,8 +64,12 @@ jobs:
           !(github.event_name == 'pull_request_target' &&
             (github.event.pull_request.user.login == 'brianjfox' ||
              endsWith(github.event.pull_request.user.login, '[bot]')))
-        # Pin to the latest release of contributor-assistant/github-action.
-        uses: contributor-assistant/github-action@v2.6.1
+        # contributor-assistant/github-action is archived and its every release
+        # declares `runs.using: node20', which GitHub is removing from Actions
+        # runners (fall 2026).  Pinned by SHA to our fork of its v2.6.1 release
+        # with only `action.yml' bumped to node24 -- the bundled dist/index.js
+        # is unchanged.  See brianjfox/github-action, tag v2.6.1-node24.
+        uses: brianjfox/github-action@d771e8b34a69d4395a6e3ac9ebe3bc219e3e1fea
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
