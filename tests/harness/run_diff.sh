@@ -564,6 +564,14 @@ A
 A
 A
 echo ok16'
+  # printf %c with an empty/missing argument emits one NUL byte (not nothing).
+  'printf "%c" "" | od -An -tx1 | tr -s " "'
+  'printf "[%c]" "" "" | od -An -c | tr -s " "'
+  # printf accepts (and ignores) the l length modifier on numeric/float convs;
+  # %q stays the shell-quote conversion, not a length-modified `q'.
+  'printf "%ld|%5ld|%lx|%lX|%lo|%lu\n" 42 42 255 255 64 42'
+  'printf "%lf|%le|%lg\n" 3.14 3.14 3.14'
+  'printf "%q %q %q\n" "a b" "it'"'"'s" "*.x"'
 )
 
 fails=0
