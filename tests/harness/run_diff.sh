@@ -572,6 +572,13 @@ echo ok16'
   'printf "%ld|%5ld|%lx|%lX|%lo|%lu\n" 42 42 255 255 64 42'
   'printf "%lf|%le|%lg\n" 3.14 3.14 3.14'
   'printf "%q %q %q\n" "a b" "it'"'"'s" "*.x"'
+  # help NAME prints bash'"'"'s long-format body (not just the one-line summary).
+  'help cd'
+  'help printf'
+  'help "[[ ... ]]"'
+  'help variables'
+  'help -m read | grep -v version'
+  'type --help; shift --help'
 )
 
 fails=0
