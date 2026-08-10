@@ -52,6 +52,10 @@ struct ParseResult {
   // warns `command substitution: N unterminated here-document').
   int comsub_unterm = 0;
   int comsub_unterm_line = 0;
+  // A command registered more than HEREDOC_MAX (16) here-documents: bash's
+  // push_heredoc reports `maximum here-document count exceeded' and exits.
+  bool heredoc_overflow = false;
+  int heredoc_overflow_line = 0;
 };
 
 // Parse a complete program.

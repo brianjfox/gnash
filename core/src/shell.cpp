@@ -2517,6 +2517,19 @@ int Shell::run_string(const std::string &script, const std::vector<int> *cont_li
                       ? parse_with_aliases(script, aliases, global_aliases, suffix_aliases,
                                            opt_posix, cont_lines)
                       : parse(script, opt_posix, cont_lines);
+  if (!r.ok && r.heredoc_overflow) {
+    // A fatal `maximum here-document count exceeded': bash prints it bare
+    // (no `syntax error' prefix) and exits the shell with status 2.
+    std::string ctx;
+    if (!error_context.empty()) ctx = error_context + ": ";
+    else if (invocation_char == 'c') ctx = "-c: ";
+    std::fprintf(stderr, "%s: %sline %d: maximum here-document count exceeded\n",
+                 shell_name.c_str(), ctx.c_str(),
+                 lineno_base + (r.error_line > 0 ? r.error_line : 1));
+    exiting = true;
+    exit_status = 2;
+    return (last_status = 2);
+  }
   if (!r.ok) {
     // bash's format: `NAME: [CONTEXT: ][-c: ]line N: syntax error...' per
     // message line; "near unexpected token" joins without a colon, and the
