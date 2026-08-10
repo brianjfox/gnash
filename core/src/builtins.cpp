@@ -89,6 +89,10 @@ std::string decode_b(const std::string &s, bool &stop, bool bare_octal = true) {
           v = v * 16 + (h <= '9' ? h - '0' : (std::tolower(h) - 'a' + 10));
           k++;
         }
+        // `\x' with no hex digit is not an escape for `echo -e' -- bash emits
+        // the literal `\x' rather than a NUL byte (the octal `\NNN' path is
+        // likewise disabled for echo via bare_octal).
+        if (k == 0 && !bare_octal) { out += "\\x"; break; }
         out += static_cast<char>(v);
         break;
       }
@@ -483,13 +487,16 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
           size_t close = fmt.find(")T", j);
           if (close != std::string::npos) {
             std::string datefmt = fmt.substr(j + 1, close - (j + 1));
+            // The argument is seconds since the epoch, with two special
+            // values (bash printf.def): -1 (the default when no argument is
+            // given) is the current time, and -2 is the shell's start time.
+            // Every other value -- INCLUDING other negatives -- is a literal
+            // time_t, so a pre-1970 date like -86400 formats as 1969-12-31.
             std::string a = next();
-            time_t when;
-            if (a.empty()) when = std::time(nullptr);
-            else {
-              long v = std::strtol(a.c_str(), nullptr, 10);
-              when = (v < 0) ? std::time(nullptr) : static_cast<time_t>(v);
-            }
+            long long v = a.empty() ? -1 : std::strtoll(a.c_str(), nullptr, 10);
+            time_t when = (v == -1) ? std::time(nullptr)
+                        : (v == -2) ? static_cast<time_t>(sh.seconds_base)
+                                    : static_cast<time_t>(v);
             struct tm tmv;
             localtime_r(&when, &tmv);
             char tbuf[256];
