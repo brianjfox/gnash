@@ -813,8 +813,12 @@ static bool slice_ref(const std::string &body, std::string &name, char &sel,
 // A negative length in an ARRAY slice is a hard error in bash (only a scalar
 // substring reads one as an offset from the end).  Report it and abort the
 // command, as any other expansion error does.
-static void slice_len_error(Shell &sh, long long len) {
-  std::fprintf(stderr, "%s%lld: substring expression < 0\n", sh.err_prefix().c_str(), len);
+static void slice_len_error(Shell &sh, const std::string &lenx) {
+  // bash quotes the length expression as WRITTEN (`$(($# - 2))'), not its
+  // evaluated value, so an array slice with a negative length reproduces the
+  // source text in the diagnostic.
+  std::fprintf(stderr, "%s%s: substring expression < 0\n", sh.err_prefix().c_str(),
+               lenx.c_str());
   sh.arith_error = true;
   sh.arith_abort = true;  // bash unwinds the whole command list, not just this word
 }
@@ -1876,7 +1880,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
             if (!ok) len = 0;
             // Unlike a scalar substring, an array slice has no "from the end"
             // reading: bash rejects any negative length outright.
-            if (len < 0) slice_len_error(sh_, len);
+            if (len < 0) slice_len_error(sh_, slenx);
             count = len < 0 ? 0 : len;  // the error already abandons the list
           } else {
             count = static_cast<long long>(keys.size());
@@ -1900,7 +1904,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
           if (shaslen) {
             long long len = eval_arith(sh_, expand_no_split(slenx, false, false), &ok);
             if (!ok) len = 0;
-            if (len < 0) slice_len_error(sh_, len);
+            if (len < 0) slice_len_error(sh_, slenx);
             count = len < 0 ? 0 : len;  // the error already abandons the list
           } else {
             count = n - off;
