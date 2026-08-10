@@ -584,7 +584,8 @@ static std::string tilde_assign(Shell &sh, const std::string &text) {
   return out;
 }
 
-std::string Expander::param_value(const std::string &name, bool &set, bool defaulting_op) {
+std::string Expander::param_value(const std::string &name, bool &set, bool defaulting_op,
+                                  bool braced) {
   set = true;
   if (name == "?") return std::to_string(sh_.last_status);
   if (name == "$") return sh_.get("$");
@@ -647,7 +648,10 @@ std::string Expander::param_value(const std::string &name, bool &set, bool defau
     // `set -u': an unset positional is an unbound-variable error too
     // (`sh -uc 'echo $1'' -- posixexp1.sub).
     if (sh_.opt_nounset && !defaulting_op) {
-      std::fprintf(stderr, "%s$%s: unbound variable\n", sh_.err_prefix().c_str(), name.c_str());
+      // bash names an unbound positional `$N' for the bare `$N' form but `N'
+      // for the braced `${N}' form.
+      std::fprintf(stderr, "%s%s%s: unbound variable\n", sh_.err_prefix().c_str(),
+                   braced ? "" : "$", name.c_str());
       sh_.exiting = true;
       sh_.exit_status = 127;
     }
@@ -813,8 +817,12 @@ static bool slice_ref(const std::string &body, std::string &name, char &sel,
 // A negative length in an ARRAY slice is a hard error in bash (only a scalar
 // substring reads one as an offset from the end).  Report it and abort the
 // command, as any other expansion error does.
-static void slice_len_error(Shell &sh, long long len) {
-  std::fprintf(stderr, "%s%lld: substring expression < 0\n", sh.err_prefix().c_str(), len);
+static void slice_len_error(Shell &sh, const std::string &lenx) {
+  // bash quotes the length expression as WRITTEN (`$(($# - 2))'), not its
+  // evaluated value, so an array slice with a negative length reproduces the
+  // source text in the diagnostic.
+  std::fprintf(stderr, "%s%s: substring expression < 0\n", sh.err_prefix().c_str(),
+               lenx.c_str());
   sh.arith_error = true;
   sh.arith_abort = true;  // bash unwinds the whole command list, not just this word
 }
@@ -1876,7 +1884,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
             if (!ok) len = 0;
             // Unlike a scalar substring, an array slice has no "from the end"
             // reading: bash rejects any negative length outright.
-            if (len < 0) slice_len_error(sh_, len);
+            if (len < 0) slice_len_error(sh_, slenx);
             count = len < 0 ? 0 : len;  // the error already abandons the list
           } else {
             count = static_cast<long long>(keys.size());
@@ -1900,7 +1908,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
           if (shaslen) {
             long long len = eval_arith(sh_, expand_no_split(slenx, false, false), &ok);
             if (!ok) len = 0;
-            if (len < 0) slice_len_error(sh_, len);
+            if (len < 0) slice_len_error(sh_, slenx);
             count = len < 0 ? 0 : len;  // the error already abandons the list
           } else {
             count = n - off;
@@ -2291,6 +2299,31 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
     return std::string();
   }
 
+  // Validate the ${!...} prefix-listing form (${!PREFIX*} / ${!PREFIX@})
+  // up front.  It is well-formed only when the `*'/`@' is the final character
+  // and the prefix is empty (${!*}, ${!@}) or a valid identifier (${!x*}).
+  // A non-identifier prefix (${!1*}), a doubled special (${!@*}), or trailing
+  // junk (${!_Q* }) is a bad substitution.  Keys (${!a[@]}) have a `[' before
+  // the `@'/`*' and are left to the array path.
+  if (b.size() > 1 && b[0] == '!') {
+    size_t bracket = b.find('[', 1);
+    size_t sp = b.find_first_of("*@", 1);
+    if (sp != std::string::npos && (bracket == std::string::npos || sp < bracket)) {
+      std::string pre = b.substr(1, sp - 1);
+      // A valid identifier prefix starts with a letter or `_' (not a digit).
+      bool ident = !pre.empty() &&
+                   (std::isalpha(static_cast<unsigned char>(pre[0])) || pre[0] == '_');
+      for (char c : pre)
+        if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '_')) ident = false;
+      bool ok = (pre.empty() || ident) && sp + 1 == b.size();
+      if (!ok) {
+        std::fprintf(stderr, "%s${%s}: bad substitution\n", sh.err_prefix().c_str(), b.c_str());
+        sh.arith_error = true;
+        return std::string();
+      }
+    }
+  }
+
   // ${!name} indirection and ${!prefix*}/${!prefix@} name listing.  A `['
   // after the name is the ${!arr[@]} keys form, handled by the array path.
   if (b.size() > 1 && b[0] == '!' &&
@@ -2377,6 +2410,16 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
       if (length) return std::to_string(mb_charlen(expand_brace_body(ex, sh, target + b.substr(q), dq)));
       return expand_brace_body(ex, sh, target + b.substr(q), dq);
     }
+  }
+
+  // A command or arithmetic substitution in parameter-NAME position
+  // (`${$(cmd)}', `${$((expr))}') is not a valid parameter: bash reports a
+  // bad substitution rather than treating the leading `$' as the PID.  (`${$}'
+  // alone is still the PID.)
+  if (b.size() >= 2 && b[0] == '$' && b[1] == '(') {
+    std::fprintf(stderr, "%s${%s}: bad substitution\n", sh.err_prefix().c_str(), b.c_str());
+    sh.arith_error = true;
+    return std::string();
   }
 
   size_t p = 0;
@@ -2545,7 +2588,7 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
       return std::string();
     }
   } else {
-    val = ex.param_value(name, set, defaulting_op);
+    val = ex.param_value(name, set, defaulting_op, /*braced=*/true);
   }
   if (length) return std::to_string(mb_charlen(val));
   return apply_param_op(ex, sh, name, val, set, rest, dq, have_sub, tsub, /*top_level=*/true);
@@ -2754,13 +2797,24 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
                         [&](const std::string &cs) { return pat_match(pat, cs); });
   }
 
-  // ${name@op} -- parameter transformations.
-  if (rest[0] == '@' && rest.size() >= 2) {
+  // ${name@op} -- parameter transformations.  The operator must be exactly one
+  // known transform letter; a missing one (`${v@}') or an unknown one
+  // (`${v@C}') is a bad substitution -- but only once the parameter is set, as
+  // bash validates the operator after the unset-to-empty step.
+  if (rest[0] == '@') {
+    bool valid = rest.size() == 2 && std::strchr("UuLQEPAaKk", rest[1]) != nullptr;
     // @a/@A report the variable's attributes even when its scalar context
     // (element 0) is unset -- an assoc array without ["0"] still has them.
-    if (!set && !(rest[1] == 'a' || rest[1] == 'A') )
-      return std::string();  // unset -> empty (even for @Q)
+    bool attr = valid && (rest[1] == 'a' || rest[1] == 'A');
+    if (!set && !attr) return std::string();  // unset -> empty (even for @Q)
     if (!set && sh.vars.find(name) == sh.vars.end()) return std::string();
+    if (!valid) {
+      std::string bodytxt = name + (have_sub ? "[" + sub + "]" : "") + rest;
+      std::fprintf(stderr, "%s${%s}: bad substitution\n", sh.err_prefix().c_str(),
+                   bodytxt.c_str());
+      sh.arith_error = true;
+      return std::string();
+    }
     char t = rest[1];
     // Scalar/bare-name @k/@K quote the (element-0) value like @Q; the array
     // subscript forms ${a[@]@k}/${a[@]@K} are handled at the array dispatch.
