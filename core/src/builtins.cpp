@@ -597,7 +597,9 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
           consumed_any = true;
         } else if (conv == 'c') {
           std::string a = next();
-          if (!a.empty()) out += a[0];
+          // An empty argument (explicit "" or a missing one) prints a single
+          // NUL byte, as bash does -- not nothing.
+          out += a.empty() ? '\0' : a[0];
           consumed_any = true;
         } else if (conv == 'd' || conv == 'i' || conv == 'x' || conv == 'X' ||
                    conv == 'o' || conv == 'u') {
