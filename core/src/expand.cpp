@@ -2404,6 +2404,16 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
     }
   }
 
+  // A command or arithmetic substitution in parameter-NAME position
+  // (`${$(cmd)}', `${$((expr))}') is not a valid parameter: bash reports a
+  // bad substitution rather than treating the leading `$' as the PID.  (`${$}'
+  // alone is still the PID.)
+  if (b.size() >= 2 && b[0] == '$' && b[1] == '(') {
+    std::fprintf(stderr, "%s${%s}: bad substitution\n", sh.err_prefix().c_str(), b.c_str());
+    sh.arith_error = true;
+    return std::string();
+  }
+
   size_t p = 0;
   std::string name;
   bool named_by_quote = false;
@@ -2779,13 +2789,24 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
                         [&](const std::string &cs) { return pat_match(pat, cs); });
   }
 
-  // ${name@op} -- parameter transformations.
-  if (rest[0] == '@' && rest.size() >= 2) {
+  // ${name@op} -- parameter transformations.  The operator must be exactly one
+  // known transform letter; a missing one (`${v@}') or an unknown one
+  // (`${v@C}') is a bad substitution -- but only once the parameter is set, as
+  // bash validates the operator after the unset-to-empty step.
+  if (rest[0] == '@') {
+    bool valid = rest.size() == 2 && std::strchr("UuLQEPAaKk", rest[1]) != nullptr;
     // @a/@A report the variable's attributes even when its scalar context
     // (element 0) is unset -- an assoc array without ["0"] still has them.
-    if (!set && !(rest[1] == 'a' || rest[1] == 'A') )
-      return std::string();  // unset -> empty (even for @Q)
+    bool attr = valid && (rest[1] == 'a' || rest[1] == 'A');
+    if (!set && !attr) return std::string();  // unset -> empty (even for @Q)
     if (!set && sh.vars.find(name) == sh.vars.end()) return std::string();
+    if (!valid) {
+      std::string bodytxt = name + (have_sub ? "[" + sub + "]" : "") + rest;
+      std::fprintf(stderr, "%s${%s}: bad substitution\n", sh.err_prefix().c_str(),
+                   bodytxt.c_str());
+      sh.arith_error = true;
+      return std::string();
+    }
     char t = rest[1];
     // Scalar/bare-name @k/@K quote the (element-0) value like @Q; the array
     // subscript forms ${a[@]@k}/${a[@]@K} are handled at the array dispatch.
