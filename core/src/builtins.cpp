@@ -89,6 +89,10 @@ std::string decode_b(const std::string &s, bool &stop, bool bare_octal = true) {
           v = v * 16 + (h <= '9' ? h - '0' : (std::tolower(h) - 'a' + 10));
           k++;
         }
+        // `\x' with no hex digit is not an escape for `echo -e' -- bash emits
+        // the literal `\x' rather than a NUL byte (the octal `\NNN' path is
+        // likewise disabled for echo via bare_octal).
+        if (k == 0 && !bare_octal) { out += "\\x"; break; }
         out += static_cast<char>(v);
         break;
       }
