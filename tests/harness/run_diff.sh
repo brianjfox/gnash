@@ -576,9 +576,12 @@ echo ok16'
   'help cd'
   'help printf'
   'help "[[ ... ]]"'
-  'help variables'
   'help -m read | grep -v version'
   'type --help; shift --help'
+  # `variables' intentionally diverges from bash (it lists gnash'"'"'s own
+  # $GNASH_* tunables), so compare only the bash-derived portion up to the
+  # last shared entry, which must still match bash byte-for-byte.
+  'help variables | sed -n "/^variables:/,/should be saved on the history list/p"'
 )
 
 fails=0
