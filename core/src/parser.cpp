@@ -1217,6 +1217,15 @@ struct Parser {
 
   ParseResult run() {
     ParseResult res;
+    // A too-many-here-documents overflow is a fatal syntax error that
+    // supersedes everything else the parse might have found.
+    if (!toks.empty() && toks.back().heredoc_overflow) {
+      res.ok = false;
+      res.error = "maximum here-document count exceeded";
+      res.error_line = toks.back().heredoc_overflow_line;
+      res.heredoc_overflow = true;
+      return res;
+    }
     if (!toks.empty() && toks.back().lex_error) {
       res.ok = false;
       res.incomplete = true;  // unterminated quote/substitution

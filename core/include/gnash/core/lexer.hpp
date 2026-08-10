@@ -70,6 +70,11 @@ struct Token {
   // warns and takes their bodies from the lines after the full command.
   int comsub_unterm = 0;
   int comsub_unterm_line = 0;
+  // Set on the Eof token when a single command registered more than
+  // HEREDOC_MAX (16) here-documents: bash's push_heredoc reports a fatal
+  // `maximum here-document count exceeded' and exits the shell.
+  bool heredoc_overflow = false;
+  int heredoc_overflow_line = 0;
   // For a here-document delimiter word, the collected body and whether the
   // delimiter was quoted (which disables expansion of the body).
   std::string heredoc_body;

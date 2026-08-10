@@ -79,6 +79,9 @@ struct Lexer {
   int comsub_unterm = 0;
   int comsub_unterm_line = 0;
   int awaiting = -1;  // -1 none, 0 <<, 1 <<-
+  int cmd_heredocs = 0;  // here-documents registered for the current command
+  bool heredoc_overflow = false;  // > HEREDOC_MAX on one command (fatal, bash)
+  int heredoc_overflow_line = 0;
   bool unterminated = false;
   char unterm_close = 0;  // the closer we were looking for at EOF
   // The line the unterminated span STARTED on.  bash's parse_matched_pair
@@ -947,6 +950,7 @@ struct Lexer {
         pos++;
         if (!pending.empty()) collect_heredocs();
         awaiting = -1;
+        cmd_heredocs = 0;  // need_here_doc resets once the bodies are gathered
         continue;
       }
       if (c == '#') {  // comment to end of line
@@ -992,6 +996,12 @@ struct Lexer {
         std::string d = dequote_delim(t.text, q);
         pending.push_back({out.size() - 1, d, awaiting == 1, q});
         awaiting = -1;
+        // bash's push_heredoc: the 17th here-document on one command is a
+        // fatal syntax error (HEREDOC_MAX == 16).
+        if (++cmd_heredocs > 16 && !heredoc_overflow) {
+          heredoc_overflow = true;
+          heredoc_overflow_line = t.line;
+        }
       }
     }
     // A here-doc redirection with no newline after it (input ended on the
@@ -1014,6 +1024,8 @@ struct Lexer {
     eof.heredoc_eof_quoted = heredoc_eof_quoted;
     eof.comsub_unterm = comsub_unterm;
     eof.comsub_unterm_line = comsub_unterm_line;
+    eof.heredoc_overflow = heredoc_overflow;
+    eof.heredoc_overflow_line = heredoc_overflow_line;
     out.push_back(eof);
   }
 };
