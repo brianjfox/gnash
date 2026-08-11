@@ -3151,14 +3151,20 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
     };
     bool global = rest.size() > 1 && rest[1] == '/';
     std::string body2 = rest.substr(global ? 2 : 1);
-    // A leading `#'/`%' anchors the pattern to the start/end of the value.
+    // A leading `#'/`%' anchors the pattern to the start/end of the value --
+    // but bash's dispatch is an else-if chain: global and the anchors are
+    // mutually exclusive, so `//#pat' is a global replace of the LITERAL
+    // `#pat' (new-exp.tests).
     char anchor = 0;
-    if (!body2.empty() && (body2[0] == '#' || body2[0] == '%')) {
+    if (!global && !body2.empty() && (body2[0] == '#' || body2[0] == '%')) {
       anchor = body2[0];
       body2 = body2.substr(1);
     }
+    // Under `//' the delimiter scan starts at the SECOND character: the first
+    // is always pattern content, so `${a///a/}' is the global removal of
+    // `/a' and `${b////-}' replaces `/' with `-' (bash, probed).
     size_t slash = std::string::npos;
-    for (size_t k = 0; k < body2.size(); k++) {
+    for (size_t k = global ? 1 : 0; k < body2.size(); k++) {
       if (body2[k] == '\\') { k++; continue; }
       if (body2[k] == '/') { slash = k; break; }
     }
@@ -3224,6 +3230,9 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
       return val;
     }
     if (pat.empty()) return val;
+    // An EMPTY value still gets one match attempt: a pattern matching the
+    // empty string (`*') produces one replacement (`${var/*/x}' -> x).
+    if (val.empty()) return pat_match(pat, val, mflags) ? apply_rep(val) : val;
     std::string result;
     size_t k = 0;
     bool did = false;
