@@ -2148,6 +2148,20 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
       // ${a[@]:off:len} / ${@:off:len}: array/positional slice.
       std::string slname, soffx, slenx; char ssel; bool shaslen = false;
       if (slice_ref(body, slname, ssel, soffx, slenx, shaslen)) {
+        // `${var[@]:off}' on a variable that is NOT an array behaves exactly
+        // like the scalar substring `${var:off}' -- bash's "these had better
+        // agree" (new-exp.tests: var=blah -> ${var[@]:3} is `h').
+        if (!slname.empty() && slname != "@" && slname != "*") {
+          auto scv = sh_.vars.find(sh_.deref(slname));
+          if (scv == sh_.vars.end() || (scv->second.kind != VarKind::Indexed &&
+                                        scv->second.kind != VarKind::Assoc)) {
+            std::string nb2 = "${" + slname + body.substr(body.find(':')) + "}";
+            size_t ni4 = 0;
+            expand_dollar(nb2, ni4, dq, out, mask, heredoc);
+            i = end + 1;
+            return;
+          }
+        }
         bool ok = true;
         long long off = eval_arith(sh_, expand_no_split(soffx, false, false), &ok);
         if (!ok) off = 0;
@@ -3000,6 +3014,17 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
     if (op == '+') return empty ? std::string() : ex.expand_op_word(word, dq, top_level);
     if (op == '=') {
       if (empty) {
+        // A positional or special parameter cannot be assigned by `=':
+        // bash's `$N: cannot assign in this way', aborting the command.
+        if (!have_sub &&
+            (std::isdigit(static_cast<unsigned char>(name[0])) || name == "@" ||
+             name == "*" || name == "#" || name == "?" || name == "$" ||
+             name == "!" || name == "-")) {
+          std::fprintf(stderr, "%s$%s: cannot assign in this way\n", sh.err_prefix().c_str(),
+                       name.c_str());
+          sh.arith_error = true;
+          return std::string();
+        }
         std::string w = expand_word(word);
         if (have_sub) {
           // Assign to the array element, not a scalar named `name'.  Mirror a
@@ -3164,13 +3189,18 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
       anchor = body2[0];
       body2 = body2.substr(1);
     }
-    // Under `//' the delimiter scan starts at the SECOND character: the first
-    // is always pattern content, so `${a///a/}' is the global removal of
-    // `/a' and `${b////-}' replaces `/' with `-' (bash, probed).
+    // Under `//' a slash in the FIRST position is pattern content, not the
+    // delimiter, so `${a///a/}' is the global removal of `/a' and
+    // `${b////-}' replaces `/' with `-' (bash, probed).  Escapes are still
+    // processed from the start (`${x//\//^}' keeps its escaped slash).
     size_t slash = std::string::npos;
-    for (size_t k = global ? 1 : 0; k < body2.size(); k++) {
+    for (size_t k = 0; k < body2.size(); k++) {
       if (body2[k] == '\\') { k++; continue; }
-      if (body2[k] == '/') { slash = k; break; }
+      if (body2[k] == '/') {
+        if (global && k == 0) continue;
+        slash = k;
+        break;
+      }
     }
     std::string pat = ex.expand_pattern(slash == std::string::npos ? body2 : body2.substr(0, slash));
     // The replacement undergoes full quote removal like a normal word --
