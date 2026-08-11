@@ -618,6 +618,13 @@ echo ok16'
   'echo `echo \"Hi\"`'
   'echo "`echo \\\"x\\\"`"'
   'echo $((`echo \"1\"`+1)) 2>&1 | sed -E "s/.*line [0-9]+: //"'
+  # Unquoted @-splats in an UNQUOTED ${var±word} substitute are space-joined
+  # then IFS-split (bash posixexp4 quirk): one word under IFS=:, separate
+  # fields under a null IFS, ordinary splitting under the default IFS.
+  'f() { echo "n=$#"; for a; do echo "[$a]"; done; }; set -- " abc" "def ghi"; IFS=:; unset v; f ${v-$@}; f ${v-${@}}'
+  'f() { echo "n=$#"; for a; do echo "[$a]"; done; }; a=("x y" z); IFS=:; unset v; f ${v-${a[@]}}'
+  'f() { echo "n=$#"; for a; do echo "[$a]"; done; }; set -- "a b" "" c; IFS=; unset v; f ${v-$@}; f ${v-$*}'
+  'f() { echo "n=$#"; for a; do echo "[$a]"; done; }; set -- "a b" "" c; unset v; f ${v-$@}; f ${v-"$@"}'
 )
 
 fails=0
