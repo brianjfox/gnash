@@ -65,9 +65,9 @@ static std::string var_attr_flags(const Variable &var) {
   return flags;
 }
 
-bool pat_match(const std::string &pattern, const std::string &text) {
+bool pat_match(const std::string &pattern, const std::string &text, int extra_flags = 0) {
   std::string p = pattern, t = text;
-  return strmatch(p.data(), t.data(), FNM_EXTMATCH) == 0;
+  return strmatch(p.data(), t.data(), FNM_EXTMATCH | extra_flags) == 0;
 }
 
 // Scan a balanced span from `open`/`close` starting with text[i] at the opener;
@@ -2969,6 +2969,14 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
 
   // ${name/pat/rep} ${name//pat/rep} ${name/#pat/rep} ${name/%pat/rep}
   if (rest[0] == '/') {
+    // Since bash 4.3, pattern substitution honors `shopt -s nocasematch'
+    // (pattern removal #/% and case modification ^^/,, do NOT -- verified
+    // against bash 5.3).
+    int mflags = 0;
+    {
+      auto ncm = sh.shopt_opts.find("nocasematch");
+      if (ncm != sh.shopt_opts.end() && ncm->second) mflags = FNM_CASEFOLD;
+    }
     // Number of characters PAT always consumes when it matches, or npos when
     // it can match variable lengths (`*', extglob groups).  bash's umatchlen:
     // with a fixed length the scan needs exactly ONE probe per position
@@ -3082,11 +3090,11 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
     if (anchor == '#') {
       if (fixlen != std::string::npos) {
         size_t j = mb_byteoff(val, fixlen);  // clamped: a short value just fails
-        if (pat_match(pat, val.substr(0, j))) return apply_rep(val.substr(0, j)) + val.substr(j);
+        if (pat_match(pat, val.substr(0, j), mflags)) return apply_rep(val.substr(0, j)) + val.substr(j);
         return val;
       }
       for (size_t j = val.size() + 1; j-- > 0;)
-        if (pat_match(pat, val.substr(0, j))) return apply_rep(val.substr(0, j)) + val.substr(j);
+        if (pat_match(pat, val.substr(0, j), mflags)) return apply_rep(val.substr(0, j)) + val.substr(j);
       return val;
     }
     if (anchor == '%') {
@@ -3094,11 +3102,11 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
         size_t total = mb_charlen(val);
         if (total < fixlen) return val;
         size_t j = mb_byteoff(val, total - fixlen);
-        if (pat_match(pat, val.substr(j))) return val.substr(0, j) + apply_rep(val.substr(j));
+        if (pat_match(pat, val.substr(j), mflags)) return val.substr(0, j) + apply_rep(val.substr(j));
         return val;
       }
       for (size_t j = 0; j <= val.size(); j++)
-        if (pat_match(pat, val.substr(j))) return val.substr(0, j) + apply_rep(val.substr(j));
+        if (pat_match(pat, val.substr(j), mflags)) return val.substr(0, j) + apply_rep(val.substr(j));
       return val;
     }
     if (pat.empty()) return val;
@@ -3111,10 +3119,10 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
         // Exactly fixlen characters from k, if that many remain.
         size_t e = k, c2 = 0;
         for (; c2 < fixlen && e < val.size(); c2++) { size_t l = 1; mb_decode(val, e, l); e += l; }
-        if (c2 == fixlen && pat_match(pat, val.substr(k, e - k))) best = e;
+        if (c2 == fixlen && pat_match(pat, val.substr(k, e - k), mflags)) best = e;
       } else {
         for (size_t j = val.size(); j > k; j--) {
-          if (pat_match(pat, val.substr(k, j - k))) { best = j; break; }
+          if (pat_match(pat, val.substr(k, j - k), mflags)) { best = j; break; }
         }
       }
       if (best != std::string::npos && (!did || global)) {
