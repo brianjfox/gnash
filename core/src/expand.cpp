@@ -49,6 +49,22 @@ constexpr char QNULL = '\x02';
 // literal data (e.g. $'\001').
 constexpr char MMARK = 'M';
 
+// Attribute letters in bash's fixed order (var_attribute_string), matching
+// declare_var_string's rendering: a A i n r x c l u.  Used by @a/@A.
+static std::string var_attr_flags(const Variable &var) {
+  std::string flags;
+  if (var.kind == VarKind::Indexed) flags += 'a';
+  if (var.kind == VarKind::Assoc) flags += 'A';
+  if (var.integer) flags += 'i';
+  if (var.nameref) flags += 'n';
+  if (var.readonly) flags += 'r';
+  if (var.exported) flags += 'x';
+  if (var.capcase) flags += 'c';
+  if (var.lcase) flags += 'l';
+  if (var.ucase) flags += 'u';
+  return flags;
+}
+
 bool pat_match(const std::string &pattern, const std::string &text) {
   std::string p = pattern, t = text;
   return strmatch(p.data(), t.data(), FNM_EXTMATCH) == 0;
@@ -1752,7 +1768,20 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
       char asel;
       if (array_op_ref(body, aoname, asel, arest)) {
         std::vector<std::string> items;
-        if (arest == "@A") {
+        // Whole-array @a on a declared-but-unset array: one word of attribute
+        // letters (a set array reports per element via the generic path; an
+        // invisible one has no elements, yet bash still prints its flags).
+        if (arest == "@a") {
+          std::string dn = sh_.deref(aoname);
+          auto vit = sh_.vars.find(dn);
+          if (vit != sh_.vars.end() && vit->second.invisible) {
+            items.push_back(var_attr_flags(vit->second));
+          } else {
+            items = sh_.array_values(aoname);
+            for (std::string &it : items)
+              it = apply_param_op(*this, sh_, aoname, it, true, arest, dq);
+          }
+        } else if (arest == "@A") {
           // Whole-array @A: a single `declare' statement recreating the array,
           // emitted as its three top-level words (`declare', `-flags',
           // `name=(...)') -- quoted it stays three words, unquoted the third is
@@ -3022,19 +3051,18 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
     if (t == 'a' || t == 'A') {
       auto it = sh.vars.find(name);
       std::string flags;
-      bool is_arr = false, is_assoc = false;
+      bool invisible = false;
       if (it != sh.vars.end()) {
-        const Variable &var = it->second;
-        is_arr = var.kind == VarKind::Indexed;
-        is_assoc = var.kind == VarKind::Assoc;
-        if (is_arr) flags += 'a';
-        if (is_assoc) flags += 'A';
-        if (var.integer) flags += 'i';
-        if (var.readonly) flags += 'r';
-        if (var.exported) flags += 'x';
+        flags = var_attr_flags(it->second);
+        invisible = it->second.invisible;
       }
       if (t == 'a') return flags;
-      // @A: reproduce a declare/assignment statement.
+      // @A: reproduce a declare/assignment statement.  A declared-but-unset
+      // variable prints its attributes and name with NO value part; one with
+      // no attributes at all expands to nothing.
+      if (it == sh.vars.end()) return std::string();
+      if (invisible)
+        return flags.empty() ? std::string() : "declare -" + flags + " " + name;
       std::string q = atq_quote(val);
       if (flags.empty()) return name + "=" + q;
       return "declare -" + flags + " " + name + "=" + q;
