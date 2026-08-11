@@ -612,6 +612,12 @@ echo ok16'
   'unset SECONDS; SECONDS=5; echo "[$SECONDS]"'
   'unset LINENO; LINENO=999; echo "[$LINENO]"'
   'unset EPOCHSECONDS BASHPID BASH_SUBSHELL HISTCMD; echo "[$EPOCHSECONDS][$BASHPID][$BASH_SUBSHELL][$HISTCMD]"'
+  # Backquotes in double quotes also unescape \" (the inner command sees real
+  # quote syntax); unquoted backquotes and arithmetic context keep \" intact.
+  'echo "`echo \"Hi there\"`"'
+  'echo `echo \"Hi\"`'
+  'echo "`echo \\\"x\\\"`"'
+  'echo $((`echo \"1\"`+1)) 2>&1 | sed -E "s/.*line [0-9]+: //"'
 )
 
 fails=0

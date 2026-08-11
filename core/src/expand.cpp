@@ -2938,8 +2938,12 @@ void Expander::process_dq(const std::string &text, size_t &i, std::string &out,
       size_t j = i + 1;
       std::string inner;
       while (j < text.size() && text[j] != '`') {
+        // In double-quote context, backslash in a backquote substitution is
+        // also special before `"' (`"`echo \"hi\"`"' runs `echo "hi"'), on
+        // top of the usual `` \` ``/`\\'/`\$' rule.
         if (text[j] == '\\' && j + 1 < text.size() &&
-            (text[j + 1] == '`' || text[j + 1] == '\\' || text[j + 1] == '$')) {
+            (text[j + 1] == '`' || text[j + 1] == '\\' || text[j + 1] == '$' ||
+             text[j + 1] == '"')) {
           inner += text[j + 1];
           j += 2;
         } else {
@@ -3045,6 +3049,9 @@ std::string Expander::expand_arith(const std::string &text) {
       size_t j = i + 1;
       std::string inner;
       while (j < text.size() && text[j] != '`') {
+        // Unlike real double quotes, arithmetic context keeps `\"' intact in
+        // a backquote substitution (`$((`echo \"1\"`))' is bash's arithmetic
+        // syntax error, not 1): only `` \` ``/`\\'/`\$' are special here.
         if (text[j] == '\\' && j + 1 < text.size() &&
             (text[j + 1] == '`' || text[j + 1] == '\\' || text[j + 1] == '$')) {
           inner += text[j + 1];
