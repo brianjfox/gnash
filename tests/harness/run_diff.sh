@@ -677,6 +677,8 @@ echo ok16'
   # the first char, empty values get one match attempt.
   'v=(abcde abcfg); echo "${v[*]//#abc/foo}"; echo "${v[*]/#abc/foo}"; a=/a; echo "/${a///a/}"; b=x/y; echo "${b////-}"'
   'var=; echo "[${var/#/x}][${var/\*/x}][${var//\*/x}]"'
+  # Process substitution is live inside an unquoted substitute word.
+  'foo=; cat ${foo:-<(echo a)}'
 )
 
 fails=0
