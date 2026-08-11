@@ -667,6 +667,12 @@ echo ok16'
   'foo=zz; x="\\\$foo"; recho "${x@P}"; z="\`echo cs\`"; recho "${z@P}"; shopt -u promptvars; recho "${x@P}"'
   'x="\[\001\]ok"; recho "${x@P}"; set -o emacs; recho "${x@P}"'
   'set -o posix; x="!x\!y!!z"; recho "${x@P}"'
+  # Indirection completeness: unset positionals default, invalid targets
+  # error, special-parameter targets keep $@ fields, digit inames re-dispatch.
+  'z=ZV; echo "[${!9:-$z}]"; echo "[${!9-$z}]"; unset x; echo "[${!x-$z}]" 2>&1 | sed -E "s/.*line [0-9]+: //"'
+  'v=bad-var; echo "${!v}" 2>&1 | sed -E "s/.*line [0-9]+: //"'
+  'foo=@; set -- a "b c" d; f(){ echo n=$#; for a; do echo "[$a]"; done; }; f ${!foo}; f "${!foo}"'
+  'arr_1=(x "y z"); set -- "arr_1[@]"; a=("${!1}"); printf "<%s>" "${a[@]}"; echo'
 )
 
 fails=0
