@@ -205,6 +205,16 @@ size_t scan_balanced(const std::string &t, size_t i, char open, char close,
       wasdol = false;
       continue;
     }
+    if (c == '`') {
+      // Old-style command substitution is opaque to this scan: the `}' in
+      // `"${HOME:`echo }`}"' is backquote content, not the closer.  A
+      // backslash escapes the next character inside.
+      contaminate();
+      while (++i < t.size() && t[i] != '`')
+        if (t[i] == '\\') i++;
+      wasdol = false;
+      continue;
+    }
     // A nested `$( ... )' / `$(( ... ))' is skipped by paren balancing so its
     // inner `{'/`}' (e.g. brace expansion `$(echo a{b,c})') do not disturb this
     // scan's `{' depth -- unless we are ourselves scanning a `(...)' group.
