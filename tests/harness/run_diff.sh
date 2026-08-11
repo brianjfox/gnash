@@ -647,6 +647,9 @@ echo ok16'
   'VAR4=(aaa bbb); varname=VAR4; echo "[${!varname[0]}]"; echo "[${!varname[@]}]"; echo "${!varname[@]@Q}"'
   'VAR4=(aaa bbb); echo ${!VAR4[@]@Q} 2>&1 | sed -E "s/.*line [0-9]+: //"; echo "[${!VAR4[@]}]"'
   'VAR5=(aaa bbb); v="VAR5[@]"; f(){ echo "n=$#"; for a; do echo "[$a]"; done; }; f "${!v@Q}"; f "${!v}"; echo "${!v%b}"'
+  # Pattern substitution honors nocasematch (removal and case-mod do not).
+  's=abcd; shopt -s nocasematch; echo ${s//A/z}; echo ${s//BC/x}; echo ${s//[BC]/x}; echo ${s//[bC]/x}'
+  's=ABCdef; shopt -s nocasematch; echo "[${s#abc}]"; echo "[${s%DEF}]"; echo "[${s^^[ab]}]"; echo ${s/def/&!}'
 )
 
 fails=0
