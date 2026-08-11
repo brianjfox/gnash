@@ -64,6 +64,14 @@ add_executable(command_complete_test command_complete_test.cpp)
 target_link_libraries(command_complete_test PRIVATE gnash::core gnash_warnings)
 add_test(NAME command_complete_test COMMAND command_complete_test)
 
+# Interactive job-control notices, driven over a pty against the built shell.
+add_executable(job_notify_test job_notify_test.cpp)
+target_link_libraries(job_notify_test PRIVATE gnash_warnings)
+if(NOT APPLE)
+  target_link_libraries(job_notify_test PRIVATE util)  # forkpty lives in libutil
+endif()
+add_test(NAME job_notify_test COMMAND job_notify_test $<TARGET_FILE:gnash>)
+
 # Differential execution check vs bash over the implemented feature set.
 if(BASH_EXECUTABLE)
   add_test(

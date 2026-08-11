@@ -1219,8 +1219,10 @@ int Executor::run_pipeline(const Connection *c) {
     Shell::Job *j = sh_.add_job(pgid, lp, to_string(c), false);
     j->stopped = true;
     j->running = false;
-    if (sh_.interactive)
+    if (sh_.interactive) {
       std::fprintf(stderr, "\n[%d]+  Stopped                 %s\n", j->id, j->command.c_str());
+      j->notified = true;  // bash J_NOTIFIED: don't report again at the next prompt
+    }
     st = 128 + SIGTSTP;
   }
 
@@ -2005,8 +2007,10 @@ int Executor::run_simple(const SimpleCommand *c) {
       j->stopped = true;
       j->running = false;
       status = 128 + SIGTSTP;
-      if (sh_.interactive)
+      if (sh_.interactive) {
         std::fprintf(stderr, "\n[%d]+  Stopped                 %s\n", j->id, cmd.c_str());
+        j->notified = true;  // bash J_NOTIFIED: don't report again at the next prompt
+      }
     } else {
       sh_.note_child_reaped();  // a foreground subshell that terminated
       status = WIFEXITED(wst) ? WEXITSTATUS(wst) : (128 + WTERMSIG(wst));
