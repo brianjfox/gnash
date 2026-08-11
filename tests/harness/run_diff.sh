@@ -640,6 +640,13 @@ echo ok16'
   'declare -lr V1; echo "[${V1@A}][${V1@a}]"; declare -alr V3; echo "[${V3@A}][${V3[@]@A}][${V3[@]@a}]"'
   'declare P; echo "[${P@A}][${P@a}]"; unset Z; echo "[${Z@A}]"; X=hi; echo "[${X@A}]"'
   'A2=(x); declare -r A2; echo "[${A2[@]@A}]"; b=(x y); declare -r b; echo "[${b[@]@a}]"'
+  # Indirection composes with transforms and subscripts: ${!var@Q},
+  # ${!name[0]}, ${!name[@]}OP (invalid joined name errors), and an
+  # array-splat target keeps its field structure.
+  'VAR2=zzz; var=VAR2; echo "${!var@Q}"; echo "${!var@U}"'
+  'VAR4=(aaa bbb); varname=VAR4; echo "[${!varname[0]}]"; echo "[${!varname[@]}]"; echo "${!varname[@]@Q}"'
+  'VAR4=(aaa bbb); echo ${!VAR4[@]@Q} 2>&1 | sed -E "s/.*line [0-9]+: //"; echo "[${!VAR4[@]}]"'
+  'VAR5=(aaa bbb); v="VAR5[@]"; f(){ echo "n=$#"; for a; do echo "[$a]"; done; }; f "${!v@Q}"; f "${!v}"; echo "${!v%b}"'
 )
 
 fails=0
