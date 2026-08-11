@@ -148,9 +148,25 @@ bool Shell::noassign_var(const std::string &n) const {
 // Defined in builtins.cpp: the state of every `set -o' option, in name order.
 std::vector<std::pair<std::string, bool>> set_option_states(Shell &sh);
 
+// The computed variables whose special behavior `unset' removes permanently
+// (bash: "if X is unset, it loses its special properties, even if it is
+// subsequently reset") and whose declare/export-created table entry must not
+// shadow the live dynamic value.  BASH_SUBSHELL and BASH_TRAPSIG are absent
+// from the shadowing rule by design -- they are genuinely overwritable -- but
+// BASH_SUBSHELL still dies on unset like the rest (see unset()).
+bool Shell::killable_special(const std::string &name) {
+  static const std::set<std::string> kKillable = {
+      "RANDOM",       "SECONDS",       "LINENO",           "HISTCMD",
+      "BASHPID",      "EPOCHSECONDS",  "EPOCHREALTIME",    "BASH_MONOSECONDS"};
+  return kKillable.count(name) != 0;
+}
+
 // Dynamic variables computed on each reference.  Returns false for names that
 // are not dynamic (the caller then looks them up as ordinary variables).
 bool Shell::dynamic_var(const std::string &name, std::string &out) {
+  // A special killed by `unset' stays dead: the name is an ordinary variable
+  // from then on.
+  if (!dead_specials.empty() && dead_specials.count(name)) return false;
   if (name == "RANDOM") { out = std::to_string(next_random()); return true; }
   if (name == "SECONDS") {
     out = std::to_string(static_cast<long long>(std::time(nullptr)) - seconds_base);
@@ -940,7 +956,7 @@ void Shell::array_set(const std::string &n_in, const std::string &sub, const std
   // A computed variable carries bash's att_noassign: the assignment is
   // silently discarded (and does not fail).  `BASH_ARGC=x' reaches here rather
   // than Shell::set, because an existing array takes the element-0 path.
-  if (noassign_var(n)) return;
+  if (noassign_var(n) && !dead_specials.count(n)) return;
   // BASH_ALIASES is the live alias table: BASH_ALIASES[name]=value defines an
   // alias, after the same name validation the alias builtin performs.
   if (n == "BASH_ALIASES" && !is_zsh()) {
@@ -1441,6 +1457,12 @@ bool Shell::get_if_set(const std::string &n_in, std::string &out) const {
   // stale; bash keeps these variables in sync with the options).
   if (!is_zsh() && (n_in == "SHELLOPTS" || n_in == "BASHOPTS") && vars.count(n_in))
     return const_cast<Shell *>(this)->dynamic_var(n_in, out);
+  // Likewise a live dynamic special: a table entry (created by declare/export
+  // applying attributes) holds no real value -- assignments seed or are
+  // discarded, never stored -- so reads keep reporting the computed value
+  // (`declare -i RANDOM=42; echo $RANDOM' stays random, as in bash).
+  if (!is_zsh() && killable_special(n_in) && vars.count(n_in))
+    if (const_cast<Shell *>(this)->dynamic_var(n_in, out)) return true;
   std::string base, sub;
   if (nameref_elt(n_in, base, sub)) {
     // Resolving the reference EVALUATES the subscript, and under `set -u' an
@@ -1685,13 +1707,14 @@ bool Shell::set(const std::string &n_in, const std::string &v,
   // $BASH_XTRACEFD redirects `set -x' output; the value is stored either way,
   // as bash does, but an unusable fd is reported and the destination unchanged.
   if (n == "BASH_XTRACEFD") apply_xtracefd(v.c_str());
-  // Assigning to a dynamic variable seeds/rebases it rather than storing.
-  if (n == "RANDOM") {
+  // Assigning to a dynamic variable seeds/rebases it rather than storing --
+  // unless `unset' killed its specialness, in which case it stores normally.
+  if (n == "RANDOM" && !dead_specials.count(n)) {
     rand_seed = static_cast<unsigned long>(std::strtoul(v.c_str(), nullptr, 10));
     rand_seeded = true;
     return true;
   }
-  if (n == "SECONDS") {
+  if (n == "SECONDS" && !dead_specials.count(n)) {
     seconds_base = static_cast<long long>(std::time(nullptr)) -
                    std::strtoll(v.c_str(), nullptr, 10);
     return true;
@@ -1703,8 +1726,8 @@ bool Shell::set(const std::string &n_in, const std::string &v,
   }
   // A computed variable carries bash's att_noassign: a scalar assignment is
   // silently discarded without error, so `LINENO=999' succeeds and changes
-  // nothing.
-  if (noassign_var(n)) return true;
+  // nothing.  Once `unset' kills the special, assignments store normally.
+  if (noassign_var(n) && !dead_specials.count(n)) return true;
   // $SHELLOPTS and $BASHOPTS are readonly instead: assigning to one is an
   // error, which (having no command word) also abandons the command list.
   if (!is_zsh() && (n == "SHELLOPTS" || n == "BASHOPTS")) {
@@ -1802,6 +1825,11 @@ void Shell::unset(const std::string &n_in, bool force, bool noref) {
   if (n == "POSIXLY_CORRECT") opt_posix = false;  // unsetting leaves POSIX mode
   // Unsetting it is "any other value": the saved nameref limit comes back.
   if (n == "BASHLY_CORRECT") apply_bashly_correct(false);
+  // Unsetting a dynamic special removes its special properties permanently,
+  // even if the name is subsequently reset (bash).  BASH_SUBSHELL dies too,
+  // although while alive its stored value may shadow the dynamic one.
+  if (!is_zsh() && (killable_special(n) || n == "BASH_SUBSHELL"))
+    dead_specials.insert(n);
   auto it = vars.find(n);
   if (it != vars.end() && (force || !it->second.readonly)) {
     // Unsetting a variable that is local to the CURRENT function scope leaves
