@@ -679,6 +679,11 @@ echo ok16'
   'var=; echo "[${var/#/x}][${var/\*/x}][${var//\*/x}]"'
   # Process substitution is live inside an unquoted substitute word.
   'foo=; cat ${foo:-<(echo a)}'
+  # ${N=word} on positionals/specials errors; ${var[@]:off} on a scalar is
+  # the string slice; escaped slashes in // patterns keep working.
+  'set -- a; echo ${2="x"} 2>&1 | sed -E "s/.*: .[$]/\$/"; echo "[${1=z}]"'
+  'var=blah; echo "[${var[@]:3}]" "[${var[@]:1:2}]" "[${var[*]:3}]"'
+  'p=(/usr/bin /bin); echo "${p[@]//\//^}"'
 )
 
 fails=0
