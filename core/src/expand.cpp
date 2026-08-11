@@ -1382,6 +1382,22 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
               if (dq && !sh_.is_zsh() && !has_at) {
                 std::string ex = expand_dq_word(word);
                 for (char c : ex) { out += c; mask += '1'; }
+              } else if (dq && !sh_.is_zsh()) {
+                // Quoted ${p±word} whose word carries $@/[@]: the whole word
+                // is inside the surrounding quotes, so the splat keeps "$@"
+                // field structure (one field per element, no IFS splitting)
+                // and literal text glues to the first/last field
+                // (`"${1+  $@  }"' -> `<  abc> ... <jkl  >').  The word's own
+                // unescaped double quotes are quote-removed only -- they don't
+                // change semantics inside the outer quotes (`a"b" c' -> ab c).
+                std::string w;
+                bool esc = false;
+                for (char c : word) {
+                  if (esc) { w += c; esc = false; continue; }
+                  if (c == '\\') { w += c; esc = true; continue; }
+                  if (c != '"') w += c;
+                }
+                process("\"" + w + "\"", out, mask, false, false);
               } else if (heredoc) {
                 // Inside ${...} in a here-document, DOUBLE quotes and
                 // backslash escapes are active (`${P+\"$P\"}' emits `"A"',
