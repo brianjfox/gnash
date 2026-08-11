@@ -534,6 +534,8 @@ std::string ansi_c(const std::string &s) {
 
 }  // namespace
 
+static std::string atq_quote(const std::string &s);  // defined with the @-transforms
+
 // Character-aware whole-string case folding (exported for `declare -u/-l/-c').
 // mb_capitalize upper-cases the first character and lower-cases the rest, as in
 // bash's att_capcase.  mb_case_fold above (anonymous namespace) is visible here.
@@ -1841,9 +1843,21 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
            body[1] == ',' || body[1] == '~' || body[1] == '@')) {
         char psel = body[0];
         std::string prest = body.substr(1);
-        std::vector<std::string> items = sh_.positional;
-        for (std::string &it : items)
-          it = apply_param_op(*this, sh_, std::string(1, psel), it, true, prest, dq);
+        std::vector<std::string> items;
+        if (prest == "@A") {
+          // ${@@A}/${*@A}: one `set -- 'arg' ...' command reconstructing the
+          // positional parameters, as separate words (empty when there are
+          // no positionals) -- new-exp10.sub.
+          if (!sh_.positional.empty()) {
+            items.push_back("set");
+            items.push_back("--");
+            for (const std::string &p2 : sh_.positional) items.push_back(atq_quote(p2));
+          }
+        } else {
+          items = sh_.positional;
+          for (std::string &it : items)
+            it = apply_param_op(*this, sh_, std::string(1, psel), it, true, prest, dq);
+        }
         if (psel == '*' && dq) {
           std::string is = sh_.ifs();
           std::string j = mb_first_char(is);
