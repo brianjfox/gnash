@@ -1400,6 +1400,78 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
         }
       }
 
+      // ${!name...}: plain indirection re-dispatched with the target name
+      // spliced into the body, so an array-splat target keeps its field
+      // structure (`v=VAR5[@]; "${!v@Q}"' -> `"${VAR5[@]@Q}"' -> one field
+      // per element).  Only for a valid variable-reference target; listings
+      // (bare trailing @/*), keys (`!name[...]'), namerefs (${!ref} is the
+      // target's NAME), and empty/invalid targets keep the scalar path and
+      // its diagnostics.
+      if (body.size() > 1 && body[0] == '!' &&
+          (std::isalpha(static_cast<unsigned char>(body[1])) || body[1] == '_')) {
+        size_t q2 = 1;
+        while (q2 < body.size() &&
+               (std::isalnum(static_cast<unsigned char>(body[q2])) || body[q2] == '_'))
+          q2++;
+        std::string iname2 = body.substr(1, q2 - 1);
+        std::string rest2 = body.substr(q2);
+        bool listing = rest2.size() == 1 && (rest2[0] == '@' || rest2[0] == '*');
+        auto ivit = sh_.vars.find(iname2);
+        bool isnr = ivit != sh_.vars.end() && ivit->second.nameref;
+        // `!name[sub]...' indirects through the SUBSCRIPTED value: a splat
+        // space-joins every element, a plain index reads that element.  A
+        // bare `!arr[@]'/`!arr[*]' (nothing after) is the keys listing.
+        bool subscripted = false;
+        std::string sub2, tail2 = rest2;
+        if (!rest2.empty() && rest2[0] == '[') {
+          size_t close2 = 1;
+          int bd2 = 1;
+          for (; close2 < rest2.size() && bd2; close2++) {
+            if (rest2[close2] == '[') bd2++;
+            else if (rest2[close2] == ']') bd2--;
+          }
+          if (bd2 == 0) {
+            sub2 = rest2.substr(1, close2 - 2);
+            tail2 = rest2.substr(close2);
+            subscripted = true;
+          }
+        }
+        bool keys_listing =
+            subscripted && (sub2 == "@" || sub2 == "*") && tail2.empty();
+        if (!listing && !keys_listing && !isnr && !(subscripted && sub2.empty())) {
+          std::string target;
+          if (subscripted) {
+            if (sub2 == "@" || sub2 == "*") {
+              std::vector<std::string> vs = sh_.array_values(iname2);
+              for (size_t vk = 0; vk < vs.size(); vk++) {
+                if (vk) target += ' ';
+                target += vs[vk];
+              }
+            } else {
+              target = expand_brace_body(*this, sh_, iname2 + "[" + sub2 + "]", false);
+            }
+            rest2 = tail2;
+          } else {
+            target = sh_.get(iname2);
+          }
+          bool okname = !target.empty() && (std::isalpha(static_cast<unsigned char>(target[0])) ||
+                                            target[0] == '_');
+          size_t ni2 = 0;
+          while (ni2 < target.size() && (std::isalnum(static_cast<unsigned char>(target[ni2])) ||
+                                         target[ni2] == '_'))
+            ni2++;
+          if (ni2 < target.size() && !(target[ni2] == '[' && target.back() == ']'))
+            okname = false;
+          if (okname) {
+            std::string nb = "${" + target + rest2 + "}";
+            size_t ni3 = 0;
+            expand_dollar(nb, ni3, dq, out, mask, heredoc);
+            i = end + 1;
+            return;
+          }
+        }
+      }
+
       // ${name-word} / ${name+word} (and the `:' forms) with the operator
       // firing: expand WORD by re-processing it here, so an embedded "$@"
       // keeps its field structure (a flat string would lose empty fields).
@@ -2426,7 +2498,12 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
                    (std::isalpha(static_cast<unsigned char>(pre[0])) || pre[0] == '_');
       for (char c : pre)
         if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '_')) ident = false;
-      bool ok = (pre.empty() || ident) && sp + 1 == b.size();
+      // An `@' that is NOT the final character introduces an operator on the
+      // INDIRECTED parameter (`${!var@Q}' -> `${VAR2@Q}'), not a malformed
+      // listing -- leave it to the indirection path below.  A bare trailing
+      // `@'/`*' is the listing form; `${!@*}' (empty name) stays invalid.
+      bool op_follows = b[sp] == '@' && sp + 1 < b.size() && !pre.empty();
+      bool ok = op_follows || ((pre.empty() || ident) && sp + 1 == b.size());
       if (!ok) {
         std::fprintf(stderr, "%s${%s}: bad substitution\n", sh.err_prefix().c_str(), b.c_str());
         sh.arith_error = true;
@@ -2476,6 +2553,60 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
         }
         return length ? std::to_string(mb_charlen(expand_brace_body(ex, sh, elem, dq)))
                       : expand_brace_body(ex, sh, elem, dq);
+      }
+    }
+    // `${!name[sub]...}': indirection through the SUBSCRIPTED value.  A bare
+    // `${!arr[@]}'/`${!arr[*]}' (nothing after the bracket) stays the keys
+    // listing, handled by the array machinery.  Everything else -- a specific
+    // index (`${!varname[0]}'), or a splat subscript followed by an operator
+    // (`${!varname[@]@Q}') -- expands ${name[sub]} and uses the result as the
+    // parameter, applying any trailing operator to it.  A result that is not
+    // a valid variable reference is bash's `VALUE: invalid variable name'.
+    if (q < b.size() && b[q] == '[') {
+      size_t close = q + 1;
+      int bd = 1;
+      for (; close < b.size() && bd; close++) {
+        if (b[close] == '[') bd++;
+        else if (b[close] == ']') bd--;
+      }
+      if (bd == 0) {
+        std::string sub = b.substr(q + 1, close - q - 2);
+        std::string after = b.substr(close);
+        bool splat = sub == "@" || sub == "*";
+        if (!(splat && after.empty())) {
+          // The subscripted value: a splat space-joins EVERY element (so an
+          // array's `${!arr[@]}OP' fails name validation on the joined list,
+          // as bash does), a plain index reads that element.
+          std::string tval;
+          if (splat) {
+            std::vector<std::string> vs = sh.array_values(iname);
+            for (size_t vk = 0; vk < vs.size(); vk++) {
+              if (vk) tval += ' ';
+              tval += vs[vk];
+            }
+          } else {
+            tval = expand_brace_body(ex, sh, iname + "[" + sub + "]", false);
+          }
+          // An empty subscripted value on a PLAIN variable expands to nothing
+          // without complaint (`foo=bar; ${!foo[2]}' -- bash); only the
+          // nameref form above reports `invalid indirect expansion'.
+          if (tval.empty()) return std::string();
+          bool okname = std::isalpha(static_cast<unsigned char>(tval[0])) || tval[0] == '_';
+          size_t ni = 0;
+          while (ni < tval.size() &&
+                 (std::isalnum(static_cast<unsigned char>(tval[ni])) || tval[ni] == '_'))
+            ni++;
+          if (ni < tval.size() && !(tval[ni] == '[' && tval.back() == ']')) okname = false;
+          if (!okname) {
+            std::fprintf(stderr, "%s%s: invalid variable name\n", sh.err_prefix().c_str(),
+                         tval.c_str());
+            sh.arith_error = true;
+            return std::string();
+          }
+          return length
+                     ? std::to_string(mb_charlen(expand_brace_body(ex, sh, tval + after, dq)))
+                     : expand_brace_body(ex, sh, tval + after, dq);
+        }
       }
     }
     if (q == b.size() || b[q] != '[') {
