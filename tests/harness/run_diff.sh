@@ -635,6 +635,11 @@ echo ok16'
   's=abcdefg; r="x&y"; echo ${s/abc/$r}; echo ${s/abc/"$r"}; r2="x\&y"; echo ${s/abc/$r2}'
   's=abcdefg; shopt -u patsub_replacement; echo ${s/abc/& }; echo ${s/abc/\&}; r="\\&"; echo ${s/abc/"$r"}'
   's=abcdefg; echo ${s/#abc/&-}; echo ${s/%efg/-&}'
+  # @A/@a report full attributes in bash order; declared-but-unset variables
+  # print attributes+name with no value (or nothing when attribute-free).
+  'declare -lr V1; echo "[${V1@A}][${V1@a}]"; declare -alr V3; echo "[${V3@A}][${V3[@]@A}][${V3[@]@a}]"'
+  'declare P; echo "[${P@A}][${P@a}]"; unset Z; echo "[${Z@A}]"; X=hi; echo "[${X@A}]"'
+  'A2=(x); declare -r A2; echo "[${A2[@]@A}]"; b=(x y); declare -r b; echo "[${b[@]@a}]"'
 )
 
 fails=0
