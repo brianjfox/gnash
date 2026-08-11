@@ -660,6 +660,13 @@ echo ok16'
   # ${@@A}/${*@A} reconstruct the positional parameters as a set command.
   'set -- ab "cd ef" "" gh; printf "<%s> " "${@@A}"; echo; printf "<%s> " "${*@A}"; echo'
   'set --; printf "<%s> " "${@@A}"; echo'
+  # @P prompt decoding: octal escapes, promptvars $-expansion with
+  # escape-produced characters literal, \[ \] markers only under editing,
+  # posix ! history number.
+  'HOST=host L=3; x="\[\]${HOST}($L)\041\$ "; recho "${x@P}"'
+  'foo=zz; x="\\\$foo"; recho "${x@P}"; z="\`echo cs\`"; recho "${z@P}"; shopt -u promptvars; recho "${x@P}"'
+  'x="\[\001\]ok"; recho "${x@P}"; set -o emacs; recho "${x@P}"'
+  'set -o posix; x="!x\!y!!z"; recho "${x@P}"'
 )
 
 fails=0
