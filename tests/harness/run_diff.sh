@@ -625,6 +625,10 @@ echo ok16'
   'f() { echo "n=$#"; for a; do echo "[$a]"; done; }; a=("x y" z); IFS=:; unset v; f ${v-${a[@]}}'
   'f() { echo "n=$#"; for a; do echo "[$a]"; done; }; set -- "a b" "" c; IFS=; unset v; f ${v-$@}; f ${v-$*}'
   'f() { echo "n=$#"; for a; do echo "[$a]"; done; }; set -- "a b" "" c; unset v; f ${v-$@}; f ${v-"$@"}'
+  # ${!prefix@}/${!prefix*} name listings carry $@/$* field semantics; only
+  # visible (set) variables are listed, and an empty quoted @ list drops.
+  'f() { echo "n=$#"; for a; do echo "[$a]"; done; }; _QA=1 _QB=2; IFS="-$IFS"; f "${!_Q*}"; f "${!_Q@}"; f ${!_Q*}; f "${!_Y@}"'
+  'declare _QUNSET; _QA=1; echo "[${!_Q*}]"'
 )
 
 fails=0
