@@ -2809,6 +2809,64 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
 
   // ${name/pat/rep} ${name//pat/rep} ${name/#pat/rep} ${name/%pat/rep}
   if (rest[0] == '/') {
+    // Number of characters PAT always consumes when it matches, or npos when
+    // it can match variable lengths (`*', extglob groups).  bash's umatchlen:
+    // with a fixed length the scan needs exactly ONE probe per position
+    // instead of trying every candidate length -- the difference between
+    // 0.04s and 7s on new-exp8.sub's 7KB value (issue #609).
+    auto pat_fixed_len = [](const std::string &p) -> size_t {
+      size_t n = 0;
+      for (size_t i = 0; i < p.size();) {
+        char c = p[i];
+        if (c == '*') return std::string::npos;
+        if ((c == '?' || c == '+' || c == '@' || c == '!') && i + 1 < p.size() &&
+            p[i + 1] == '(')
+          return std::string::npos;  // extglob group: variable length
+        if (c == '?') { n++; i++; continue; }
+        if (c == '\\') {  // escaped (possibly multibyte) character: one char
+          i++;
+          if (i < p.size()) { size_t len = 1; mb_decode(p, i, len); i += len; }
+          n++;
+          continue;
+        }
+        if (c == '[') {
+          // Find the closing `]' (a leading `]' after optional `!'/`^' is a
+          // member; [:class:]/[.sym.]/[=eq=] keep their own `]').
+          size_t j = i + 1;
+          if (j < p.size() && (p[j] == '!' || p[j] == '^')) j++;
+          if (j < p.size() && p[j] == ']') j++;
+          while (j < p.size() && p[j] != ']') {
+            if (p[j] == '[' && j + 1 < p.size() &&
+                (p[j + 1] == ':' || p[j + 1] == '.' || p[j + 1] == '=')) {
+              // A malformed sub-bracket (no clean `:]'/`.]'/`=]' before a
+              // plain `]', e.g. `[[:alpha]]') parses differently in the
+              // matcher than a naive scan; give up on a fixed length rather
+              // than risk probing the wrong size.
+              size_t e = p.find(std::string(1, p[j + 1]) + "]", j + 2);
+              size_t plain = p.find(']', j + 2);
+              if (e == std::string::npos || (plain != std::string::npos && plain < e))
+                return std::string::npos;
+              j = e + 2;
+            } else {
+              j++;
+            }
+          }
+          if (j < p.size() && p[j] == ']') {
+            n++;
+            i = j + 1;
+            continue;
+          }
+          n++;  // no closing bracket: a literal `['
+          i++;
+          continue;
+        }
+        size_t len = 1;
+        mb_decode(p, i, len);
+        i += len;
+        n++;
+      }
+      return n;
+    };
     bool global = rest.size() > 1 && rest[1] == '/';
     std::string body2 = rest.substr(global ? 2 : 1);
     // A leading `#'/`%' anchors the pattern to the start/end of the value.
@@ -2858,13 +2916,27 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
       }
       return r;
     };
+    size_t fixlen = pat_fixed_len(pat);
     // `#' matches the longest prefix, `%' the longest suffix; one replacement.
+    // A fixed-length pattern has exactly one candidate, probed directly.
     if (anchor == '#') {
+      if (fixlen != std::string::npos) {
+        size_t j = mb_byteoff(val, fixlen);  // clamped: a short value just fails
+        if (pat_match(pat, val.substr(0, j))) return apply_rep(val.substr(0, j)) + val.substr(j);
+        return val;
+      }
       for (size_t j = val.size() + 1; j-- > 0;)
         if (pat_match(pat, val.substr(0, j))) return apply_rep(val.substr(0, j)) + val.substr(j);
       return val;
     }
     if (anchor == '%') {
+      if (fixlen != std::string::npos) {
+        size_t total = mb_charlen(val);
+        if (total < fixlen) return val;
+        size_t j = mb_byteoff(val, total - fixlen);
+        if (pat_match(pat, val.substr(j))) return val.substr(0, j) + apply_rep(val.substr(j));
+        return val;
+      }
       for (size_t j = 0; j <= val.size(); j++)
         if (pat_match(pat, val.substr(j))) return val.substr(0, j) + apply_rep(val.substr(j));
       return val;
@@ -2875,8 +2947,15 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
     bool did = false;
     while (k < val.size()) {
       size_t best = std::string::npos;
-      for (size_t j = val.size(); j > k; j--) {
-        if (pat_match(pat, val.substr(k, j - k))) { best = j; break; }
+      if (fixlen != std::string::npos) {
+        // Exactly fixlen characters from k, if that many remain.
+        size_t e = k, c2 = 0;
+        for (; c2 < fixlen && e < val.size(); c2++) { size_t l = 1; mb_decode(val, e, l); e += l; }
+        if (c2 == fixlen && pat_match(pat, val.substr(k, e - k))) best = e;
+      } else {
+        for (size_t j = val.size(); j > k; j--) {
+          if (pat_match(pat, val.substr(k, j - k))) { best = j; break; }
+        }
       }
       if (best != std::string::npos && (!did || global)) {
         result += apply_rep(val.substr(k, best - k));
