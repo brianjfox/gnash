@@ -629,6 +629,12 @@ echo ok16'
   # visible (set) variables are listed, and an empty quoted @ list drops.
   'f() { echo "n=$#"; for a; do echo "[$a]"; done; }; _QA=1 _QB=2; IFS="-$IFS"; f "${!_Q*}"; f "${!_Q@}"; f ${!_Q*}; f "${!_Y@}"'
   'declare _QUNSET; _QA=1; echo "[${!_Q*}]"'
+  # patsub_replacement: unquoted & in the replacement expands to the match,
+  # \& is literal, quoted portions are inert, shopt -u restores literal &.
+  's=abcdefg; echo ${s/abc/& }; echo "${s//?/& }"; echo ${s/abc/\& }; echo ${s/abc/"& "}; echo ${s/abc/\\& }'
+  's=abcdefg; r="x&y"; echo ${s/abc/$r}; echo ${s/abc/"$r"}; r2="x\&y"; echo ${s/abc/$r2}'
+  's=abcdefg; shopt -u patsub_replacement; echo ${s/abc/& }; echo ${s/abc/\&}; r="\\&"; echo ${s/abc/"$r"}'
+  's=abcdefg; echo ${s/#abc/&-}; echo ${s/%efg/-&}'
 )
 
 fails=0
