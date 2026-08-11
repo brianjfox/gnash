@@ -65,6 +65,18 @@ static std::string var_attr_flags(const Variable &var) {
   return flags;
 }
 
+// `set -u' set-ness for the @a/@A attribute transforms: an array counts as
+// set when ANY element exists (bash exempts `${foo@a}' with foo=([1]=one)
+// but not with foo=()); scalars use their visible value.
+static bool attr_op_set(const Shell &sh, const std::string &name) {
+  auto it = sh.vars.find(sh.deref(name));
+  if (it == sh.vars.end()) return false;
+  const Variable &v = it->second;
+  if (v.kind == VarKind::Indexed) return !v.idx.empty();
+  if (v.kind == VarKind::Assoc) return !v.assoc.empty();
+  return !v.invisible;
+}
+
 bool pat_match(const std::string &pattern, const std::string &text, int extra_flags = 0) {
   std::string p = pattern, t = text;
   return strmatch(p.data(), t.data(), FNM_EXTMATCH | extra_flags) == 0;
@@ -1463,6 +1475,40 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
           if (ni2 < target.size() && !(target[ni2] == '[' && target.back() == ']'))
             okname = false;
           if (okname) {
+            // Under `set -u' an indirect expansion whose TARGET value is
+            // unset reports the ORIGINAL `!name' text, not the target
+            // (`${!bar@a}' with foo an empty array -> `!bar: unbound
+            // variable' -- even where the direct form would be exempt).
+            // A defaulting operator handles the unset target itself.
+            bool dfl = !rest2.empty() &&
+                       (std::strchr("-=+?", rest2[0]) != nullptr ||
+                        (rest2[0] == ':' && rest2.size() > 1 &&
+                         std::strchr("-=+?", rest2[1]) != nullptr));
+            // The target's SCALAR context decides: a subscripted target tests
+            // that element; a splat target never trips (an empty "${!v}"
+            // with v='arr[@]' is fine under -u, like "$@" -- varenv18.sub).
+            // For the @a/@A transforms an array with ANY element counts as
+            // set, matching the direct forms.
+            bool tset;
+            size_t tbr = target.find('[');
+            if (rest2 == "@a" || rest2 == "@A") {
+              tset = attr_op_set(sh_, tbr == std::string::npos ? target : target.substr(0, tbr));
+            } else if (tbr != std::string::npos) {
+              std::string tsub2 = target.substr(tbr + 1, target.size() - tbr - 2);
+              tset = tsub2 == "@" || tsub2 == "*" ||
+                     sh_.array_elem_set(target.substr(0, tbr), tsub2);
+            } else {
+              std::string tmpv;
+              tset = sh_.get_if_set(target, tmpv);
+            }
+            if (sh_.opt_nounset && !dfl && !tset) {
+              std::fprintf(stderr, "%s!%s: unbound variable\n", sh_.err_prefix().c_str(),
+                           iname2.c_str());
+              sh_.exiting = true;
+              sh_.exit_status = 127;
+              i = end + 1;
+              return;
+            }
             std::string nb = "${" + target + rest2 + "}";
             size_t ni3 = 0;
             expand_dollar(nb, ni3, dq, out, mask, heredoc);
@@ -2750,6 +2796,12 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
     else if (c0 == ':' && rest.size() > 1 &&
              (rest[1] == '-' || rest[1] == '=' || rest[1] == '+' || rest[1] == '?'))
       defaulting_op = true;
+    // @a/@A report attributes of a variable whose ARRAY has elements even
+    // when its scalar context ([0]) is unset, so `set -u' must not trip the
+    // unbound check there; a completely empty array or a missing table
+    // entry still errors (new-exp15.sub).
+    else if ((rest == "@a" || rest == "@A") && attr_op_set(sh, name))
+      defaulting_op = true;
   }
 
   bool set = false;
@@ -3196,11 +3248,12 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
         invisible = it->second.invisible;
       }
       if (t == 'a') return flags;
-      // @A: reproduce a declare/assignment statement.  A declared-but-unset
-      // variable prints its attributes and name with NO value part; one with
-      // no attributes at all expands to nothing.
+      // @A: reproduce a declare/assignment statement.  When the scalar
+      // context is unset -- a declared-but-unset variable, or an array with
+      // no element 0 (`declare -ia foo=()') -- print the attributes and name
+      // with NO value part; with no attributes at all, expand to nothing.
       if (it == sh.vars.end()) return std::string();
-      if (invisible)
+      if (invisible || !set)
         return flags.empty() ? std::string() : "declare -" + flags + " " + name;
       std::string q = atq_quote(val);
       if (flags.empty()) return name + "=" + q;

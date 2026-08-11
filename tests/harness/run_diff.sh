@@ -650,6 +650,13 @@ echo ok16'
   # Pattern substitution honors nocasematch (removal and case-mod do not).
   's=abcd; shopt -s nocasematch; echo ${s//A/z}; echo ${s//BC/x}; echo ${s//[BC]/x}; echo ${s//[bC]/x}'
   's=ABCdef; shopt -s nocasematch; echo "[${s#abc}]"; echo "[${s%DEF}]"; echo "[${s^^[ab]}]"; echo ${s/def/&!}'
+  # set -u vs @a/@A: an array with ANY element is set for the transforms;
+  # an empty array errors (naming !name through indirection), and @A on an
+  # elem-0-unset array prints attributes+name with no value.
+  'declare -a foo=([1]=one); set -u; echo "[${foo@a}][${foo@A}]"; bar=foo; echo "[${!bar@A}]"'
+  'set -u; declare -ia foo=(); echo "[${foo@a}]" 2>&1 | sed -E "s/.*line [0-9]+: //"'
+  'set -u; declare -ia foo=(); bar=foo; echo "[${!bar@a}]" 2>&1 | sed -E "s/.*line [0-9]+: //"'
+  'set -u; arr=(zero one); name="arr[@]"; f(){ echo n=$#; }; f "${!name}"'
 )
 
 fails=0
