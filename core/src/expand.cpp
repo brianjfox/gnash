@@ -1095,11 +1095,16 @@ void Expander::emit_array_items(const std::vector<std::string> &items, char sel,
     bool first = true;
     for (size_t k = 0; k < items.size(); k++) {
       if (splitting_ && items[k].empty()) continue;
-      if (!first) { out += FIELD_SEP; mask += MMARK; }
+      if (!first) splat_sep(out, mask);
       first = false;
       for (char c : items[k]) { out += c; mask += '0'; }
     }
   }
+}
+
+void Expander::splat_sep(std::string &out, std::string &mask) {
+  if (subst_word_ && !sh_.ifs().empty()) { out += ' '; mask += '0'; }
+  else { out += FIELD_SEP; mask += MMARK; }
 }
 
 void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::string &out,
@@ -1318,7 +1323,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
           bool first = true;
           for (size_t k = 0; k < pos.size(); k++) {
             if (splitting_ && pos[k].empty()) continue;
-            if (!first) { out += FIELD_SEP; mask += MMARK; }
+            if (!first) splat_sep(out, mask);
             first = false;
             for (char c : pos[k]) { out += c; mask += '0'; }
           }
@@ -1425,8 +1430,17 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
                 process("\"" + w2 + "\"", out, mask, false, false);
               } else {
                 // Unquoted default word: a leading `~' tilde-expands (bash).
+                // While the word expands, an unquoted @-splat is space-JOINED
+                // (splittable) rather than emitted as hard fields -- bash's
+                // acknowledged inconsistency (posixexp4.sub): under IFS=: the
+                // whole join stays one word, while a plain unquoted $@ keeps
+                // its fields.  $* (including its null-IFS separate-fields
+                // form) and quoted "$@" are not affected.
                 size_t m0 = mask.size();
+                bool sw0 = subst_word_;
+                subst_word_ = true;
                 process(expand_leading_tilde(sh_, word), out, mask, false, false);
+                subst_word_ = sw0;
                 // The replacement is EXPANSION OUTPUT: its unquoted literal
                 // text IFS-splits like a parameter's value (`${IFS+foo 'b c'
                 // baz}' is three fields, the middle protected by its quotes).
@@ -1625,7 +1639,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
             bool first = true;
             for (size_t k = 0; k < items.size(); k++) {
               if (splitting_ && items[k].empty()) continue;
-              if (!first) { out += FIELD_SEP; mask += MMARK; }
+              if (!first) splat_sep(out, mask);
               first = false;
               for (char c : items[k]) { out += c; mask += '0'; }
             }
@@ -2042,7 +2056,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
       bool first = true;
       for (size_t k = 0; k < pos.size(); k++) {
         if (splitting_ && pos[k].empty()) continue;
-        if (!first) { out += FIELD_SEP; mask += MMARK; }
+        if (!first) splat_sep(out, mask);
         first = false;
         for (char c : pos[k]) { out += c; mask += '0'; }
       }

@@ -94,6 +94,14 @@ class Expander {
   // bytes that happen to equal FIELD_SEP/QNULL).  op_fields_ signals a pending
   // splice; expand_dollar clears it before, and consumes it after, each body.
   bool op_fields_ = false;
+  // Expanding an UNQUOTED ${var±word} substitute word: an unquoted @-splat
+  // there is space-joined (splittable) instead of emitting hard field breaks
+  // (bash's acknowledged inconsistency -- posixexp4.sub).
+  bool subst_word_ = false;
+  // Emit the separator between two unquoted @-splat fields: a hard field
+  // break normally; a splittable space in a substitute word with a non-empty
+  // IFS (with a NULL IFS bash keeps the fields separate even there).
+  void splat_sep(std::string &out, std::string &mask);
   std::string op_out_, op_mask_;
 
   // Expand W (a substitute word) into op_out_/op_mask_ preserving field markers,
