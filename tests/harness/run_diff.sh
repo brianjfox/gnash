@@ -673,6 +673,10 @@ echo ok16'
   'v=bad-var; echo "${!v}" 2>&1 | sed -E "s/.*line [0-9]+: //"'
   'foo=@; set -- a "b c" d; f(){ echo n=$#; for a; do echo "[$a]"; done; }; f ${!foo}; f "${!foo}"'
   'arr_1=(x "y z"); set -- "arr_1[@]"; a=("${!1}"); printf "<%s>" "${a[@]}"; echo'
+  # Patsub parsing: anchors and // are exclusive, the // delimiter scan skips
+  # the first char, empty values get one match attempt.
+  'v=(abcde abcfg); echo "${v[*]//#abc/foo}"; echo "${v[*]/#abc/foo}"; a=/a; echo "/${a///a/}"; b=x/y; echo "${b////-}"'
+  'var=; echo "[${var/#/x}][${var/\*/x}][${var//\*/x}]"'
 )
 
 fails=0
