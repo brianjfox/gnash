@@ -1332,6 +1332,58 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
         return;
       }
 
+      // ${!prefix@} / ${!prefix*}: the names of the visible variables with
+      // that prefix, with full $@/$* field semantics (new-exp3.sub): quoted
+      // `@' keeps one field per name and an empty list drops the word (like
+      // "$@" with no positionals); quoted `*' joins with IFS[0]; the unquoted
+      // forms field-split like the positional splats.  Declared-but-unset
+      // variables are not listed.  `${!@}'/`${!*}' (empty prefix) are
+      // INDIRECTION through $@/$*, left to the generic path, as are invalid
+      // prefixes (digit lead, trailing junk -- bad substitution there).
+      if (body.size() > 2 && body[0] == '!' &&
+          (body.back() == '@' || body.back() == '*')) {
+        std::string pre = body.substr(1, body.size() - 2);
+        bool ident = std::isalpha(static_cast<unsigned char>(pre[0])) || pre[0] == '_';
+        for (size_t k = 1; ident && k < pre.size(); k++)
+          if (!std::isalnum(static_cast<unsigned char>(pre[k])) && pre[k] != '_') ident = false;
+        if (ident) {
+          std::vector<std::string> names;
+          for (const auto &kv : sh_.vars) {
+            if (kv.first.compare(0, pre.size(), pre) != 0) continue;
+            if (kv.second.invisible) continue;
+            names.push_back(kv.first);
+          }
+          char lsel = body.back();
+          if (lsel == '@' && dq) {
+            absorb_qnull();
+            for (size_t k = 0; k < names.size(); k++) {
+              if (k) { out += FIELD_SEP; mask += MMARK; }
+              out += QNULL; mask += MMARK;
+              for (char c : names[k]) { out += c; mask += '1'; }
+            }
+          } else if (lsel == '*' && dq) {
+            std::string joiner = mb_first_char(sh_.ifs());
+            for (size_t k = 0; k < names.size(); k++) {
+              if (k) for (char c : joiner) { out += c; mask += '1'; }
+              for (char c : names[k]) { out += c; mask += '1'; }
+            }
+          } else if (lsel == '*' && !(splitting_ && sh_.ifs().empty())) {
+            std::string joiner = mb_first_char(sh_.ifs());
+            for (size_t k = 0; k < names.size(); k++) {
+              if (k) for (char c : joiner) { out += c; mask += '0'; }
+              for (char c : names[k]) { out += c; mask += '0'; }
+            }
+          } else {  // unquoted `@' (or `*' under a null IFS): separate fields
+            for (size_t k = 0; k < names.size(); k++) {
+              if (k) splat_sep(out, mask);
+              for (char c : names[k]) { out += c; mask += '0'; }
+            }
+          }
+          i = end + 1;
+          return;
+        }
+      }
+
       // ${name-word} / ${name+word} (and the `:' forms) with the operator
       // firing: expand WORD by re-processing it here, so an embedded "$@"
       // keeps its field structure (a flat string would lose empty fields).
@@ -2399,9 +2451,12 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
     }
     if (q == b.size() || b[q] != '[') {
       if (q + 1 == b.size() && (b[q] == '*' || b[q] == '@')) {
+        // Scalar-context fallback; the field-aware form lives in
+        // expand_dollar.  Declared-but-unset variables are not listed.
         std::string names;
         for (const auto &kv : sh.vars) {
           if (kv.first.compare(0, iname.size(), iname) != 0) continue;
+          if (kv.second.invisible) continue;
           if (!names.empty()) names += ' ';
           names += kv.first;
         }
