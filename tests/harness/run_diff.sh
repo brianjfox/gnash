@@ -595,6 +595,14 @@ echo ok16'
   'echo "${$(echo x)}" 2>&1 | sed -E "s/.*line [0-9]+: //"' # comsub in name position
   'set -u; echo "${9}" 2>&1 | sed -E "s/.*line [0-9]+: //"; set -u; echo "$9" 2>&1 | sed -E "s/.*line [0-9]+: //"'
   'set a; echo "${@:1:$(($# - 2))}" 2>&1 | sed -E "s/.*line [0-9]+: //"'  # neg length raw text
+  # Unquoted $@ in a QUOTED ${var±word} substitute keeps "$@" field structure:
+  # one field per positional, literal word text glued to the first/last field.
+  'f() { for a in "$@"; do echo "[$a]"; done; }; set "a b" c d; f "${1+$@}"'
+  'f() { for a in "$@"; do echo "[$a]"; done; }; set abc def; f "${1+  $@  }"'
+  'f() { for a in "$@"; do echo "[$a]"; done; }; set "a b" c; unset foo; f "${foo- x$@y }"'
+  'f() { for a in "$@"; do echo "[$a]"; done; }; set "a b" c; unset foo; f "${foo-"$@" tail}"'
+  'f() { for a in "$@"; do echo "[$a]"; done; }; unset foo; f "${foo-a"b  c"d}"; set --; f "${foo-x$@y}"'
+  'f() { for a in "$@"; do echo "[$a]"; done; }; set -- "" x; unset foo; f "${foo-$@}"'
 )
 
 fails=0
