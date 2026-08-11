@@ -684,6 +684,11 @@ echo ok16'
   'set -- a; echo ${2="x"} 2>&1 | sed -E "s/.*: .[$]/\$/"; echo "[${1=z}]"'
   'var=blah; echo "[${var[@]:3}]" "[${var[@]:1:2}]" "[${var[*]:3}]"'
   'p=(/usr/bin /bin); echo "${p[@]//\//^}"'
+  # $(< glob) resolves; oversize fd numbers are command words; a `}' inside
+  # backquotes does not close the ${...} scan at expansion time.
+  'd=$(mktemp -d); echo hi > "$d/f.x1"; echo "[$(< "$d"/f.x*)]"; set -o posix; echo "[$(< "$d"/f.x*)]" 2>&1 | sed -E "s/.*line [0-9]+: //"; rm -rf "$d"'
+  '{ echo "$(1111111111111111111111</dev/stdin)"; } <<<hi 2>&1 | sed -E "s/.*line [0-9]+: //"'
+  'echo "${HOME:-`echo }`}" >/dev/null && echo scan-ok; x=abcdef; echo "${x:`echo 2`}"'
 )
 
 fails=0

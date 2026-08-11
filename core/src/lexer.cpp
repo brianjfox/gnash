@@ -791,10 +791,16 @@ struct Lexer {
     bool all_digits = !w.empty() && !quoted;
     for (char c : w)
       if (!std::isdigit(static_cast<unsigned char>(c))) all_digits = false;
-    if (all_digits && pos < n && (in[pos] == '<' || in[pos] == '>'))
-      t.type = Tok::IoNumber;
-    else
+    if (all_digits && pos < n && (in[pos] == '<' || in[pos] == '>')) {
+      // bash: a number too large for an int is not a file descriptor -- the
+      // digits stay a command WORD, so `$(11111111111111111111</dev/stdin)'
+      // runs (and fails to find) that command (new-exp2.sub).
+      errno = 0;
+      long long fv = std::strtoll(w.c_str(), nullptr, 10);
+      t.type = (errno == 0 && fv <= 2147483647LL) ? Tok::IoNumber : Tok::Word;
+    } else {
       t.type = Tok::Word;
+    }
     return t;
   }
 

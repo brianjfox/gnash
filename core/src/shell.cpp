@@ -2791,7 +2791,10 @@ std::string Shell::run_and_capture(const std::string &script, int *status) {
       bool only = script.find_first_not_of(" \t\n", p) == std::string::npos;
       if (simple && only && !raw.empty()) {
         Expander ex(*this);
-        std::string path = ex.expand_no_split(raw);
+        // The redirect target GLOBS like any redirection word when the glob
+        // resolves to one file -- except in POSIX mode, which disables glob
+        // expansion in redirections (new-exp2.sub).
+        std::string path = ex.expand_no_split(raw, /*do_glob=*/!opt_posix);
         FILE *f = std::fopen(path.c_str(), "r");
         if (!f) {
           std::fprintf(stderr, "%s%s: %s\n", err_prefix().c_str(), path.c_str(),
