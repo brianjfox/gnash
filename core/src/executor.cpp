@@ -1219,6 +1219,7 @@ int Executor::run_pipeline(const Connection *c) {
     Shell::Job *j = sh_.add_job(pgid, lp, to_string(c), false);
     j->stopped = true;
     j->running = false;
+    sh_.set_current_job(j->id);  // bash: a job that stops becomes the current job
     if (sh_.interactive) {
       std::fprintf(stderr, "\n[%d]+  Stopped                 %s\n", j->id, j->command.c_str());
       j->notified = true;  // bash J_NOTIFIED: don't report again at the next prompt
@@ -2006,6 +2007,7 @@ int Executor::run_simple(const SimpleCommand *c) {
       Shell::Job *j = sh_.add_job(pid, {pid}, cmd, false);
       j->stopped = true;
       j->running = false;
+      sh_.set_current_job(j->id);  // bash: a job that stops becomes the current job
       status = 128 + SIGTSTP;
       if (sh_.interactive) {
         std::fprintf(stderr, "\n[%d]+  Stopped                 %s\n", j->id, cmd.c_str());

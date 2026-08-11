@@ -88,8 +88,27 @@ int main(int argc, char **argv) {
     failures++;
   }
 
-  // Clean up: kill the stopped sleep and leave the shell.
-  send(master, "kill -9 %1\r", out);
+  // A job that stops becomes the current job: `jobs' marks it `+' and a bare
+  // `%' jobspec resolves to it (bash set_job_status_and_cleanup bumps
+  // call_set_current on a stop).
+  std::string jout;
+  send(master, "jobs\r", jout);
+  if (jout.find("[1]+") == std::string::npos) {
+    std::fprintf(stderr, "FAIL expected the stopped job marked [1]+ in jobs output\n%s\n",
+                 jout.c_str());
+    failures++;
+  }
+  out += jout;
+
+  // Kill the stopped sleep through the current-job spec and leave the shell.
+  std::string kout;
+  send(master, "kill -9 %\r", kout);
+  if (kout.find("no such job") != std::string::npos) {
+    std::fprintf(stderr, "FAIL `kill -9 %%' did not resolve the current job\n%s\n",
+                 kout.c_str());
+    failures++;
+  }
+  out += kout;
   send(master, "exit\r", out);
   send(master, "exit\r", out);
   close(master);
