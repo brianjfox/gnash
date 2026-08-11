@@ -149,12 +149,36 @@ std::string expand_prompt(Shell &sh, const std::string &ps) {
     return Expander(sh).expand_no_split(tmp);
   }
   std::string out;
+  // Marks characters EMITTED BY AN ESCAPE: under promptvars they must stay
+  // literal (`\$' can never start an expansion, `\\$foo' shows `$foo').
+  std::string prot;
+  auto lit = [&](char ch) { out += ch; prot += 'p'; };
+  auto lits = [&](const std::string &s2) { for (char ch : s2) lit(ch); };
   for (size_t i = 0; i < ps.size(); i++) {
     if (ps[i] != '\\') {
+      // POSIX mode: a bare `!' in the prompt is the history number, `!!' a
+      // literal `!' (new-exp10.sub).
+      if (ps[i] == '!' && sh.opt_posix) {
+        if (i + 1 < ps.size() && ps[i + 1] == '!') { lit('!'); i++; }
+        else lits(std::to_string(history_base + history_length));
+        continue;
+      }
       out += ps[i];
+      prot += '-';
       continue;
     }
-    if (i + 1 >= ps.size()) { out += '\\'; break; }
+    if (i + 1 >= ps.size()) { lit('\\'); break; }
+    // \nnn: one to three octal digits decode to a byte (`\040' -> space).
+    if (ps[i + 1] >= '0' && ps[i + 1] <= '7') {
+      int v = 0, nd = 0;
+      while (nd < 3 && i + 1 < ps.size() && ps[i + 1] >= '0' && ps[i + 1] <= '7') {
+        v = v * 8 + (ps[i + 1] - '0');
+        i++;
+        nd++;
+      }
+      lit(static_cast<char>(v));
+      continue;
+    }
     char c = ps[++i];
     switch (c) {
       case 'u': {
@@ -191,6 +215,13 @@ std::string expand_prompt(Shell &sh, const std::string &ps) {
       case 'a': out += '\a'; break;
       case 'e': out += '\033'; break;
       case 's': {
+        // The SHELL's name, not $0: report the emulated personality (a script
+        // run shows `bash', matching $BASH_VERSION emulation; the native
+        // `gnash' personality IS the bash reimplementation); fall back to
+        // the invocation basename.
+        std::string pn = sh.get("GNASH_PERSONALITY");
+        if (pn == "gnash") pn = "bash";
+        if (!pn.empty()) { out += pn; break; }
         std::string a0 = sh.arg0;
         size_t s = a0.find_last_of('/');
         out += (s == std::string::npos) ? a0 : a0.substr(s + 1);
@@ -231,10 +262,35 @@ std::string expand_prompt(Shell &sh, const std::string &ps) {
         out += buf;
         break;
       }
-      case '[': case ']': break;  // non-printing markers
+      case '[': case ']':
+        // Non-printing markers: with line editing enabled they become the
+        // \001/\002 invisible delimiters readline expects; with editing off
+        // they vanish entirely (a literal \001 in the prompt still survives).
+        if (sh.opt_emacs || sh.opt_vi) out += (c == '[') ? '\001' : '\002';
+        break;
       case '\\': out += '\\'; break;
       default: out += '\\'; out += c; break;
     }
+    while (prot.size() < out.size()) prot += 'p';
+  }
+  // promptvars (default on): the decoded prompt undergoes parameter, command
+  // and arithmetic expansion.  Escape-produced characters and the prompt's
+  // own quotes/backslashes are literal, so protect them with backslashes and
+  // let the ordinary expander handle the $/` constructs.
+  auto pv = sh.shopt_opts.find("promptvars");
+  if (pv == sh.shopt_opts.end() || pv->second) {
+    std::string in2;
+    for (size_t k = 0; k < out.size(); k++) {
+      char ch = out[k];
+      bool p = k < prot.size() && prot[k] == 'p';
+      if ((p && (ch == '$' || ch == '`' || ch == '\\' || ch == '\'' || ch == '"')) ||
+          (!p && (ch == '\\' || ch == '\'' || ch == '"')) ||
+          (k == 0 && ch == '~')) {  // prompts never tilde-expand
+        in2 += '\\';
+      }
+      in2 += ch;
+    }
+    return Expander(sh).expand_no_split(in2);
   }
   return out;
 }
