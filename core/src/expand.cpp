@@ -1422,11 +1422,18 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
       // target's NAME), and empty/invalid targets keep the scalar path and
       // its diagnostics.
       if (body.size() > 1 && body[0] == '!' &&
-          (std::isalpha(static_cast<unsigned char>(body[1])) || body[1] == '_')) {
+          (std::isalpha(static_cast<unsigned char>(body[1])) || body[1] == '_' ||
+           std::isdigit(static_cast<unsigned char>(body[1])) || body[1] == '#')) {
         size_t q2 = 1;
-        while (q2 < body.size() &&
-               (std::isalnum(static_cast<unsigned char>(body[q2])) || body[q2] == '_'))
-          q2++;
+        if (body[1] == '#') {
+          q2 = 2;
+        } else if (std::isdigit(static_cast<unsigned char>(body[1]))) {
+          while (q2 < body.size() && std::isdigit(static_cast<unsigned char>(body[q2]))) q2++;
+        } else {
+          while (q2 < body.size() &&
+                 (std::isalnum(static_cast<unsigned char>(body[q2])) || body[q2] == '_'))
+            q2++;
+        }
         std::string iname2 = body.substr(1, q2 - 1);
         std::string rest2 = body.substr(q2);
         bool listing = rest2.size() == 1 && (rest2[0] == '@' || rest2[0] == '*');
@@ -1465,6 +1472,10 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
               target = expand_brace_body(*this, sh_, iname2 + "[" + sub2 + "]", false);
             }
             rest2 = tail2;
+          } else if (iname2 == "#" ||
+                     std::isdigit(static_cast<unsigned char>(iname2[0]))) {
+            bool iset = false;
+            target = param_value(iname2, iset, true);
           } else {
             target = sh_.get(iname2);
           }
@@ -1476,6 +1487,31 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
             ni2++;
           if (ni2 < target.size() && !(target[ni2] == '[' && target.back() == ']'))
             okname = false;
+          // Special-parameter and positional targets are valid too and expand
+          // with their full semantics (`foo=@; ${!foo}' is $@ with fields).
+          bool special_target = false;
+          if (!okname && !target.empty()) {
+            if (target == "@" || target == "*" || target == "#" || target == "?" ||
+                target == "$" || target == "!" || target == "-") {
+              okname = special_target = true;
+            } else {
+              bool alldig = true;
+              for (char tc : target)
+                if (!std::isdigit(static_cast<unsigned char>(tc))) { alldig = false; break; }
+              if (alldig) okname = special_target = true;
+            }
+          }
+          // Anything else is not a variable reference: bash's `VALUE: invalid
+          // variable name', aborting the command (`v=bad-var; ${!v}' must not
+          // parse as `${bad-var}').  An EMPTY value keeps the scalar path's
+          // `invalid indirect expansion' / defaulting-operator handling.
+          if (!okname && !target.empty()) {
+            std::fprintf(stderr, "%s%s: invalid variable name\n", sh_.err_prefix().c_str(),
+                         target.c_str());
+            sh_.arith_error = true;
+            i = end + 1;
+            return;
+          }
           if (okname) {
             // Under `set -u' an indirect expansion whose TARGET value is
             // unset reports the ORIGINAL `!name' text, not the target
@@ -1493,7 +1529,9 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
             // set, matching the direct forms.
             bool tset;
             size_t tbr = target.find('[');
-            if (rest2 == "@a" || rest2 == "@A") {
+            if (special_target) {
+              tset = true;  // $@/$*/positionals have their own -u semantics
+            } else if (rest2 == "@a" || rest2 == "@A") {
               tset = attr_op_set(sh_, tbr == std::string::npos ? target : target.substr(0, tbr));
             } else if (tbr != std::string::npos) {
               std::string tsub2 = target.substr(tbr + 1, target.size() - tbr - 2);
@@ -2706,7 +2744,17 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
       // so bash reports `INAME: invalid indirect expansion' and aborts the
       // command.  This fires even with a defaulting operator (`${!x-word}'): the
       // operator applies to the INDIRECTED parameter, not to the missing name.
+      // EXCEPTION: an unset POSITIONAL iname with a defaulting operator applies
+      // the operator instead (`${!9:-$z}' -> $z -- new-exp.tests).
       if (target.empty()) {
+        std::string irest = b.substr(q);
+        bool posit =
+            iname == "#" || (!iname.empty() && std::isdigit(static_cast<unsigned char>(iname[0])));
+        if (posit && !irest.empty()) {
+          size_t ro = (irest[0] == ':' && irest.size() > 1) ? 1 : 0;
+          if (irest[ro] == '-') return ex.expand_no_split(irest.substr(ro + 1));
+          if (irest[ro] == '+') return std::string();
+        }
         std::fprintf(stderr, "%s%s: invalid indirect expansion\n", sh.err_prefix().c_str(),
                      iname.c_str());
         sh.arith_error = true;
