@@ -441,6 +441,12 @@ class Shell {
   void reap_procsubs(size_t from = 0);
 
   // --- dynamic special variables ($RANDOM, $SECONDS, $LINENO) ------------
+  // Specials killed by `unset': bash removes their special properties
+  // permanently, even if the name is subsequently reset.
+  std::set<std::string> dead_specials;
+  // True for a computed variable whose specialness dies on `unset' and whose
+  // table entry (from declare/export) must not shadow the live dynamic value.
+  static bool killable_special(const std::string &name);
   unsigned long rand_seed = 0;   // RANDOM PRNG state
   bool rand_seeded = false;      // has RANDOM been seeded (explicitly or lazily)
   long long seconds_base = 0;    // epoch second that $SECONDS counts from

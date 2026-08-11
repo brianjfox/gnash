@@ -603,6 +603,15 @@ echo ok16'
   'f() { for a in "$@"; do echo "[$a]"; done; }; set "a b" c; unset foo; f "${foo-"$@" tail}"'
   'f() { for a in "$@"; do echo "[$a]"; done; }; unset foo; f "${foo-a"b  c"d}"; set --; f "${foo-x$@y}"'
   'f() { for a in "$@"; do echo "[$a]"; done; }; set -- "" x; unset foo; f "${foo-$@}"'
+  # Dynamic specials: declare/export attributes never shadow the live value
+  # (a seeded RANDOM sequence is deterministic), and unset kills the
+  # specialness permanently -- later assignments store ordinary values.
+  'RANDOM=42; echo "$RANDOM $RANDOM ${#RANDOM}"'
+  'declare -i RANDOM=42; echo "$RANDOM $RANDOM"'
+  'unset RANDOM; echo "[$RANDOM]"; RANDOM=7; echo "[$RANDOM]"'
+  'unset SECONDS; SECONDS=5; echo "[$SECONDS]"'
+  'unset LINENO; LINENO=999; echo "[$LINENO]"'
+  'unset EPOCHSECONDS BASHPID BASH_SUBSHELL HISTCMD; echo "[$EPOCHSECONDS][$BASHPID][$BASH_SUBSHELL][$HISTCMD]"'
 )
 
 fails=0
