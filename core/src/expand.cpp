@@ -2827,18 +2827,46 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
     // independent of whether the enclosing ${...} is double-quoted -- so single
     // quotes, double quotes, and a backslash before any character are all
     // processed (`\'' -> `'', `'ab'' -> `ab'), matching bash.
+    std::string repmask;
     std::string rep = slash == std::string::npos
                           ? std::string()
-                          : ex.expand_no_split(body2.substr(slash + 1));
+                          : ex.expand_no_split_masked(body2.substr(slash + 1), repmask);
+    // shopt patsub_replacement (default on): an UNQUOTED, unescaped `&' in the
+    // replacement -- literal in the word (mask '2') or arriving from an
+    // unquoted expansion ('0'/'4') -- expands to the matched text; `\&' is a
+    // literal `&' and `\\' a literal backslash.  Quoted portions are inert
+    // (the word's own `\&'/"&" already reach here quote-removed, mask '1').
+    // bash enables the machinery only when the expanded replacement contains
+    // an `&' at all (quoted or not); a replacement without one keeps its
+    // backslashes untouched.
+    auto ps = sh.shopt_opts.find("patsub_replacement");
+    bool amp_active = ps != sh.shopt_opts.end() && ps->second &&
+                      rep.find('&') != std::string::npos;
+    auto apply_rep = [&](const std::string &matched) {
+      if (!amp_active) return rep;
+      std::string r;
+      for (size_t k = 0; k < rep.size(); k++) {
+        if (repmask[k] != '1' && rep[k] == '\\' && k + 1 < rep.size() &&
+            (rep[k + 1] == '&' || rep[k + 1] == '\\')) {
+          r += rep[k + 1];
+          k++;
+        } else if (repmask[k] != '1' && rep[k] == '&') {
+          r += matched;
+        } else {
+          r += rep[k];
+        }
+      }
+      return r;
+    };
     // `#' matches the longest prefix, `%' the longest suffix; one replacement.
     if (anchor == '#') {
       for (size_t j = val.size() + 1; j-- > 0;)
-        if (pat_match(pat, val.substr(0, j))) return rep + val.substr(j);
+        if (pat_match(pat, val.substr(0, j))) return apply_rep(val.substr(0, j)) + val.substr(j);
       return val;
     }
     if (anchor == '%') {
       for (size_t j = 0; j <= val.size(); j++)
-        if (pat_match(pat, val.substr(j))) return val.substr(0, j) + rep;
+        if (pat_match(pat, val.substr(j))) return val.substr(0, j) + apply_rep(val.substr(j));
       return val;
     }
     if (pat.empty()) return val;
@@ -2851,7 +2879,7 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
         if (pat_match(pat, val.substr(k, j - k))) { best = j; break; }
       }
       if (best != std::string::npos && (!did || global)) {
-        result += rep;
+        result += apply_rep(val.substr(k, best - k));
         k = (best == k) ? k + 1 : best;  // avoid infinite loop on empty match
         did = true;
         if (!global) {
@@ -3790,6 +3818,29 @@ std::string Expander::expand_regex(const std::string &text) {
     r += c;
   }
   return r;
+}
+
+std::string Expander::expand_no_split_masked(const std::string &text, std::string &mask_out) {
+  std::string src = expand_leading_tilde(sh_, text);
+  std::string out, mask;
+  bool saved_split = splitting_;
+  splitting_ = false;  // result is flattened, so $* joins with IFS[0]
+  process(src, out, mask, false);
+  splitting_ = saved_split;
+  // Drop internal markers, keeping the mask aligned: field separators become
+  // spaces (splittable-marked), quoted-nulls vanish.
+  std::string joined, jmask;
+  joined.reserve(out.size());
+  for (size_t k = 0; k < out.size(); k++) {
+    if (k < mask.size() && mask[k] == MMARK) {
+      if (out[k] == FIELD_SEP) { joined += ' '; jmask += '0'; }
+      continue;
+    }
+    joined += out[k];
+    jmask += k < mask.size() ? mask[k] : '2';
+  }
+  mask_out = jmask;
+  return joined;
 }
 
 std::string Expander::expand_no_split(const std::string &text, bool do_glob, bool do_procsub) {

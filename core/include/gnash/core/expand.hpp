@@ -30,6 +30,11 @@ class Expander {
   std::string expand_no_split(const std::string &text, bool do_glob = false,
                               bool do_procsub = true);
 
+  // expand_no_split, but also returning the per-char quoting mask (aligned
+  // with the result).  Used by ${var/pat/rep}: patsub_replacement needs to
+  // know which `&'/`\&' of the replacement were quoted.
+  std::string expand_no_split_masked(const std::string &text, std::string &mask_out);
+
   // Expand a word that will be used as a match pattern (case patterns,
   // [[ == ]] right sides): quoted characters are backslash-escaped in the
   // result so the matcher treats them literally, while unquoted glob
