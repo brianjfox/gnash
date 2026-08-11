@@ -657,6 +657,9 @@ echo ok16'
   'set -u; declare -ia foo=(); echo "[${foo@a}]" 2>&1 | sed -E "s/.*line [0-9]+: //"'
   'set -u; declare -ia foo=(); bar=foo; echo "[${!bar@a}]" 2>&1 | sed -E "s/.*line [0-9]+: //"'
   'set -u; arr=(zero one); name="arr[@]"; f(){ echo n=$#; }; f "${!name}"'
+  # ${@@A}/${*@A} reconstruct the positional parameters as a set command.
+  'set -- ab "cd ef" "" gh; printf "<%s> " "${@@A}"; echo; printf "<%s> " "${*@A}"; echo'
+  'set --; printf "<%s> " "${@@A}"; echo'
 )
 
 fails=0
