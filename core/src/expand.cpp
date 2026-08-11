@@ -3441,6 +3441,9 @@ std::vector<std::string> Expander::glob_field(const std::string &field, const st
   // `shopt -u globskipdots' lets `.' and `..' be matched.
   auto gsd = sh_.shopt_opts.find("globskipdots");
   if (gsd != sh_.shopt_opts.end() && !gsd->second) gflags |= GX_NODOTSKIP;
+  // `shopt -s nocaseglob': match filenames case-insensitively.
+  auto ncg = sh_.shopt_opts.find("nocaseglob");
+  if (ncg != sh_.shopt_opts.end() && ncg->second) gflags |= GX_NOCASE;
   // A non-null $GLOBIGNORE also enables dot matching, then filters out any
   // result matching one of its colon-separated patterns.
   std::string globignore = sh_.get("GLOBIGNORE");
