@@ -1655,7 +1655,9 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
                 // and vanish, and nothing word-splits -- the heredoc rules.
                 process("\"" + w2 + "\"", out, mask, false, false);
               } else {
-                // Unquoted default word: a leading `~' tilde-expands (bash).
+                // Unquoted default word: a leading `~' tilde-expands (bash),
+                // and <(cmd)/>(cmd) undergo process substitution like any
+                // ordinary word (`cat ${foo:-<(echo a)}' -- new-exp1.sub).
                 // While the word expands, an unquoted @-splat is space-JOINED
                 // (splittable) rather than emitted as hard fields -- bash's
                 // acknowledged inconsistency (posixexp4.sub): under IFS=: the
@@ -1665,7 +1667,9 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
                 size_t m0 = mask.size();
                 bool sw0 = subst_word_;
                 subst_word_ = true;
-                process(expand_leading_tilde(sh_, word), out, mask, false, false);
+                std::string tw = expand_leading_tilde(sh_, word);
+                extract_procsubs(tw);
+                process(tw, out, mask, false, false);
                 subst_word_ = sw0;
                 // The replacement is EXPANSION OUTPUT: its unquoted literal
                 // text IFS-splits like a parameter's value (`${IFS+foo 'b c'
