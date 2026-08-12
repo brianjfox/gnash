@@ -1383,9 +1383,11 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
       if (body.size() > 2 && body[0] == '!' &&
           (body.back() == '@' || body.back() == '*')) {
         std::string pre = body.substr(1, body.size() - 2);
-        bool ident = std::isalpha(static_cast<unsigned char>(pre[0])) || pre[0] == '_';
-        for (size_t k = 1; ident && k < pre.size(); k++)
-          if (!std::isalnum(static_cast<unsigned char>(pre[k])) && pre[k] != '_') ident = false;
+        // Only the FIRST prefix character must be a name-start (bash's
+        // `legal_variable_starter(name[1])'); the rest is unrestricted, so
+        // `${!a.*}' lists the (possibly empty) set of names beginning `a.'.
+        bool ident = !pre.empty() &&
+                     (std::isalpha(static_cast<unsigned char>(pre[0])) || pre[0] == '_');
         if (ident) {
           std::vector<std::string> names;
           for (const auto &kv : sh_.vars) {
@@ -2619,11 +2621,13 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
     size_t sp = b.find_first_of("*@", 1);
     if (sp != std::string::npos && (bracket == std::string::npos || sp < bracket)) {
       std::string pre = b.substr(1, sp - 1);
-      // A valid identifier prefix starts with a letter or `_' (not a digit).
+      // bash (subst.c: `legal_variable_starter(name[1])') only requires the
+      // FIRST prefix character to be a name-start (letter or `_'); the rest is
+      // unrestricted, so `${!a.*}' / `${!a b*}' list nothing rather than
+      // erroring.  A digit/special/blank first char (`${!1*}', `${!@*}',
+      // `${! *}') still falls through to the bad-substitution report.
       bool ident = !pre.empty() &&
                    (std::isalpha(static_cast<unsigned char>(pre[0])) || pre[0] == '_');
-      for (char c : pre)
-        if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '_')) ident = false;
       // An `@' that is NOT the final character introduces an operator on the
       // INDIRECTED parameter (`${!var@Q}' -> `${VAR2@Q}'), not a malformed
       // listing -- leave it to the indirection path below.  A bare trailing
