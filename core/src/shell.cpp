@@ -1947,7 +1947,13 @@ void Shell::import_env_functions() {
     // Parse `name value' (value is "() {...}").  Accept only a lone function
     // definition -- any trailing command (a Shellshock payload) is rejected.
     ParseResult r = parse(name + " " + f.second);
-    if (r.ok && r.command && dynamic_cast<const FunctionDef *>(r.command.get())) {
+    // The definition must name exactly this function.  A payload that hides
+    // the intended name -- whitespace in the env name (`BASH_FUNC_<NL>foo%%'),
+    // or a `#'-commented first line that leaves a different `foo () {...}'
+    // behind (`BASH_FUNC_#badname%%') -- parses to a function with the WRONG
+    // name and is refused, as bash's importer refuses it.
+    if (r.ok && r.command && dynamic_cast<const FunctionDef *>(r.command.get()) &&
+        static_cast<const FunctionDef *>(r.command.get())->name == name) {
       const auto *fd = static_cast<const FunctionDef *>(r.command.get());
       functions[fd->name] = fd->body.get();
       func_lineno_base[fd->name] = 0;
@@ -2356,6 +2362,11 @@ int Shell::run_script_lines(const std::string &text) {
   int st = last_status;
 
   auto flush = [&]() {
+    // A continuation on the input's last line already consumed the final
+    // newline: the parser must see plain end-of-input there, as bash's
+    // reader does (`X() { (a)>\' + newline at end of file reports
+    // `unexpected end of file from `{'' on the line after, not `newline').
+    bool ate_final_nl = cont_bslash;
     cont_bslash = false;
     first_line_saved = false;
     in_heredoc = false;
@@ -2374,7 +2385,7 @@ int Shell::run_script_lines(const std::string &text) {
       // where bash keeps it literal (`sh -c 'echo escape\'' -- quote.tests).
       size_t tb = 0;
       while (tb < pending.size() && pending[pending.size() - 1 - tb] == '\\') tb++;
-      if (pending.back() != '\n' && tb % 2 == 0) pending += '\n';
+      if (pending.back() != '\n' && tb % 2 == 0 && !ate_final_nl) pending += '\n';
     }
     st = run_string(pending, cont_lines.empty() ? nullptr : &cont_lines);
     lineno_base = 0;
