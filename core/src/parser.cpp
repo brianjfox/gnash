@@ -839,12 +839,13 @@ struct Parser {
         fail("unexpected EOF while looking for matching `)'");
         return nullptr;
       }
-      if (is(Tok::Semi) || is(Tok::Newline)) {
-        okexpr = false;  // not an arithmetic expression -> nested subshell
-        break;
-      }
       if (is(Tok::Rparen) && depth == 0) {
-        if (peek(1).type == Tok::Rparen) {
+        // bash (parse_arith_cmd): the inner `(' is arithmetic only when its
+        // matching `)' is IMMEDIATELY followed by `)' with no blank between.
+        // `(( x ))' is arithmetic (even `(( a; b ))', which becomes a runtime
+        // arithmetic error); `(( echo hi ) )' and `((echo hi); (echo bye))'
+        // are nested subshells because a blank or another token intervenes.
+        if (peek(1).type == Tok::Rparen && !peek(1).preceded_by_blank) {
           // Keep a blank before `))' so an arithmetic error diagnostic
           // reproduces bash's raw expression (`((: 7++ : ...', token `"+ "');
           // the single-line printer trims it back off for display.
@@ -855,6 +856,15 @@ struct Parser {
         }
         okexpr = false;
         break;
+      }
+      // A `;' or newline is ordinary content of the arithmetic string (bash's
+      // parse_matched_pair only balances parens); the arithmetic evaluator
+      // rejects it later.  `(( a; b ))' therefore stays arithmetic.
+      if (is(Tok::Semi) || is(Tok::Newline)) {
+        if (cur().preceded_by_blank) expr += ' ';
+        expr += is(Tok::Newline) ? '\n' : ';';
+        advance();
+        continue;
       }
       if (is(Tok::Lparen)) {
         depth++;
