@@ -93,6 +93,11 @@ std::string canonical_word_text(const std::string &w);
 std::string named_function_string(const std::string &name, const Command *body,
                                   bool posix = false);  // full canonical rendering
 
+// bash's print_comsub rendering: a command list with each `;' kept inline and
+// each newline advancing a line, matching the text bash re-executes for a
+// funsub/command substitution (so its runtime $LINENO tracks bash's).
+std::string comsub_reprint_string(const Command *cmd);
+
 struct SimpleCommand : Command {
   std::vector<Word> words;  // assignment prefix + argv, in order
   void print(std::string &out) const override;

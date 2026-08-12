@@ -247,6 +247,7 @@ std::string canonical_word(const std::string &w);
 struct MPrinter {
   std::string out;
   bool pretty = false;  // --pretty-print (top level): `;' lists join inline
+  bool comsub = false;  // print_comsub: preserve `;' (inline) vs newline connectors
   std::vector<const Redirect *> pending_heredocs;
   bool last_was_heredoc = false;   // a simple command ended with a here-document
   bool compound_heredoc = false;   // a for/while/if body ended with a here-document
@@ -323,6 +324,13 @@ struct MPrinter {
         if (last_was_heredoc) { out += '\n'; nl(I); }  // simple heredoc: blank line
         else if (compound_heredoc) { nl(I); }          // compound heredoc: no `;', no blank
         else if (last_was_amp) { nl(I); }
+        // print_comsub preserves the original separator: a `;' stays on the
+        // same line (`; '), a newline advances (`\n').  This is what makes a
+        // funsub body's executed line numbers match bash (comsub2.tests).
+        else if (comsub) {
+          if (cn->conn == Connector::Newline) { out += '\n'; ind(I); }
+          else { out += "; "; }
+        }
         // Outside a function definition bash joins a `;'/newline list inline
         // (`done <<< a; echo done;'); inside one, each command starts its own
         // line (print_cmd.c: the_printed_command's inside_function_def test).
@@ -880,6 +888,20 @@ std::string pretty_print_string(const Command *c) {
   p.inline_cmd(c, 0);
   p.flush_heredocs();
   p.out += "\n\n";
+  return p.out;
+}
+
+// bash's parse_comsub renders the parsed body with print_comsub and executes
+// THAT reprinted text, so a funsub/command-substitution body's runtime line
+// numbers follow the canonical rendering (each `;' inline, each newline a new
+// line) rather than the physical source layout.  Reproducing it here lets a
+// funsub's $LINENO and error lines match bash (comsub2.tests).
+std::string comsub_reprint_string(const Command *c) {
+  if (c == nullptr) return std::string();
+  MPrinter p;
+  p.comsub = true;
+  p.list(c, 0);
+  p.flush_heredocs();
   return p.out;
 }
 
