@@ -545,10 +545,38 @@ struct Parser {
         pos = q;
         auto n = mk(K::Num); n->src = numstart; return n;
       }
-      char *end = nullptr;
-      long long v = wrap_strtoll(s.c_str() + pos, &end);  // 0x/0 prefixes honored
-      pos = static_cast<size_t>(end - s.c_str());
-      auto n = mk(K::Num); n->num = v; n->src = numstart; return n;
+      // Plain integer literal (bash's strlong, non-strict): read the WHOLE
+      // VALID_NUMCHAR run as one token, then map each character to a digit and
+      // check it against the base.  A digit value >= base is bash's `value too
+      // great for base' (`0xg', `08', `0x1p2', `1e3'); an empty run after a
+      // `0x'/`0X' prefix, or a lone `0', is the value 0 (`$((0x))' -> 0).
+      size_t q = pos;
+      unsigned nbase = 10;
+      if (s[q] == '0') {
+        q++;
+        if (q < s.size() && (s[q] == 'x' || s[q] == 'X')) { nbase = 16; q++; }
+        else nbase = 8;
+      }
+      unsigned long long uv = 0;
+      bool too_great = false;
+      for (; q < s.size(); q++) {
+        unsigned char c = static_cast<unsigned char>(s[q]);
+        if (!(std::isalnum(c) || c == '_' || c == '@')) break;
+        unsigned d;
+        if (c >= '0' && c <= '9') d = c - '0';
+        else if (c >= 'a' && c <= 'z') d = c - 'a' + 10;
+        else if (c >= 'A' && c <= 'Z') d = c - 'A' + (nbase <= 36 ? 10 : 36);
+        else if (c == '@') d = 62;
+        else d = 63;  // '_'
+        if (d >= nbase) too_great = true;  // keep consuming the whole token
+        uv = uv * nbase + d;
+      }
+      pos = q;
+      if (too_great) {
+        note(arith_err::kTooGreat, numstart);
+        auto n = mk(K::Num); n->src = numstart; return n;
+      }
+      auto n = mk(K::Num); n->num = static_cast<long long>(uv); n->src = numstart; return n;
     }
     size_t start = pos;
     auto ref = mk(K::Var);
@@ -664,11 +692,17 @@ static std::string format_arith_err(const std::string &expr, const std::string &
   std::string token = err_pos <= expr.size() ? expr.substr(err_pos) : std::string();
   if (msg == arith_err::kBadBase || msg == arith_err::kBadConst ||
       msg == arith_err::kBadNumber || msg == arith_err::kTooGreat) {
-    auto rtrim = [](std::string &s) {
-      while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) s.pop_back();
-    };
-    rtrim(display);
-    rtrim(token);
+    // A malformed NUMBER names just its own token (bash's readtok reads the
+    // `[alnum#@_]' run), not the rest of the expression: `0xg+1' -> `0xg',
+    // `2#5+1' -> `2#5'.  bash also NUL-terminates the token while reading it,
+    // so the displayed EXPRESSION is truncated at the token's END -- `08*2'
+    // shows `08' but `3+08' shows the whole `3+08'.
+    size_t e = 0;
+    while (e < token.size() && (std::isalnum(static_cast<unsigned char>(token[e])) ||
+                                token[e] == '#' || token[e] == '@' || token[e] == '_'))
+      e++;
+    token.resize(e);
+    if (err_pos + e >= lead) display = expr.substr(lead, err_pos + e - lead);
   }
   return display + ": " + msg + " (error token is \"" + token + "\")";
 }
