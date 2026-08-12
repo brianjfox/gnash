@@ -1242,17 +1242,19 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
     size_t end = sh_.aliases_active() ? comsub_span_end_aliased(t, i + 1, sh_.aliases)
                                       : comsub_span_end(t, i + 1);
     end = (end == std::string::npos) ? scan_balanced(t, i + 1, '(', ')') : end - 1;
-    if (end == std::string::npos && !heredoc) {
-      // An unterminated `$(' reaching expansion (a quoted one inside a
-      // ${...} operand, where single quotes are literal) is bash's
-      // command-substitution parse error, and the command aborts
-      // (braces.tests).
+    if (end == std::string::npos) {
+      // An unterminated `$(' reaching expansion is bash's command-substitution
+      // parse error, and the command aborts.  It happens for a quoted `$('
+      // inside a ${...} operand (single quotes are literal there -- braces.tests)
+      // and for one in a here-document body (comsub-eof6.sub).
       // bash's prefix names the failing context and the line where the
-      // substitution's text ran out (its own last line).
+      // substitution's text ran out (its own last line).  A here-document body
+      // is already positioned at its own first line, so it needs one less than
+      // the ${...}-operand form.
       int nl = static_cast<int>(std::count(t.begin() + static_cast<long>(i), t.end(), '\n'));
       std::fprintf(stderr, "%s: command substitution: line %d: "
                            "unexpected EOF while looking for matching `)'\n",
-                   sh_.shell_name.c_str(), sh_.cur_lineno + nl + 2);
+                   sh_.shell_name.c_str(), sh_.cur_lineno + nl + (heredoc ? 1 : 2));
       sh_.arith_error = true;
       i = t.size();
       return;
