@@ -316,6 +316,19 @@ static wchar_t mb_decode(const std::string &s, size_t i, size_t &len) {
   return wc;
 }
 
+// Whether the byte at s[i] does NOT begin a valid multibyte character in the
+// current locale (an invalid or incomplete sequence).  mb_decode() collapses
+// such a byte to a 1-byte result indistinguishable from an ASCII character, so
+// a caller that must fall back to byte-wise behaviour (as bash does for an
+// invalid multibyte pattern) has to ask separately.
+static bool mb_seq_invalid(const std::string &s, size_t i) {
+  if (MB_CUR_MAX <= 1) return false;
+  wchar_t wc = 0;
+  std::mbstate_t st{};
+  size_t r = std::mbrtowc(&wc, s.data() + i, s.size() - i, &st);
+  return r == static_cast<size_t>(-1) || r == static_cast<size_t>(-2);
+}
+
 // Append the character wc to out in the current locale's encoding (a single
 // First character of s (its whole multibyte sequence), or "" if s is empty --
 // used as the `$*'/`${a[*]}' join separator (bash joins with IFS's first
@@ -3152,7 +3165,15 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
         if (c == '?') { n++; i++; continue; }
         if (c == '\\') {  // escaped (possibly multibyte) character: one char
           i++;
-          if (i < p.size()) { size_t len = 1; mb_decode(p, i, len); i += len; }
+          if (i < p.size()) {
+            // An invalid multibyte byte forces bash's byte-wise fallback: the
+            // fixed-length probe (character boundaries only) would never test
+            // it, so abandon the fast path.
+            if (mb_seq_invalid(p, i)) return std::string::npos;
+            size_t len = 1;
+            mb_decode(p, i, len);
+            i += len;
+          }
           n++;
           continue;
         }
@@ -3187,6 +3208,11 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
           i++;
           continue;
         }
+        // A literal character.  An invalid multibyte byte makes bash match the
+        // whole pattern byte-wise; a character-boundary fixed-length probe
+        // would never land inside a valid multibyte character, so give up the
+        // fast path and let the general (byte-wise) loop run (issue #645).
+        if (mb_seq_invalid(p, i)) return std::string::npos;
         size_t len = 1;
         mb_decode(p, i, len);
         i += len;
