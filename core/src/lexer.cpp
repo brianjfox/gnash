@@ -197,6 +197,7 @@ struct Lexer {
     bool after_pipe = false;      // the previous separator was `|' (a pattern
                                   // alternative: `in|esac)' keeps its case open)
     std::vector<int> case_stack;  // paren depths of open `case' bodies
+    int do_depth = 0;             // open `do'...`done' bodies (loops)
     std::string word;             // current unquoted identifier word
     bool word_plain = true;       // word is only identifier chars (a keyword?)
     bool saw_word = false;        // any word content since the last delimiter
@@ -251,6 +252,18 @@ struct Lexer {
           // leaving the grammar to report the real error.  A pattern
           // ALTERNATIVE (`in|esac)') stays open.
           case_stack.pop_back();
+        else if (cmd_pos && word_plain && !after_pipe && word == "do")
+          do_depth++;
+        else if (cmd_pos && word_plain && !after_pipe && word == "done") {
+          // A `done' with no open `do' aborts bash's recursive comsub parse
+          // where it stands; the effect is that an enclosing `case' no longer
+          // guards its pattern `)'s, so the next `)' closes the substitution
+          // and the inner parse reports `near unexpected token `done''
+          // (`: $(case x in x) ;; x) done)').  A matched `done' just closes
+          // its loop; a pattern alternative (`else|done)') is not a keyword.
+          if (do_depth > 0) do_depth--;
+          else if (!case_stack.empty()) case_stack.pop_back();
+        }
         // Most words consume the command slot; a few reopen command position.
         cmd_pos = word_plain && (word == "then" || word == "do" ||
                                  word == "else" || word == "elif");

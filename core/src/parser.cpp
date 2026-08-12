@@ -502,8 +502,10 @@ struct Parser {
     if (reserved("function")) return parse_function();
     if (reserved("coproc")) return parse_coproc();
 
-    // Reserved terminators here mean a misplaced keyword.
-    if (reserved_in({"then", "do", "done", "fi", "elif", "else", "esac", "}"})) {
+    // Reserved terminators here mean a misplaced keyword.  `in' can never
+    // start a command either (bash rejects `in', `time in', `in() ...'; an
+    // assignment prefix `x=5 in' runs it, but that word is parse_simple's).
+    if (reserved_in({"then", "do", "done", "fi", "elif", "else", "esac", "}", "in"})) {
       fail(is(Tok::Eof) ? std::string("unexpected end of file")
                         : std::string("near unexpected token `") + tok_to_text(cur()) + "'");
       return nullptr;
