@@ -66,7 +66,8 @@ std::string join(const std::vector<std::string> &v, size_t from) {
 // `\nnn' form without a leading 0: printf's %b interprets it as octal, but echo
 // (even with -e / xpg_echo) does NOT -- it accepts only `\0nnn', leaving a bare
 // `\1'..'\7' literal (bash echo.def vs printf.def).
-std::string decode_b(const std::string &s, bool &stop, bool bare_octal = true) {
+std::string decode_b(const std::string &s, bool &stop, bool bare_octal = true,
+                     Shell *warn_sh = nullptr) {
   std::string out;
   stop = false;
   for (size_t i = 0; i < s.size(); i++) {
@@ -89,10 +90,17 @@ std::string decode_b(const std::string &s, bool &stop, bool bare_octal = true) {
           v = v * 16 + (h <= '9' ? h - '0' : (std::tolower(h) - 'a' + 10));
           k++;
         }
-        // `\x' with no hex digit is not an escape for `echo -e' -- bash emits
-        // the literal `\x' rather than a NUL byte (the octal `\NNN' path is
-        // likewise disabled for echo via bare_octal).
-        if (k == 0 && !bare_octal) { out += "\\x"; break; }
+        // `\x' with no hex digit is not an escape -- bash emits the literal
+        // `\x' rather than a NUL byte, for both `echo -e' and printf `%b'.
+        // printf additionally warns (`missing hex digit for \x'); echo does
+        // not, which is what the warn_sh handle distinguishes.
+        if (k == 0) {
+          out += "\\x";
+          if (warn_sh)
+            std::fprintf(stderr, "%sprintf: missing hex digit for \\x\n",
+                         warn_sh->err_prefix().c_str());
+          break;
+        }
         out += static_cast<char>(v);
         break;
       }
@@ -530,12 +538,29 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
             : fmt.substr(i, flagsend - i) + std::string(1, conv);
         if (conv == '%') {
           out += '%';
-        } else if (conv == 'q') {
-          out += shell_quote(next());
+        } else if (conv == 'q' || conv == 'Q') {
+          // Shell-quote the argument.  A precision truncates the argument (in
+          // bytes) BEFORE quoting; the field width then applies to the quoted
+          // result like `%s' (`%.3Q hello' -> `hel', `%10Q hi' -> `        hi').
+          std::string a = next();
+          size_t sp = i + 1;
+          std::string fw;  // flags + field width
+          while (sp < j && std::strchr("-+ #0", fmt[sp])) fw += fmt[sp++];
+          while (sp < j && std::isdigit(static_cast<unsigned char>(fmt[sp]))) fw += fmt[sp++];
+          if (sp < j && fmt[sp] == '.') {
+            sp++;
+            long pr = 0;
+            while (sp < j && std::isdigit(static_cast<unsigned char>(fmt[sp])))
+              pr = pr * 10 + (fmt[sp++] - '0');
+            if (static_cast<size_t>(pr) < a.size()) a = a.substr(0, pr);
+          }
+          std::string q = shell_quote(a);
+          std::string sspec = "%" + fw + "s";
+          if (!append_formatted(out, sspec, q.c_str())) oversize = true;
           consumed_any = true;
         } else if (conv == 'b') {
           bool stop = false;
-          out += decode_b(next(), stop);
+          out += decode_b(next(), stop, /*bare_octal=*/true, &sh);
           consumed_any = true;
           if (stop) { argi = argv.size(); i = fmt.size(); break; }
         } else if (conv == 'l' && j + 1 < fmt.size() &&
@@ -613,7 +638,7 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
           if (!append_formatted(out, sp, v)) oversize = true;
           consumed_any = true;
         } else if (conv == 'f' || conv == 'F' || conv == 'g' || conv == 'G' ||
-                   conv == 'e' || conv == 'E') {
+                   conv == 'e' || conv == 'E' || conv == 'a' || conv == 'A') {
           if (!append_formatted(out, spec, std::strtod(next().c_str(), nullptr))) oversize = true;
           consumed_any = true;
         } else {
