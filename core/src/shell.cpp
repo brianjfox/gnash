@@ -2735,8 +2735,23 @@ std::string Shell::run_and_capture_inproc(const std::string &script, int *status
   // echo after; }' still runs the echo under `set -e' (comsub22.sub).
   bool saved_errexit = opt_errexit;
   if (opt_errexit && !opt_posix && !shopt_opts["inherit_errexit"]) opt_errexit = false;
+  // bash's parse_comsub parses the body (without expanding aliases) and
+  // re-executes its print_comsub RENDERING, so runtime line numbers follow the
+  // canonical layout (`;' inline, newline advancing) rather than the physical
+  // source -- a command inside a for/while/if body reports bash's line
+  // (comsub2.tests).  Reprint here, then run_string re-parses (with aliases)
+  // and executes, exactly as bash does.  Fall back to the raw body if it does
+  // not parse cleanly on this alias-free pass.
+  std::string body_to_run = script;
+  {
+    ParseResult rp = parse(script, opt_posix);
+    if (rp.ok && rp.command) {
+      std::string reprinted = comsub_reprint_string(rp.command.get());
+      if (!reprinted.empty()) body_to_run = reprinted;
+    }
+  }
   push_scope();
-  int st = run_string(script);
+  int st = run_string(body_to_run);
   pop_scope();
   opt_errexit = saved_errexit;
   if (returning) { st = exit_status; returning = false; }
