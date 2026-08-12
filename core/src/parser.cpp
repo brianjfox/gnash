@@ -293,7 +293,14 @@ struct Parser {
     }
     advance();
     if (cur().type != Tok::Word) {
-      fail("expected redirection target");
+      // bash names the offending token (`echo >' -> `newline'); end of input
+      // reads as the virtual terminating newline, unless a backslash splice
+      // consumed it and the grammar's EOF-from-open report wins (`X() {
+      // (a)>\' + newline at end of file).
+      if (is(Tok::Eof) && eof_from_open()) return false;
+      std::string tk =
+          (is(Tok::Newline) || is(Tok::Eof)) ? "newline" : tok_to_text(cur());
+      fail("near unexpected token `" + tk + "'");
       return false;
     }
     r.target = Word{cur().text, cur().quoted ? W_QUOTED : 0};

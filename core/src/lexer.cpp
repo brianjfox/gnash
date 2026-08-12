@@ -91,6 +91,7 @@ struct Lexer {
   // there, which is what the Eof token already carries.
   int unterm_line = 0;
   bool heredoc_eof = false;        // here-doc body delimited by end of input
+  bool trailing_bslash_eof = false;  // input ended on an unquoted backslash
   std::string heredoc_eof_delim;
   int heredoc_eof_line = 0;
   bool heredoc_eof_quoted = false;  // that here-doc's delimiter was quoted
@@ -490,6 +491,12 @@ struct Lexer {
     bool wasdol = false;
     bool funsub = pos + 1 < n &&
                   (std::isspace(static_cast<unsigned char>(in[pos + 1])) || in[pos + 1] == '|');
+    // In a funsub the closing `}' is the reserved word, valid only in command
+    // position: after a terminator (`;' `&' newline) or a compound's own `}'.
+    // `${ echo x }' has no terminator before the brace, so the `}' is an
+    // argument to echo and bash reads on to end of input (`unexpected EOF
+    // while looking for matching `}'').  `cmd_term' tracks that position.
+    bool cmd_term = true;
     do {
       char c = in[pos];
       if (c == '{') {
@@ -497,18 +504,43 @@ struct Lexer {
         w += c;
         pos++;
         wasdol = false;
+        cmd_term = true;
       } else if (c == '}') {
+        if (funsub && depth == 1 && !cmd_term) {
+          // Not a close: a literal `}' argument inside the command list.
+          w += c;
+          pos++;
+          wasdol = false;
+          cmd_term = false;
+          continue;
+        }
         depth--;
         w += c;
         pos++;
         wasdol = false;
+        cmd_term = true;  // a compound just closed -- command position again
+      } else if ((c == ';' || c == '&' || c == '\n' || c == '(' || c == ')') &&
+                 funsub) {
+        // A command terminator, or a subshell's `(' / `)', leaves the scan in
+        // command position -- so a following `}' closes the funsub even with
+        // no explicit `;' (`${ ( shift) }', comsub2's parse_comsub note).
+        w += c;
+        pos++;
+        wasdol = false;
+        cmd_term = true;
+      } else if (std::isspace(static_cast<unsigned char>(c)) && funsub) {
+        w += c;
+        pos++;
+        wasdol = false;  // blank keeps the current command position
       } else if (c == '$' && pos + 1 < n && in[pos + 1] == '\'') {
+        cmd_term = false;
         scan_dollar_single(w);  // $'...' inside ${...}: backslash-aware
         wasdol = false;
       } else if (c == '$' && pos + 1 < n && in[pos + 1] == '(') {
         // A nested command/arith substitution `$( ... )' / `$(( ... ))' is
         // scanned by paren balancing so any `{'/`}' inside it are consumed as
         // its content rather than counted against this ${...}'s brace depth.
+        cmd_term = false;
         w += c;
         pos++;  // the `$'
         scan_paren(w);
@@ -517,27 +549,40 @@ struct Lexer {
         // POSIX mode: inside a DOUBLE-QUOTED ${...} a single quote is an
         // ordinary character, not a quote (`"${IFS+'}'z}"` ends at the first
         // `}`), matching bash's parse_matched_pair posix handling.
+        cmd_term = false;
         if (posix && in_dq) { w += c; pos++; }
         else scan_single(w);
         wasdol = false;
       } else if (c == '"') {
+        cmd_term = false;
         scan_double(w);
         wasdol = false;
       } else if (c == '`') {
+        cmd_term = false;
         scan_backtick(w);
         wasdol = false;
       } else if (c == '\\') {
+        cmd_term = false;
         w += c;
         pos++;
         if (pos < n) w += in[pos++];
         wasdol = false;
       } else {
+        cmd_term = false;
         wasdol = (c == '$');
         w += c;
         pos++;
       }
     } while (pos < n && depth > 0);
-    if (depth > 0) { unterminated = true; if (!unterm_close) { unterm_close = '}'; unterm_line = startln; } }
+    if (depth > 0) {
+      unterminated = true;
+      if (!unterm_close) {
+        unterm_close = '}';
+        // A funsub reads a command list, so bash reports where input ran out
+        // (like `$('), not the opening line; leave open_line 0 to signal that.
+        unterm_line = funsub ? 0 : startln;
+      }
+    }
   }
   void scan_square(std::string &w) {  // pos at '[' of $[...] arithmetic
     int depth = 0;
@@ -740,6 +785,11 @@ struct Lexer {
           pos += 2;
           continue;
         }
+        // A backslash ending the input stays literal in the word, but bash's
+        // reader first splices it with the (virtual) terminating newline and
+        // then synthesizes another, so an EOF error reports one line further
+        // (`eval 'X() { (a)>\'' blames eval_line+2, not +1).
+        if (pos + 1 >= n) trailing_bslash_eof = true;
         w += c;
         pos++;
         if (pos < n) w += in[pos++];
@@ -1032,8 +1082,10 @@ struct Lexer {
     eof.start = n;
     eof.end = n;
     // bash parses input with a guaranteed trailing newline, so EOF falls on the
-    // line after the last content -- add one when the input has no final newline.
-    eof.line = line_for(n) + ((n > 0 && in[n - 1] != '\n') ? 1 : 0);
+    // line after the last content -- add one when the input has no final newline,
+    // and one more when a trailing backslash consumed that virtual newline.
+    eof.line = line_for(n) + ((n > 0 && in[n - 1] != '\n') ? 1 : 0) +
+               (trailing_bslash_eof ? 1 : 0);
     eof.lex_error = unterminated;
     eof.lex_close = unterm_close;
     eof.lex_open_line = unterm_line;
