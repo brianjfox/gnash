@@ -547,6 +547,13 @@ int main(int argc, char **argv) {
     bool interactive = force_interactive || isatty(STDIN_FILENO);
     if (interactive) {
       sh.interactive = true;
+      // Interactive shells edit in emacs mode by default, as bash does (and as
+      // readline's rl_editing_mode already assumes): record it so `set -o'
+      // reports it and the prompt emits its invisible \[ \] markers.  An
+      // explicit vi choice already made (`-o vi', `+o emacs', $SHELLOPTS) is
+      // left alone, and this runs before the startup files so a `set -o vi'
+      // there still overrides.
+      if (!sh.opt_vi) sh.opt_emacs = true;
       sh.init_job_control(true);
       // Default prompts (set before startup files so an rc file can override):
       // user@host:cwd followed by `$' (or `#' for root), and `> ' for
