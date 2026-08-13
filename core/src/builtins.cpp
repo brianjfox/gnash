@@ -1751,6 +1751,20 @@ int bi_export(Shell &sh, const std::vector<std::string> &argv) {
         auto it = sh.vars.find(sh.deref(a.substr(0, eq)));
         if (it != sh.vars.end()) it->second.exported = false;
       }
+    } else if (!sh.is_zsh() &&
+               (a.empty() ||
+                !(std::isalpha(static_cast<unsigned char>(a[0])) || a[0] == '_') ||
+                a.find_first_not_of("abcdefghijklmnopqrstuvwxyz"
+                                    "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") !=
+                    std::string::npos)) {
+      // A bare NAME must be a valid identifier: `export non-identifier' is an
+      // error with status 1, each bad name reported (errors11.sub).  POSIX:
+      // fatal at the first bad name (`command' shields).
+      std::fprintf(stderr, "%sexport: `%s': not a valid identifier\n",
+                   sh.err_prefix().c_str(), a.c_str());
+      st = 1;
+      sh.posix_special_builtin_error(1);
+      if (sh.exiting) return 1;
     } else {
       // `export ref' where ref resolves to an array element is rejected like
       // `export a[5]': the resolved `var[0]' is not a valid identifier (bash).
@@ -3192,6 +3206,10 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
       std::fprintf(stderr, "%s%s: `%s': not a valid identifier\n", sh.err_prefix().c_str(),
                    argv[0].c_str(), tgt.c_str());
       ret = 1;
+      // POSIX: fatal at the FIRST bad name -- later names are not reported
+      // (errors11.sub); `command' shields via posix_builtin_shield.
+      sh.posix_special_builtin_error(1);
+      if (sh.exiting) return 1;
       continue;
     }
     // A nameref cannot itself be an array element (`declare -n a[128]'): bash
@@ -3215,6 +3233,11 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
       std::fprintf(stderr, "%s%s: `%s': not a valid identifier\n",
                    sh.err_prefix().c_str(), argv[0].c_str(), a.c_str());
       ret = 1;
+      // POSIX readonly/export: fatal at the FIRST bad name (errors11.sub).
+      if (argv[0] == "readonly" || argv[0] == "export") {
+        sh.posix_special_builtin_error(1);
+        if (sh.exiting) return 1;
+      }
       continue;
     }
     bool scalar_pre = eq != std::string::npos && !arraylit0 && !subscript0 && !nameref;
@@ -6837,7 +6860,13 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
   else if (cmd == "pushd") st = bi_pushd(sh, argv);
   else if (cmd == "popd") st = bi_popd(sh, argv);
   else if (cmd == "mapfile" || cmd == "readarray") st = bi_mapfile(sh, argv);
-  else if (cmd == "export") st = bi_export(sh, argv);
+  else if (cmd == "export") {
+    st = bi_export(sh, argv);
+    // POSIX: a failing export (invalid identifier, assignment error) is a
+    // special-builtin error, fatal to a non-interactive shell unless run via
+    // `command' (errors11.sub).
+    if (st != 0) sh.posix_special_builtin_error(st);
+  }
   else if (cmd == "unset") st = bi_unset(sh, argv);
   else if (cmd == "set") st = bi_set(sh, argv);
   // `personality' is always available; `emulate' is its zsh-mode alias.
@@ -7233,6 +7262,8 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
     st = bi_declare(sh, argv, sh.in_function(), false);
   } else if (cmd == "readonly") {
     st = bi_declare(sh, argv, false, true);
+    // POSIX: like export, a failing readonly is fatal unless `command'-run.
+    if (st != 0) sh.posix_special_builtin_error(st);
   } else if (cmd == "let") {
     st = bi_let(sh, argv);
   } else if (cmd == "type") {
