@@ -577,9 +577,10 @@ parse_array_elems(Shell &sh, Expander &ex, const std::string &name, bool integer
         // errors on `xy^?z', not `x^Ay^?z'.  An ASSOCIATIVE key keeps its
         // bytes intact (exp8.sub tests both).
         if (!assoc)
-          for (size_t cb = 0; cb < sub.size();)
+          for (size_t cb = 0; cb < sub.size();) {
             if (sub[cb] == '\001') sub.erase(cb, 1), cb++;
             else cb++;
+          }
         // The value of a `[sub]=value' element is an assignment RHS, so a `~'
         // tilde-expands at the start and after each unquoted `:' (bash); a bare
         // word element, handled below, only gets leading-tilde expansion.
