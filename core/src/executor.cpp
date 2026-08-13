@@ -2719,8 +2719,10 @@ int Executor::run_funcdef(const FunctionDef *c) {
 
 int Executor::run_cond(const CondCommand *c) {
   // A conditional is a leaf command, not a wrapper: like a simple command it
-  // sets $BASH_COMMAND and, failing, fires the ERR trap.
+  // sets $BASH_COMMAND, fires the DEBUG trap (errors9.sub) and, failing, the
+  // ERR trap.
   sh_.bash_command = to_string(c);
+  if (!debug_trap_for(c, c->line)) return sh_.last_status;
   // Minimal [[ ]] evaluation delegated to the test builtin semantics via a
   // small dispatch here.  For now, evaluate simple `a OP b`, unary, and !/&&/||
   // by reusing the expression string tokens is complex; approximate with the
