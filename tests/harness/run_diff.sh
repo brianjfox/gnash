@@ -671,6 +671,15 @@ echo ok16'
   # error, special-parameter targets keep $@ fields, digit inames re-dispatch.
   'z=ZV; echo "[${!9:-$z}]"; echo "[${!9-$z}]"; unset x; echo "[${!x-$z}]" 2>&1 | sed -E "s/.*line [0-9]+: //"'
   'v=bad-var; echo "${!v}" 2>&1 | sed -E "s/.*line [0-9]+: //"'
+  # An EMPTY subscript in any expansion form is a bad substitution (#653);
+  # a whitespace-only subscript still arithmetics to index 0.
+  'arr=(a b); echo "[${arr[]}]" 2>&1 | sed -E "s/.*line [0-9]+: //"'
+  'arr=(a b); echo "[${#arr[]}]" 2>&1 | sed -E "s/.*line [0-9]+: //"'
+  'arr=(a b); echo "[${arr[]:-def}]" 2>&1 | sed -E "s/.*line [0-9]+: //"'
+  'arr=(a b); echo "[${!arr[]}]" 2>&1 | sed -E "s/.*line [0-9]+: //"'
+  'declare -A aa=([k]=v); echo "[${aa[]}]" 2>&1 | sed -E "s/.*line [0-9]+: //"'
+  'unset q; echo "[${q[]}]" 2>&1 | sed -E "s/.*line [0-9]+: //"'
+  'arr=(a b); echo "[${arr[ ]}]"'
   'foo=@; set -- a "b c" d; f(){ echo n=$#; for a; do echo "[$a]"; done; }; f ${!foo}; f "${!foo}"'
   'arr_1=(x "y z"); set -- "arr_1[@]"; a=("${!1}"); printf "<%s>" "${a[@]}"; echo'
   # Patsub parsing: anchors and // are exclusive, the // delimiter scan skips

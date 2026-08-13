@@ -2717,6 +2717,14 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
       if (bd == 0) {
         std::string sub = b.substr(q + 1, close - q - 2);
         std::string after = b.substr(close);
+        // An empty subscript on the indirection target (`${!arr[]}') is a
+        // bad substitution naming the whole body, as bash (issue #653).
+        if (sub.empty() && !sh.is_zsh()) {
+          std::fprintf(stderr, "%s${%s}: bad substitution\n", sh.err_prefix().c_str(),
+                       body.c_str());
+          sh.arith_error = true;
+          return std::string();
+        }
         bool splat = sub == "@" || sub == "*";
         if (!(splat && after.empty())) {
           // The subscripted value: a splat space-joins EVERY element (so an
@@ -2877,6 +2885,17 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
       p = b.size();
     }
     have_sub = true;
+  }
+
+  // bash rejects an EMPTY subscript in parameter expansion outright:
+  // `${arr[]}', `${#arr[]}' and `${arr[]:-x}' are all `bad substitution',
+  // for associative arrays too, rather than reading index 0 (issue #653).
+  // The assignment form (`arr[]=x') has its own check in the executor.
+  if (have_sub && sub.empty() && !sh.is_zsh()) {
+    std::fprintf(stderr, "%s${%s}: bad substitution\n", sh.err_prefix().c_str(),
+                 body.c_str());
+    sh.arith_error = true;
+    return std::string();
   }
 
   // Text left after a `name[sub]' reference must be an operator: bash rejects
