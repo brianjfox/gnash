@@ -2919,12 +2919,19 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
     return std::string();
   }
 
-  // Text left after a `name[sub]' reference must be an operator: bash rejects
-  // `${a[0]junk}' and `${a[0] + b[y]}' as `bad substitution' rather than
-  // silently reading the element and dropping the rest (issue #459).
-  if (have_sub && p < b.size() && !sh.is_zsh() &&
-      !std::strchr(":-+=?#%/^,@", b[p])) {
-    std::fprintf(stderr, "%s${%s}: bad substitution\n", sh.err_prefix().c_str(), b.c_str());
+  // Text left after ANY parameter reference must be an operator: bash rejects
+  // `${a[0]junk}' (issue #459), `${x!y}', `${$NO_SUCH_VAR}', `${-3}', `${1x}'
+  // and `${#x%}' alike as `bad substitution' rather than silently expanding
+  // the name and dropping the rest (issue #658).  `~' is the (undocumented)
+  // case-invert operator, so `${a[0]~}' / `${x~}' stay valid.  The whole-body
+  // text is bash's diagnostic for the plain forms; the subscript form keeps
+  // naming the rewritten `name[sub]' body.
+  // (`!' is exempt: `${!@}'/`${!*}' indirect through the positional list and
+  // any malformed `!' form was already rejected by the listing validation.)
+  if (!name.empty() && name != "!" && p < b.size() && !sh.is_zsh() &&
+      !std::strchr(":-+=?#%/^,@~", b[p])) {
+    std::fprintf(stderr, "%s${%s}: bad substitution\n", sh.err_prefix().c_str(),
+                 have_sub ? b.c_str() : body.c_str());
     sh.arith_error = true;
     return std::string();
   }
