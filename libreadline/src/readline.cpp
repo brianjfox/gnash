@@ -258,6 +258,10 @@ extern "C" int rl_get_previous_history(int count, int key) {
 extern "C" int rl_get_next_history(int count, int key) {
   if (count < 0) return rl_get_previous_history(-count, key);
   if (count == 0) return 0;
+  // Already on the line being edited (not navigated up into history): there is
+  // no next entry, so ding and leave the line untouched -- as bash does --
+  // rather than replacing it with the (empty) saved line.
+  if (where_history() == history_length) return rl_ding();
   HIST_ENTRY *e = nullptr;
   while (count-- > 0) {
     HIST_ENTRY *t = next_history();
@@ -267,7 +271,7 @@ extern "C" int rl_get_next_history(int count, int key) {
   if (e)
     put_line(e->line);
   else
-    put_line(saved_line.c_str());
+    put_line(saved_line.c_str());  // stepped past the last entry: restore the typed line
   return 0;
 }
 
