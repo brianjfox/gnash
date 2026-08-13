@@ -3112,7 +3112,16 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
             bool ok = true;
             w = std::to_string(eval_arith(sh, w, &ok));
           }
+          // A refused store (readonly array; array_set printed the message)
+          // is an assignment ERROR: bash abandons the command list, and in
+          // posix mode it is fatal (errors7.sub).  A bad subscript already
+          // aborted inside array_set itself.
+          bool ro = it != sh.vars.end() && it->second.readonly;
           sh.array_set(name, sub, w);
+          if (ro) {
+            sh.arith_error = true;
+            return std::string();
+          }
           return sh.array_get(name, sub);
         }
         // A scalar assignment honors the variable's attributes exactly like a
@@ -3124,7 +3133,13 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
           bool iok = true;
           w = std::to_string(eval_arith(sh, w, &iok));
         }
-        sh.set(name, w);
+        // A refused assignment (readonly; sh.set printed the message) is an
+        // assignment ERROR: bash abandons the command list (`readonly v;
+        // : ${v:=val}; echo x' never echoes), fatal in posix (errors7.sub).
+        if (!sh.set(name, w)) {
+          sh.arith_error = true;
+          return std::string();
+        }
         std::string stored;
         return sh.get_if_set(name, stored) ? stored : w;
       }
