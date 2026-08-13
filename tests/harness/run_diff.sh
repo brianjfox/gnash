@@ -710,6 +710,24 @@ E'
   # exits 127, not the usual DISCARD status 1.
   'v=abc; echo ${v@Z}; echo A'
   'v=abc; echo ${v@}; echo A'
+  # A {var} dup redirect needs a plain NUMERIC fd word: anything else is an
+  # ambiguous redirect naming the VARIABLE, which stays untouched (#656).
+  'exec {v}<&foo; echo st=$? v=${v-unset}'
+  'exec {v}>&foo; echo st=$?'
+  'exec {v}<&0junk; echo st=$?'
+  'exec {v}<&-1; echo st=$?'
+  'exec {v}<&+1; echo st=$?'
+  'unset x; exec {v}<&$x; echo st=$?'
+  'v=5; exec {v}<&foo; echo v=$v'
+  'exec {v}<&0 && echo dup-ok'
+  'exec {v}<&9999999999999999999999999; echo st=$?'
+  # A redirection failure on a simple command runs the ERR trap and is fatal
+  # under set -e, like a failing command; `!` inverts it to success.
+  'set -e; exec {v}<&foo; echo unreached'
+  'set -e; echo hi > /nonexistent-dir/f; echo unreached'
+  'trap "echo E" ERR; echo hi > /nonexistent-dir/f; echo after'
+  '! echo hi > /nonexistent-dir/f; echo st=$?'
+  'set -e; if echo hi > /nonexistent-dir/f; then echo T; else echo F; fi; echo reached'
   # A fatal expansion error in a loop/select word list or condition is the
   # construct'\''s own status 1, not the last body status.
   'arr=(a b); while echo ${arr[]}; do break; done; echo A'
