@@ -3411,7 +3411,11 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
       std::string bodytxt = name + (have_sub ? "[" + sub + "]" : "") + rest;
       std::fprintf(stderr, "%s${%s}: bad substitution\n", sh.err_prefix().c_str(),
                    bodytxt.c_str());
-      sh.arith_error = true;
+      // Unlike the other bad substitutions (DISCARD, status 1), an invalid
+      // transform operator is fatal like `${x?}': bash exits a
+      // non-interactive shell with 127 (issue #655).
+      sh.exiting = true;
+      sh.exit_status = 127;
       return std::string();
     }
     char t = rest[1];

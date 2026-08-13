@@ -706,6 +706,10 @@ E'
   'cat <<E; echo A
 x$((1+))x
 E'
+  # An invalid @ transform is FATAL like ${x?}: a non-interactive shell
+  # exits 127, not the usual DISCARD status 1.
+  'v=abc; echo ${v@Z}; echo A'
+  'v=abc; echo ${v@}; echo A'
   # A fatal expansion error in a loop/select word list or condition is the
   # construct'\''s own status 1, not the last body status.
   'arr=(a b); while echo ${arr[]}; do break; done; echo A'
