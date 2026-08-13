@@ -294,16 +294,37 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved,
         // `{v}<&N-' moves: duplicate N then close it.
         bool move = w.size() > 1 && w.back() == '-';
         if (move) w.pop_back();
-        int src = std::atoi(w.c_str());
-        int f = fcntl(src, F_DUPFD_CLOEXEC, 10);
-        if (f < 0) {
-          // The diagnostic names the UNEXPANDED word (`$fd: Bad file
-          // descriptor'), as bash does.
-          std::fprintf(stderr, "%s%s: %s\n", sh.err_prefix().c_str(), r.target.text.c_str(),
-                       std::strerror(errno));
+        // The word must be a plain fd number.  bash rejects anything else --
+        // `foo', `0junk', `-1', `+1', an empty expansion -- as an ambiguous
+        // redirect naming the VARIABLE, which stays untouched (issue #656).
+        // (For a quoted-empty or set-variable non-move target bash's own
+        // report prints an uninitialized number; the ambiguous/converted
+        // reports here cover those deterministically.)
+        if (w.empty() || w.find_first_not_of("0123456789") != std::string::npos) {
+          std::fprintf(stderr, "%s%s: ambiguous redirect\n", sh.err_prefix().c_str(),
+                       r.fd_var.c_str());
           return false;
         }
-        if (move) close(src);
+        errno = 0;
+        long long src = std::strtoll(w.c_str(), nullptr, 10);
+        bool inrange = errno != ERANGE && src <= INT_MAX;
+        int f = -1;
+        if (inrange) f = fcntl(static_cast<int>(src), F_DUPFD_CLOEXEC, 10);
+        else errno = EBADF;  // a number no descriptor can have
+        if (f < 0) {
+          // bash reports a failed dup on the {var} form twice: the generic
+          // `cannot duplicate fd' line (no line number), then the CONVERTED
+          // number -- `010' reports as `10' -- or the raw digits when the
+          // value does not fit an intmax.
+          int e = errno;
+          std::string shown = inrange ? std::to_string(src) : w;
+          std::fprintf(stderr, "%s: redirection error: cannot duplicate fd: %s\n",
+                       sh.shell_name.c_str(), std::strerror(e));
+          std::fprintf(stderr, "%s%s: %s\n", sh.err_prefix().c_str(), shown.c_str(),
+                       std::strerror(e));
+          return false;
+        }
+        if (move) close(static_cast<int>(src));
         return store_var(f);
       }
       case RedirOp::HereDoc:
