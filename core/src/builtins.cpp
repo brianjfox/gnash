@@ -1751,6 +1751,20 @@ int bi_export(Shell &sh, const std::vector<std::string> &argv) {
         auto it = sh.vars.find(sh.deref(a.substr(0, eq)));
         if (it != sh.vars.end()) it->second.exported = false;
       }
+    } else if (!sh.is_zsh() &&
+               (a.empty() ||
+                !(std::isalpha(static_cast<unsigned char>(a[0])) || a[0] == '_') ||
+                a.find_first_not_of("abcdefghijklmnopqrstuvwxyz"
+                                    "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") !=
+                    std::string::npos)) {
+      // A bare NAME must be a valid identifier: `export non-identifier' is an
+      // error with status 1, each bad name reported (errors11.sub).  POSIX:
+      // fatal at the first bad name (`command' shields).
+      std::fprintf(stderr, "%sexport: `%s': not a valid identifier\n",
+                   sh.err_prefix().c_str(), a.c_str());
+      st = 1;
+      sh.posix_special_builtin_error(1);
+      if (sh.exiting) return 1;
     } else {
       // `export ref' where ref resolves to an array element is rejected like
       // `export a[5]': the resolved `var[0]' is not a valid identifier (bash).
@@ -3192,6 +3206,10 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
       std::fprintf(stderr, "%s%s: `%s': not a valid identifier\n", sh.err_prefix().c_str(),
                    argv[0].c_str(), tgt.c_str());
       ret = 1;
+      // POSIX: fatal at the FIRST bad name -- later names are not reported
+      // (errors11.sub); `command' shields via posix_builtin_shield.
+      sh.posix_special_builtin_error(1);
+      if (sh.exiting) return 1;
       continue;
     }
     // A nameref cannot itself be an array element (`declare -n a[128]'): bash
@@ -3215,6 +3233,11 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
       std::fprintf(stderr, "%s%s: `%s': not a valid identifier\n",
                    sh.err_prefix().c_str(), argv[0].c_str(), a.c_str());
       ret = 1;
+      // POSIX readonly/export: fatal at the FIRST bad name (errors11.sub).
+      if (argv[0] == "readonly" || argv[0] == "export") {
+        sh.posix_special_builtin_error(1);
+        if (sh.exiting) return 1;
+      }
       continue;
     }
     bool scalar_pre = eq != std::string::npos && !arraylit0 && !subscript0 && !nameref;
@@ -6034,6 +6057,11 @@ int bi_history(Shell &sh, const std::vector<std::string> &argv) {
   }
   if (rd || nw) { read_history((rest.empty() ? hist_file(sh) : rest[0]).c_str()); return 0; }
 
+  if (rest.size() > 1) {
+    // The listing form takes at most one count (`history 10 42' errors).
+    std::fprintf(stderr, "%shistory: too many arguments\n", sh.err_prefix().c_str());
+    return 2;
+  }
   if (!rest.empty()) {
     char *e = nullptr;
     long v = std::strtol(rest[0].c_str(), &e, 10);
@@ -6832,7 +6860,13 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
   else if (cmd == "pushd") st = bi_pushd(sh, argv);
   else if (cmd == "popd") st = bi_popd(sh, argv);
   else if (cmd == "mapfile" || cmd == "readarray") st = bi_mapfile(sh, argv);
-  else if (cmd == "export") st = bi_export(sh, argv);
+  else if (cmd == "export") {
+    st = bi_export(sh, argv);
+    // POSIX: a failing export (invalid identifier, assignment error) is a
+    // special-builtin error, fatal to a non-interactive shell unless run via
+    // `command' (errors11.sub).
+    if (st != 0) sh.posix_special_builtin_error(st);
+  }
   else if (cmd == "unset") st = bi_unset(sh, argv);
   else if (cmd == "set") st = bi_set(sh, argv);
   // `personality' is always available; `emulate' is its zsh-mode alias.
@@ -6849,8 +6883,11 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
       // treat it as a no-op success rather than a numeric-argument error.
       st = 0;
     } else if (argv.size() - ai > 1) {
+      // Extra arguments: status 2, and bash DISCARDS the rest of the command
+      // list (the reader continues at the next line) in both modes.
       std::fprintf(stderr, "%sshift: too many arguments\n", sh.err_prefix().c_str());
-      st = 1;
+      st = 2;
+      sh.arith_abort = true;
     } else {
       long n = 1;
       std::string a;
@@ -6865,6 +6902,7 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
         std::fprintf(stderr, "%sshift: %s: numeric argument required\n",
                      sh.err_prefix().c_str(), a.c_str());
         st = 2;
+        sh.posix_special_builtin_error(st);  // posix: fatal (errors10.sub)
       } else if (n == 0) {
         st = 0;
       } else if (n < 0) {
@@ -6874,8 +6912,9 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
                      sh.err_prefix().c_str(), a.c_str());
         st = 1;
       } else if (n > static_cast<long>(sh.positional.size())) {
-        // Too large: silent failure unless `shopt -s shift_verbose'.
-        if (sh.shopt_opts["shift_verbose"])
+        // Too large: silent failure unless `shopt -s shift_verbose' -- which
+        // POSIX mode implies (`command shift 12' reports in errors8.sub).
+        if (sh.shopt_opts["shift_verbose"] || sh.opt_posix)
           std::fprintf(stderr, "%sshift: %s: shift count out of range\n",
                        sh.err_prefix().c_str(), a.c_str());
         st = 1;
@@ -6890,7 +6929,13 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
     const std::string a = ci < argv.size() ? argv[ci] : std::string();
     char *end = nullptr;
     long v = a.empty() ? sh.last_status : std::strtol(a.c_str(), &end, 10);
-    if (!a.empty() && (end == a.c_str() || *end != '\0')) {
+    if (argv.size() - ci > 1) {
+      // Extra arguments: the shell does NOT exit; status 2 and the rest of
+      // the command list is discarded (both modes -- errors.tests).
+      std::fprintf(stderr, "%sexit: too many arguments\n", sh.err_prefix().c_str());
+      st = 2;
+      sh.arith_abort = true;
+    } else if (!a.empty() && (end == a.c_str() || *end != '\0')) {
       // A non-numeric argument is no longer a fatal error: bash reports it
       // and the shell CONTINUES with status 2 (posix mode still treats the
       // special-builtin error as fatal).
@@ -6907,9 +6952,43 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
       if (sh.in_function()) { sh.exit_src_frames = sh.src_frames; sh.have_exit_frames = true; }
     }
   } else if (cmd == "return") {
-    // `return' is only meaningful in a function or a sourced script; elsewhere
-    // it is an error and must not unwind the current input (bash).
-    if (!sh.in_function() && sh.source_depth == 0) {
+    // Argument validation runs FIRST (bash's get_exitstat): extra arguments
+    // and a non-numeric status are reported even at top level, before the
+    // can-only-return check.
+    size_t ri = 1;
+    if (ri < argv.size() && argv[ri] == "--") ri++;
+    char *rend = nullptr;
+    long rv = 0;
+    bool badnum = false;
+    if (ri < argv.size()) {
+      rv = std::strtol(argv[ri].c_str(), &rend, 10);
+      badnum = argv[ri].empty() || rend == argv[ri].c_str() || *rend != '\0';
+    }
+    if (argv.size() - ri > 1) {
+      // Extra arguments: status 2, rest of the command list discarded (the
+      // function is NOT returned from -- errors.tests, both modes).
+      std::fprintf(stderr, "%sreturn: too many arguments\n", sh.err_prefix().c_str());
+      st = 2;
+      sh.arith_abort = true;
+    } else if (badnum) {
+      // Non-numeric: report, then RETURN with status 2 in default mode (the
+      // function body after it never runs); at top level the can-only-return
+      // report still follows.  POSIX: fatal (errors10.sub).
+      std::fprintf(stderr, "%sreturn: %s: numeric argument required\n",
+                   sh.err_prefix().c_str(), argv[ri].c_str());
+      st = 2;
+      sh.posix_special_builtin_error(st);
+      if (sh.in_function() || sh.source_depth > 0) {
+        sh.returning = true;
+        sh.exit_status = 2;
+      } else if (!sh.exiting) {
+        std::fprintf(stderr,
+                     "%sreturn: can only `return' from a function or sourced script\n",
+                     sh.err_prefix().c_str());
+      }
+    } else if (!sh.in_function() && sh.source_depth == 0) {
+      // `return' is only meaningful in a function or a sourced script;
+      // elsewhere it is an error and must not unwind the current input (bash).
       std::fprintf(stderr, "%sreturn: can only `return' from a function or sourced script\n",
                    sh.err_prefix().c_str());
       st = 1;
@@ -6923,14 +7002,40 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
       int bare = (sh.trap_ret_depth >= 0 && sh.nest_depth() == sh.trap_ret_depth)
                      ? sh.trap_saved_status
                      : sh.last_status;
-      sh.exit_status = argv.size() > 1 ? (std::atoi(argv[1].c_str()) & 0xff) : bare;
+      sh.exit_status = ri < argv.size() ? (static_cast<int>(rv) & 0xff) : bare;
       st = sh.exit_status;
     }
   } else if (cmd == "break" || cmd == "continue") {
+    // Argument validation runs before the loop-level check (bash): extra
+    // arguments discard the rest of the list with status 2, and a
+    // non-numeric count is FATAL to any non-interactive shell in BOTH modes
+    // (`break x' ends the script -- errors4.sub, errors10.sub).
+    size_t bi = 1;
+    if (bi < argv.size() && argv[bi] == "--") bi++;
+    char *bend = nullptr;
+    bool bbad = false;
+    if (bi < argv.size()) {
+      std::strtol(argv[bi].c_str(), &bend, 10);
+      bbad = argv[bi].empty() || bend == argv[bi].c_str() || *bend != '\0';
+    }
+    if (argv.size() - bi > 1) {
+      std::fprintf(stderr, "%s%s: too many arguments\n", sh.err_prefix().c_str(),
+                   cmd.c_str());
+      st = 2;
+      sh.arith_abort = true;
+    } else if (bbad) {
+      std::fprintf(stderr, "%s%s: %s: numeric argument required\n",
+                   sh.err_prefix().c_str(), cmd.c_str(), argv[bi].c_str());
+      st = 2;
+      if (!sh.interactive) {
+        sh.exiting = true;
+        sh.exit_status = 2;
+      }
+    }
     // Outside any loop bash prints a diagnostic (suppressed under `set -o
     // posix') and succeeds without unwinding, rather than silently swallowing
     // the rest of the input.  Mirrors builtins/break.def check_loop_level().
-    if (sh.loop_depth == 0) {
+    else if (sh.loop_depth == 0) {
       if (!sh.opt_posix)
         std::fprintf(stderr, "%s%s: only meaningful in a `for', `while', or `until' loop\n",
                      sh.err_prefix().c_str(), cmd.c_str());
@@ -7001,7 +7106,8 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
                      cmd.c_str(), argv[ai].c_str());
         std::fprintf(stderr, "%s: usage: %s [-p path] filename [arguments]\n",
                      cmd.c_str(), cmd.c_str());
-        return 2;
+        if (status) *status = 2;
+        return true;
       }
       break;
     }
@@ -7010,13 +7116,15 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
                    cmd.c_str());
       std::fprintf(stderr, "%s: usage: %s [-p path] filename [arguments]\n",
                    cmd.c_str(), cmd.c_str());
-      return 2;
+      if (status) *status = 2;
+      return true;
     }
     const std::string &fname = argv[ai];
     if (sh.opt_restricted && fname.find('/') != std::string::npos) {
       std::fprintf(stderr, "%s%s: %s: restricted\n", sh.err_prefix().c_str(),
                    cmd.c_str(), fname.c_str());
-      return 1;
+      if (status) *status = 1;
+      return true;
     }
     // Resolve the file: a name with a slash is used as-is; otherwise search the
     // `-p' path, or $PATH when the `sourcepath' shopt is on, falling back to the
@@ -7157,6 +7265,8 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
     st = bi_declare(sh, argv, sh.in_function(), false);
   } else if (cmd == "readonly") {
     st = bi_declare(sh, argv, false, true);
+    // POSIX: like export, a failing readonly is fatal unless `command'-run.
+    if (st != 0) sh.posix_special_builtin_error(st);
   } else if (cmd == "let") {
     st = bi_let(sh, argv);
   } else if (cmd == "type") {
@@ -7502,7 +7612,8 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
         else if (o[k] == 'p') {  // default PATH; disallowed under restricted
           if (sh.opt_restricted) {
             std::fprintf(stderr, "%scommand: -p: restricted\n", sh.err_prefix().c_str());
-            return 2;
+            if (status) *status = 2;
+            return true;
           }
         }
         else { bad = true; badopt = std::string("-") + o[k]; break; }
@@ -7554,7 +7665,8 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
   } else if (cmd == "exec") {
     if (sh.opt_restricted) {
       std::fprintf(stderr, "%sexec: restricted\n", sh.err_prefix().c_str());
-      return 2;
+      if (status) *status = 2;
+      return true;
     }
     // Options: -a NAME (argv[0] for the command), -c (empty environment),
     // -l (login: prefix argv[0] with '-').

@@ -1573,6 +1573,13 @@ int Executor::run_simple(const SimpleCommand *c) {
     restore_fds(saved);
     if (assign_failed) {
       sh_.arith_abort = true;
+      // In POSIX mode an assignment error is FATAL to a non-interactive
+      // shell: `-o posix ./errors4.sub' ends at its first readonly
+      // assignment rather than carrying on at the next line.
+      if (sh_.opt_posix && !sh_.interactive) {
+        sh_.exiting = true;
+        sh_.exit_status = 1;
+      }
       return (sh_.last_status = 1);
     }
     int st = sh_.cmdsub_ran ? sh_.last_cmdsub_status : 0;
@@ -1643,7 +1650,48 @@ int Executor::run_simple(const SimpleCommand *c) {
         sh_.exit_status = st;
       }
     }
+    // POSIX: a redirection error on a SPECIAL builtin exits a non-interactive
+    // shell -- even on the LHS of `||' (errors3.sub) -- unless shielded by a
+    // `command' prefix.  Other commands just fail.
+    if (st != 0 && sh_.opt_posix && !sh_.interactive && !skip_functions &&
+        !argv.empty() && is_special_builtin_name(argv[0])) {
+      sh_.exiting = true;
+      sh_.exit_status = st;
+    }
     return st;
+  }
+
+  // POSIX: a temporary-assignment error on a command WITH a command word
+  // suppresses the command (status 1; bash follows ksh93 rather than exiting)
+  // -- except for a SPECIAL builtin, where it is fatal to a non-interactive
+  // shell (errors7.sub).  Outside posix mode the command still runs, as bash
+  // (apply_temp prints the diagnostic there).  A nameref target is shadowed
+  // for the command's duration and never fails.
+  if (sh_.opt_posix && !assigns.empty()) {
+    bool temp_fail = first_bad_assign != std::string::npos;  // already reported
+    for (size_t ai = 0; ai < assigns.size() && !temp_fail; ai++) {
+      auto nit = sh_.vars.find(assigns[ai].first);
+      if (nit != sh_.vars.end() && nit->second.nameref) continue;
+      auto it = sh_.vars.find(sh_.deref(assigns[ai].first));
+      if (it != sh_.vars.end() && it->second.readonly) {
+        std::fprintf(stderr, "%s%s: readonly variable\n", sh_.err_prefix().c_str(),
+                     assigns[ai].first.c_str());
+        temp_fail = true;
+      }
+    }
+    if (temp_fail) {
+      restore_fds(saved);
+      int st = (c->flags & CMD_INVERT_RETURN) ? 0 : 1;
+      sh_.last_status = st;
+      // The suppression also DISCARDS the rest of the list (the reader
+      // continues at the next line -- `px=8 echo word; echo x' skips both).
+      sh_.arith_abort = true;
+      if (!sh_.interactive && !skip_functions && is_special_builtin_name(argv[0])) {
+        sh_.exiting = true;
+        sh_.exit_status = 1;
+      }
+      return st;
+    }
   }
 
   // Temporary assignments: set as shell vars for the command and *exported* so
@@ -2212,6 +2260,10 @@ int Executor::run_subshell(const Subshell *c) {
     if (dynamic_cast<const SimpleCommand *>(c->body.get())) sh_.can_exec_replace = true;
     Executor ex(sh_);
     int s = ex.run(c->body.get());
+    // A DISCARD unwind (arith_abort) that reaches the end of a subshell exits
+    // it with plain failure: bash's `(exit 42 43)' subshell reports 1 even
+    // though $? on the line after the discard would read 2.
+    if (sh_.arith_abort) s = 1;
     sh_.can_exec_replace = false;
     // Run the subshell's own EXIT trap, if it installed one, with $? set to the
     // status of the last command (bash semantics).
@@ -2390,8 +2442,14 @@ int Executor::run_for(const ForCommand *c) {
         vit->second.value = item;
     } else if (!sh_.set(c->var, item)) {
       // A readonly loop variable aborts the whole loop with status 1, after
-      // ONE diagnostic (bash: `for VAR in 1 2 3' with VAR readonly).
+      // ONE diagnostic (bash: `for VAR in 1 2 3' with VAR readonly).  In
+      // POSIX mode the assignment error is FATAL to a non-interactive shell
+      // (errors4.sub).
       st = 1;
+      if (sh_.opt_posix && !sh_.interactive) {
+        sh_.exiting = true;
+        sh_.exit_status = 1;
+      }
       break;
     }
     st = run(c->body.get());
@@ -2541,7 +2599,16 @@ int Executor::run_select(const ForCommand *c) {
     if (!have_sel) break;
     // Bind NAME (write-through a nameref, honoring readonly); a failed bind
     // aborts the select without running the body, as bash does.
-    if (!sh_.set(c->var, selection)) { st = 1; break; }
+    if (!sh_.set(c->var, selection)) {
+      // Like `for': a readonly select variable fails the loop, and in POSIX
+      // mode the assignment error is fatal to a non-interactive shell.
+      st = 1;
+      if (sh_.opt_posix && !sh_.interactive) {
+        sh_.exiting = true;
+        sh_.exit_status = 1;
+      }
+      break;
+    }
     st = run(c->body.get());
     if (sh_.break_count) { sh_.break_count--; break; }
     if (sh_.continue_count) { if (--sh_.continue_count) break; }
@@ -2652,8 +2719,10 @@ int Executor::run_funcdef(const FunctionDef *c) {
 
 int Executor::run_cond(const CondCommand *c) {
   // A conditional is a leaf command, not a wrapper: like a simple command it
-  // sets $BASH_COMMAND and, failing, fires the ERR trap.
+  // sets $BASH_COMMAND, fires the DEBUG trap (errors9.sub) and, failing, the
+  // ERR trap.
   sh_.bash_command = to_string(c);
+  if (!debug_trap_for(c, c->line)) return sh_.last_status;
   // Minimal [[ ]] evaluation delegated to the test builtin semantics via a
   // small dispatch here.  For now, evaluate simple `a OP b`, unary, and !/&&/||
   // by reusing the expression string tokens is complex; approximate with the

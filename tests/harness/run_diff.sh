@@ -734,6 +734,60 @@ E'
   'arr=(a b); until echo ${arr[]}; do break; done; echo A'
   'arr=(a b); for i in ${arr[]}; do echo L; done; echo A'
   'arr=(a b); select i in ${arr[]}; do :; done; echo A'
+  # Trailing text after ANY parameter reference is a bad substitution (#658):
+  # special/positional/length names too, not only name[sub].  `~' (case
+  # invert) is a valid operator.
+  'x=abc; echo ${x!y}; echo A'
+  'x=abc; echo ${x }; echo A'
+  'set -- a; echo ${1x}; echo A'
+  'echo ${@x}; echo A'
+  'echo ${$NO_SUCH_VAR}; echo A'
+  'echo ${-3}; echo A'
+  'echo "${-3:-${-3}}"; echo A'
+  'x=abc; echo ${#x%}; echo A'
+  'x=abc; echo ${#x-y}; echo A'
+  'echo ${#-y}; echo A'
+  'x=aB; echo ${x~} ${x~~}'
+  'a=(xy); echo ${a[0]~}'
+  # ${v:=val} on a readonly target is an assignment error: report + abandon
+  # the list; fatal in posix mode.
+  'readonly v; : ${v:=val}; echo after'
+  'readonly -a ra; : ${ra[0]=y}; echo after'
+  'set -o posix; readonly pv; : ${pv:=val}; echo after'
+  # POSIX-mode fatal errors: standalone/loop-var/temp-env assignment errors
+  # and special-builtin redirection failures end a non-interactive shell.
+  '(set -o posix; readonly pv; pv=2; echo in); echo rc=$?'
+  '(set -o posix; readonly pv; for pv in 1 2; do echo $pv; done; echo in); echo rc=$?'
+  'readonly nv; for nv in 1 2; do echo $nv; done; echo after; echo st=$?'
+  '(set -o posix; readonly px; px=8 :; echo in); echo rc=$?'
+  '(set -o posix; readonly px; px=8 echo word; echo in: $?); echo rc=$?'
+  'set -o posix; exec 9</nonexistent-653; echo after'
+  'exec 9</nonexistent-653 || echo TEST'
+  'set -o posix; readonly pz; command export pz=foo || echo shielded'
+  # Numeric-argument and argument-count validation (errors4/10, #658):
+  # break/continue non-numeric are fatal in both modes; return reports then
+  # returns 2; too many arguments discard the list with status 2.
+  'for f in _; do break x; done; echo after'
+  'for f in _; do continue x; done; echo after'
+  'f(){ return abcde; echo in; }; f; echo after: $?'
+  'return abcde; echo after: $?'
+  'shift abcde; echo after: $?'
+  'for f in _; do exit abcde; done; echo after: $?'
+  '(f(){ return 42 43; echo in; }; f); echo rc=$?'
+  '(exit 42 43); echo rc=$?'
+  '(shift 1 2; echo in); echo rc=$?'
+  '(for f in _; do break 1 2; done; echo in); echo rc=$?'
+  'set -- a b c; shift 12; echo st=$?'
+  'set -o posix; set -- a b c; shift 12; echo st=$?'
+  # export validates bare names like readonly; posix exits at the FIRST bad
+  # name; `command' shields; `.'/source option errors report status 2.
+  'export non-ident; echo after: $?'
+  'export a1=1 non-ident b1=2; echo after: $? b=$b1'
+  'set -o posix; export non-ident invalid+i; echo after'
+  'set -o posix; command export non-ident; echo command: $?'
+  'false; . -x /dev/null 2>/dev/null; echo st=$?'
+  # The DEBUG trap fires for [[ ]] like any leaf command.
+  'trap "echo D" DEBUG; [[ a = a ]]; echo x'
   'foo=@; set -- a "b c" d; f(){ echo n=$#; for a; do echo "[$a]"; done; }; f ${!foo}; f "${!foo}"'
   'arr_1=(x "y z"); set -- "arr_1[@]"; a=("${!1}"); printf "<%s>" "${a[@]}"; echo'
   # Patsub parsing: anchors and // are exclusive, the // delimiter scan skips
