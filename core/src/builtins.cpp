@@ -7106,7 +7106,8 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
                      cmd.c_str(), argv[ai].c_str());
         std::fprintf(stderr, "%s: usage: %s [-p path] filename [arguments]\n",
                      cmd.c_str(), cmd.c_str());
-        return 2;
+        if (status) *status = 2;
+        return true;
       }
       break;
     }
@@ -7115,13 +7116,15 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
                    cmd.c_str());
       std::fprintf(stderr, "%s: usage: %s [-p path] filename [arguments]\n",
                    cmd.c_str(), cmd.c_str());
-      return 2;
+      if (status) *status = 2;
+      return true;
     }
     const std::string &fname = argv[ai];
     if (sh.opt_restricted && fname.find('/') != std::string::npos) {
       std::fprintf(stderr, "%s%s: %s: restricted\n", sh.err_prefix().c_str(),
                    cmd.c_str(), fname.c_str());
-      return 1;
+      if (status) *status = 1;
+      return true;
     }
     // Resolve the file: a name with a slash is used as-is; otherwise search the
     // `-p' path, or $PATH when the `sourcepath' shopt is on, falling back to the
@@ -7609,7 +7612,8 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
         else if (o[k] == 'p') {  // default PATH; disallowed under restricted
           if (sh.opt_restricted) {
             std::fprintf(stderr, "%scommand: -p: restricted\n", sh.err_prefix().c_str());
-            return 2;
+            if (status) *status = 2;
+            return true;
           }
         }
         else { bad = true; badopt = std::string("-") + o[k]; break; }
@@ -7661,7 +7665,8 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
   } else if (cmd == "exec") {
     if (sh.opt_restricted) {
       std::fprintf(stderr, "%sexec: restricted\n", sh.err_prefix().c_str());
-      return 2;
+      if (status) *status = 2;
+      return true;
     }
     // Options: -a NAME (argv[0] for the command), -c (empty environment),
     // -l (login: prefix argv[0] with '-').
