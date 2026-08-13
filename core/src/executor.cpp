@@ -1631,7 +1631,19 @@ int Executor::run_simple(const SimpleCommand *c) {
       (!argv.empty() && argv[0] == "exec") ? "exec" : nullptr;
   if (!apply_redirects(sh_, c->redirects, saved, fdvar_ctx)) {
     restore_fds(saved);
-    return (sh_.last_status = 1);
+    // A redirection failure runs the ERR trap and is fatal under `set -e',
+    // like any failing simple command (the compound-command path above
+    // already does this); `!' inverts it to success as usual.
+    int st = (c->flags & CMD_INVERT_RETURN) ? 0 : 1;
+    sh_.last_status = st;
+    if (st != 0 && sh_.errexit_suppress == 0 && !unwinding()) {
+      sh_.run_err_trap(st);
+      if (sh_.opt_errexit) {
+        sh_.exiting = true;
+        sh_.exit_status = st;
+      }
+    }
+    return st;
   }
 
   // Temporary assignments: set as shell vars for the command and *exported* so

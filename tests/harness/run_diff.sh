@@ -721,6 +721,13 @@ E'
   'v=5; exec {v}<&foo; echo v=$v'
   'exec {v}<&0 && echo dup-ok'
   'exec {v}<&9999999999999999999999999; echo st=$?'
+  # A redirection failure on a simple command runs the ERR trap and is fatal
+  # under set -e, like a failing command; `!` inverts it to success.
+  'set -e; exec {v}<&foo; echo unreached'
+  'set -e; echo hi > /nonexistent-dir/f; echo unreached'
+  'trap "echo E" ERR; echo hi > /nonexistent-dir/f; echo after'
+  '! echo hi > /nonexistent-dir/f; echo st=$?'
+  'set -e; if echo hi > /nonexistent-dir/f; then echo T; else echo F; fi; echo reached'
   # A fatal expansion error in a loop/select word list or condition is the
   # construct'\''s own status 1, not the last body status.
   'arr=(a b); while echo ${arr[]}; do break; done; echo A'
