@@ -65,6 +65,17 @@ int main() {
   sh.disabled_builtins.insert("echo");
   want(sh, "ech", "echo", false);
 
+  // gnash's own `personality' builtin completes even though the
+  // bash-compatible listings (compgen -b) omit it, and the zsh-only
+  // `emulate' appears exactly when that personality is active (#662).
+  want(sh, "person", "personality", true);
+  want(sh, "emul", "emulate", false);
+  sh.set_personality("zsh");
+  want(sh, "emul", "emulate", true);
+  want(sh, "person", "personality", true);
+  sh.set_personality("bash");
+  want(sh, "emul", "emulate", false);
+
   unlink(exe.c_str());
   unlink(noexe.c_str());
   rmdir(dir);
