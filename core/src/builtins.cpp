@@ -6709,8 +6709,23 @@ bool command_is_valid(Shell &sh, const std::string &name) {
   if (name.empty()) return false;
   if (name.find('/') != std::string::npos) return access(name.c_str(), X_OK) == 0;
   if (is_builtin_name(name) || is_reserved_word(name)) return true;
+  if (sh.is_zsh() && name == "emulate") return true;  // zsh-only builtin (#662)
   if (sh.functions.count(name) || sh.aliases.count(name)) return true;
   return !find_in_path(sh, name).empty();
+}
+
+// Every builtin name the DISPATCH would accept in SH's current state: the
+// full runtime table -- including gnash's own `personality', which the
+// bash-compatible listings (compgen -b, `enable', complete -A builtin =
+// builtin_names_sorted) deliberately omit -- plus personality-conditional
+// names (zsh's `emulate').  Completion and highlighting use this view, so a
+// builtin added to the table is completable without touching a second list
+// (issue #662).
+static std::vector<std::string> dispatchable_builtin_names(Shell &sh) {
+  std::vector<std::string> v;
+  for (int i = 0; kBuiltinNames[i]; i++) v.emplace_back(kBuiltinNames[i]);
+  if (sh.is_zsh()) v.emplace_back("emulate");
+  return v;
 }
 
 std::vector<std::string> command_completions(Shell &sh, const std::string &prefix) {
@@ -6725,7 +6740,7 @@ std::vector<std::string> command_completions(Shell &sh, const std::string &prefi
   for (int i = 0; kw[i]; i++) consider(kw[i]);
   for (const auto &kv : sh.aliases) consider(kv.first);
   for (const auto &kv : sh.functions) consider(kv.first);
-  for (const auto &b : builtin_names_sorted())
+  for (const auto &b : dispatchable_builtin_names(sh))
     if (!sh.disabled_builtins.count(b)) consider(b);
   // Executable regular files on $PATH, matched by basename.
   std::string path = sh.get("PATH");
