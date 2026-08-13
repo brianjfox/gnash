@@ -680,6 +680,38 @@ echo ok16'
   'declare -A aa=([k]=v); echo "[${aa[]}]" 2>&1 | sed -E "s/.*line [0-9]+: //"'
   'unset q; echo "[${q[]}]" 2>&1 | sed -E "s/.*line [0-9]+: //"'
   'arr=(a b); echo "[${arr[ ]}]"'
+  # A fatal ${...} expansion error unwinds the WHOLE command list (bash
+  # DISCARD longjmp, #655): the rest of the line is abandoned -- through
+  # && chains, compounds and function calls -- while a subshell, pipeline
+  # element, eval string or trap body contains the unwind.
+  'arr=(a b); echo ${arr[]} && echo and; echo semi'
+  'arr=(a b); echo ${arr[0]junk}; echo after'
+  'arr=(a b); f(){ echo ${arr[]}; echo in-f; }; f; echo after-f'
+  'arr=(a b); (echo ${arr[]}; echo in-sub); echo st=$?'
+  'arr=(a b); echo out-$(echo ${arr[]})end; echo A'
+  'arr=(a b); eval "echo \${arr[]}; echo in-eval"; echo A'
+  'arr=(a b); echo ${arr[]} | cat; echo A'
+  'arr=(a b); if echo ${arr[]}; then echo T; else echo F; fi; echo A'
+  'arr=(a b); { echo ${arr[]}; echo in-grp; }; echo A'
+  'arr=(a b); ! echo ${arr[]}; echo A'
+  'arr=(a b); x=${arr[]}; echo A'
+  'arr=(a b); echo hi > /tmp/never-${arr[]}; echo A'
+  'v=abc; echo ${v@Z}; echo A'
+  'arr=(a); echo ${arr[1+]}; echo A'
+  # ...but a here-document body only aborts the redirection: the enclosing
+  # list keeps running, for $((...)) errors too.
+  'arr=(a b); cat <<E; echo A
+x${arr[]}x
+E'
+  'cat <<E; echo A
+x$((1+))x
+E'
+  # A fatal expansion error in a loop/select word list or condition is the
+  # construct'\''s own status 1, not the last body status.
+  'arr=(a b); while echo ${arr[]}; do break; done; echo A'
+  'arr=(a b); until echo ${arr[]}; do break; done; echo A'
+  'arr=(a b); for i in ${arr[]}; do echo L; done; echo A'
+  'arr=(a b); select i in ${arr[]}; do :; done; echo A'
   'foo=@; set -- a "b c" d; f(){ echo n=$#; for a; do echo "[$a]"; done; }; f ${!foo}; f "${!foo}"'
   'arr_1=(x "y z"); set -- "arr_1[@]"; a=("${!1}"); printf "<%s>" "${a[@]}"; echo'
   # Patsub parsing: anchors and // are exclusive, the // delimiter scan skips

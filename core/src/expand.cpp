@@ -1321,6 +1321,27 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
   }
   // ${...}
   if (n1 == '{') {
+    // A fatal `${...}' expansion error -- bad substitution, bad array
+    // subscript, invalid indirection, a failed transform -- unwinds the whole
+    // command LIST in bash (the DISCARD longjmp): the rest of the current
+    // input line is abandoned and the reader continues at the next line,
+    // while in POSIX mode the error is fatal to a non-interactive shell
+    // outright (exit 127), like the $((...)) branch above.  A here-document
+    // body is the exception: bash only aborts the redirection there, which
+    // the executor's heredoc containment already models.  Escalating on exit
+    // from this branch covers every error site inside it at once (issue #655).
+    struct AbortGuard {
+      Shell &sh;
+      bool prior, heredoc;
+      ~AbortGuard() {
+        if (prior || !sh.arith_error || heredoc) return;
+        sh.arith_abort = true;
+        if (sh.opt_posix && !sh.interactive) {
+          sh.exiting = true;
+          sh.exit_status = 127;
+        }
+      }
+    } abort_guard{sh_, sh_.arith_error, heredoc};
     size_t end = scan_balanced(t, i + 1, '{', '}', /*firstclose=*/true,
                                /*squote_literal=*/dq && sh_.opt_posix);
     if (end != std::string::npos) {

@@ -97,8 +97,18 @@ static bool expand_redir_target(Shell &sh, const Word &w, std::string &out) {
   // splitting that still makes a multi-word target ambiguous.
   bool saved_noglob = sh.opt_noglob;
   if (sh.opt_posix && !sh.interactive) sh.opt_noglob = true;
+  bool saved_ae = sh.arith_error;
+  sh.arith_error = false;
   std::vector<std::string> words = ex.expand_args({w});
   sh.opt_noglob = saved_noglob;
+  // An expansion error in the target (`> x-${arr[]}') fails the redirection
+  // -- and with it the command, status 1 -- rather than opening the partial
+  // name.  The diagnostic is already printed and any arith_abort raised
+  // unwinds the rest of the list (bash); consume arith_error here so it
+  // cannot leak into the next command.
+  bool expfail = sh.arith_error;
+  sh.arith_error = saved_ae;
+  if (expfail) return false;
   if (words.size() != 1) {
     std::fprintf(stderr, "%s%s: ambiguous redirect\n", sh.err_prefix().c_str(),
                  w.text.c_str());
@@ -299,17 +309,20 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved,
       case RedirOp::HereDoc:
       case RedirOp::HereDocStrip: {
         bool saved_ae = sh.arith_error;
+        bool saved_ab = sh.arith_abort;
         sh.arith_error = false;
+        sh.arith_abort = false;
         std::string body = r.heredoc_quoted ? r.heredoc_body : ex.expand_heredoc(r.heredoc_body);
         // An expansion failure in the body (`${'x1'%'t'}: bad substitution')
         // aborts the redirection -- and with it the command -- as bash does
         // (posixexp7.sub); the diagnostic was already printed, and later
-        // commands are unaffected.
-        if (sh.arith_error) {
-          sh.arith_error = saved_ae;
-          return false;
-        }
+        // commands are unaffected.  That containment covers arith_abort too:
+        // a $((...)) error in the body must not unwind the enclosing list
+        // (bash runs `cat <<E; echo A' with a bad body's A).
+        bool failed = sh.arith_error || sh.arith_abort;
         sh.arith_error = saved_ae;
+        sh.arith_abort = saved_ab;
+        if (failed) return false;
         int f = heredoc_fd(body);
         if (f < 0) return false;
         return assign_fd(f);
@@ -442,14 +455,16 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved,
     case RedirOp::HereDoc:
     case RedirOp::HereDocStrip: {
       bool saved_ae = sh.arith_error;
+      bool saved_ab = sh.arith_abort;
       sh.arith_error = false;
+      sh.arith_abort = false;
       std::string body = r.heredoc_quoted ? r.heredoc_body : ex.expand_heredoc(r.heredoc_body);
-      // A bad substitution in the body aborts the redirection (bash).
-      if (sh.arith_error) {
-        sh.arith_error = saved_ae;
-        return false;
-      }
+      // A bad substitution in the body aborts the redirection (bash); the
+      // containment covers arith_abort too (see the fd-variant above).
+      bool failed = sh.arith_error || sh.arith_abort;
       sh.arith_error = saved_ae;
+      sh.arith_abort = saved_ab;
+      if (failed) return false;
       int f = heredoc_fd(body);
       if (f < 0) return false;
       redir_to(f, target_fd < 0 ? 0 : target_fd);
@@ -2213,6 +2228,10 @@ int Executor::run_loop(const LoopCommand *c) {
     if (sh_.continue_count) { if (--sh_.continue_count) break; else continue; }
   }
   sh_.loop_depth--;
+  // An unwind that began inside the loop -- a fatal expansion error in the
+  // condition, a return/exit from the body -- carries ITS status out, not the
+  // last completed body's: `while echo ${arr[]}; do :; done' is 1 (bash).
+  if (unwinding()) return sh_.last_status;
   return st;
 }
 
@@ -2301,6 +2320,12 @@ int Executor::run_for(const ForCommand *c) {
     items = ex.expand_args(c->words);
   else
     items = sh_.positional;
+  // A fatal expansion error in the word list fails the loop itself with
+  // status 1 (any arith_abort raised unwinds the enclosing list too).
+  if (sh_.arith_error) {
+    sh_.arith_error = false;
+    return (sh_.last_status = 1);
+  }
   // bash re-emits the `for NAME in WORDS' trace before EVERY iteration (not
   // once for the whole loop), so build it once and print it at the top of each.
   std::string xtrace_line;
@@ -2372,6 +2397,12 @@ int Executor::run_select(const ForCommand *c) {
   Expander ex(sh_);
   std::vector<std::string> items =
       c->words_present ? ex.expand_args(c->words) : sh_.positional;
+  // A fatal expansion error in the word list fails the select itself with
+  // status 1, like `for' (any arith_abort raised unwinds the enclosing list).
+  if (sh_.arith_error) {
+    sh_.arith_error = false;
+    return (sh_.last_status = 1);
+  }
   if (items.empty()) return (sh_.last_status = 0);  // empty list: no loop (bash)
   const int n = static_cast<int>(items.size());
 
