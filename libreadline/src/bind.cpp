@@ -276,6 +276,10 @@ extern "C" int rl_parse_and_bind(char *line) {
         rl_vi_editing_mode(0, 0);
       else
         rl_emacs_editing_mode(0, 0);
+    } else if (var == "horizontal-scroll-mode") {
+      // on  -> keep a long line on one row, scrolling horizontally
+      // off -> wrap it onto extra screen rows (the default, as GNU Readline)
+      rl_horizontal_scroll_mode = (val == "on" || val == "1") ? 1 : 0;
     }
     // Other variables are accepted and ignored for now.
     return 0;
