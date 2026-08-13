@@ -339,20 +339,61 @@ int screen_width() {
   return 80;
 }
 
+// Split a prompt into the bytes to send to the terminal (with the invisible
+// \001..\002 delimiters removed, their contents -- colour escapes -- kept) and
+// its visible width in columns (bytes outside those regions).  Mirrors
+// readline's rl_expand_prompt so wrap/scroll column math ignores non-printing
+// prompt sequences.
+void prompt_metrics(const char *p, std::string &emit, int &vis) {
+  emit.clear();
+  vis = 0;
+  bool invisible = false;
+  for (const char *s = p; s && *s; s++) {
+    unsigned char c = static_cast<unsigned char>(*s);
+    if (c == 0x01) { invisible = true; continue; }   // RL_PROMPT_START_IGNORE
+    if (c == 0x02) { invisible = false; continue; }   // RL_PROMPT_END_IGNORE
+    emit += static_cast<char>(c);
+    if (!invisible) vis++;
+  }
+}
+
+// Append the input buffer to OUT, optionally colourised.  The ANSI colour codes
+// are zero-width, so they never affect where the terminal wraps.
+void append_buffer(std::string &out) {
+  if (rl_highlight_function && rl_end > 0) {
+    static const char *const kAnsi[] = {"\033[0m", "\033[32m", "\033[31m",
+                                        "\033[33m", "\033[36m"};
+    std::vector<int> col(static_cast<size_t>(rl_end), 0);
+    rl_highlight_function(rl_line_buffer, rl_end, col.data());
+    int cur = 0;
+    for (int k = 0; k < rl_end; k++) {
+      int c = (col[k] >= 0 && col[k] < 5) ? col[k] : 0;
+      if (c != cur) { out += kAnsi[c]; cur = c; }
+      out += rl_line_buffer[k];
+    }
+    if (cur != 0) out += "\033[0m";
+  } else {
+    out.append(rl_line_buffer, static_cast<size_t>(rl_end));
+  }
+}
+
+// State of the last wrapped paint, so the next one knows how many rows to erase
+// and where the cursor sits (see refresh_wrapped / wrap_move_below).
+int ml_oldrows = 1;   // screen rows the last paint occupied
+int ml_oldpoint = 0;  // rl_point at the last paint (fixes the cursor's row)
+
+void wrap_reset() { ml_oldrows = 1; ml_oldpoint = 0; }
+
 }  // namespace
 
 // The terminal width in columns (from TIOCGWINSZ, else $COLUMNS, else 80).
 extern "C" int rl_get_screen_width(void) { return screen_width(); }
 
 // Single-row redisplay with horizontal scrolling: the line stays on one screen
-// line, and the visible window slides to keep the cursor in view.  (Multi-row
-// wrapped redisplay is a later refinement.)
-extern "C" void rl_redisplay(void) {
-  if (rl_outstream == nullptr) rl_outstream = stdout;
-  FILE *o = rl_outstream;
-
+// line and the visible window slides to keep the cursor in view.  Used when
+// `horizontal-scroll-mode' is on.
+static void refresh_scrolled(FILE *o, const std::string &pemit, int plen) {
   int width = screen_width();
-  int plen = rl_prompt ? static_cast<int>(std::strlen(rl_prompt)) : 0;
   int avail = width - plen - 1;
   if (avail < 1) avail = 1;
 
@@ -361,11 +402,9 @@ extern "C" void rl_redisplay(void) {
   if (shown > avail) shown = avail;
 
   std::fputc('\r', o);
-  if (rl_prompt) std::fputs(rl_prompt, o);
+  std::fwrite(pemit.data(), 1, pemit.size(), o);
   if (shown > 0) {
     if (rl_highlight_function && rl_end > 0) {
-      // Emit per-character color (zero-width ANSI codes, so the column math is
-      // unchanged) for the visible window.
       static const char *const kAnsi[] = {"\033[0m", "\033[32m", "\033[31m",
                                           "\033[33m", "\033[36m"};
       std::vector<int> col(static_cast<size_t>(rl_end), 0);
@@ -386,6 +425,82 @@ extern "C" void rl_redisplay(void) {
   int endcol = plen + shown;
   int curcol = plen + (rl_point - off);
   for (int i = endcol; i > curcol; i--) std::fputc('\b', o);
+  wrap_reset();  // scroll mode occupies a single row
+}
+
+// Multi-row redisplay: a line wider than the screen wraps onto extra rows, as
+// GNU Readline does by default.  The whole display is repainted each call --
+// erase the rows the previous paint used, rewrite the prompt and buffer letting
+// the terminal wrap, then move the cursor to rl_point's row and column.  The
+// row arithmetic follows the same one-based scheme as readline/linenoise.
+static void refresh_wrapped(FILE *o, const std::string &pemit, int plen) {
+  int W = screen_width();
+  if (W < 1) W = 1;
+
+  int rows = (plen + rl_end + W - 1) / W;             // rows the buffer needs (ceil)
+  if (rows < 1) rows = 1;
+  int rpos = (plen + ml_oldpoint + W) / W;            // cursor's row last time (1-based)
+  int old_rows = ml_oldrows;
+
+  std::string out;
+  // 1. Erase the previous paint: drop to its last row, clear each row going up.
+  if (old_rows - rpos > 0) { out += "\033["; out += std::to_string(old_rows - rpos); out += "B"; }
+  for (int j = 0; j < old_rows - 1; j++) out += "\r\033[K\033[A";
+  out += "\r\033[K";
+
+  // 2. Prompt + buffer; the terminal wraps at the right edge on its own.
+  out += pemit;
+  append_buffer(out);
+
+  // 3. If the cursor is at the very end and lands exactly on the right edge,
+  //    emit a newline so it sits at the start of a fresh row (else it would
+  //    hang in the last column with the wrap pending).
+  if (rl_point > 0 && rl_point == rl_end && (plen + rl_point) % W == 0) {
+    out += "\r\n";
+    rows++;
+  }
+
+  // 4. Move the cursor up to its target row, then to its column.
+  int rpos2 = (plen + rl_point + W) / W;              // cursor's row now (1-based)
+  if (rows - rpos2 > 0) { out += "\033["; out += std::to_string(rows - rpos2); out += "A"; }
+  int colpos = (plen + rl_point) % W;
+  out += '\r';
+  if (colpos) { out += "\033["; out += std::to_string(colpos); out += "C"; }
+
+  std::fwrite(out.data(), 1, out.size(), o);
+  ml_oldrows = rows;
+  ml_oldpoint = rl_point;
+}
+
+extern "C" void rl_redisplay(void) {
+  if (rl_outstream == nullptr) rl_outstream = stdout;
+  FILE *o = rl_outstream;
+  std::string pemit;
+  int plen;
+  prompt_metrics(rl_prompt ? rl_prompt : "", pemit, plen);
+  if (rl_horizontal_scroll_mode)
+    refresh_scrolled(o, pemit, plen);
+  else
+    refresh_wrapped(o, pemit, plen);
+  std::fflush(o);
+}
+
+// After a wrapped line is accepted (or interrupted), the cursor may be on an
+// interior row; move it below the whole display so the caller's newline starts
+// clean.  A no-op in single-row / scroll mode.
+static void wrap_move_below(FILE *o) {
+  if (rl_horizontal_scroll_mode || ml_oldrows <= 1) return;
+  int W = screen_width();
+  if (W < 1) W = 1;
+  std::string pemit;
+  int plen;
+  prompt_metrics(rl_prompt ? rl_prompt : "", pemit, plen);
+  int cur_row = (plen + ml_oldpoint) / W;   // 0-based cursor row
+  int last_row = ml_oldrows - 1;
+  std::string out;
+  if (last_row - cur_row > 0) { out += "\033["; out += std::to_string(last_row - cur_row); out += "B"; }
+  out += '\r';
+  std::fwrite(out.data(), 1, out.size(), o);
   std::fflush(o);
 }
 
@@ -394,17 +509,40 @@ extern "C" void rl_redisplay(void) {
 extern "C" int rl_clear_screen(int /*count*/, int /*key*/) {
   if (rl_outstream == nullptr) rl_outstream = stdout;
   std::fputs(clear_screen_seq(), rl_outstream);
-  rl_redisplay();  // repaint prompt + buffer at row 0
+  wrap_reset();     // the screen is now blank: no prior rows to erase
+  rl_redisplay();   // repaint prompt + buffer at row 0
   return 0;
 }
 
 // Erase the current input line so a caller (e.g. an event hook printing a
 // background-job notice) can write where the prompt was, then rl_redisplay().
+// A wrapped line spans several rows, so clear them all and forget the old paint.
 extern "C" void rl_clear_current_line(void) {
   if (rl_outstream == nullptr) rl_outstream = stdout;
-  std::fputc('\r', rl_outstream);
-  std::fputs(clear_eol(), rl_outstream);
-  std::fflush(rl_outstream);
+  FILE *o = rl_outstream;
+  if (!rl_horizontal_scroll_mode && ml_oldrows > 1) {
+    int W = screen_width();
+    if (W < 1) W = 1;
+    std::string pemit;
+    int plen;
+    prompt_metrics(rl_prompt ? rl_prompt : "", pemit, plen);
+    int cur_row = (plen + ml_oldpoint) / W;
+    std::string out;
+    if ((ml_oldrows - 1) - cur_row > 0) {
+      out += "\033[";
+      out += std::to_string((ml_oldrows - 1) - cur_row);
+      out += "B";
+    }
+    for (int j = 0; j < ml_oldrows - 1; j++) out += "\r\033[K\033[A";
+    out += "\r\033[K";
+    std::fwrite(out.data(), 1, out.size(), o);
+    std::fflush(o);
+    wrap_reset();
+    return;
+  }
+  std::fputc('\r', o);
+  std::fputs(clear_eol(), o);
+  std::fflush(o);
 }
 
 // ---- top level ------------------------------------------------------------
@@ -471,6 +609,7 @@ extern "C" char *readline(const char *prompt) {
     sa.sa_flags = 0;
     if (sigaction(SIGINT, &sa, &old_int) == 0) int_installed = true;
     prep_terminal(fd);
+    wrap_reset();  // a fresh line: no previous wrapped rows to erase
     rl_redisplay();
   } else {
     // Interactive on a non-terminal (bash -i on a pipe): the prompt goes to
@@ -488,7 +627,12 @@ extern "C" char *readline(const char *prompt) {
     if (gnash::readline::rl_sigint_flag) {  // C-c: abort this line, reprompt
       gnash::readline::rl_sigint_flag = 0;
       rl_pending_sigint = 1;
-      if (tty) { std::fputc('^', rl_outstream); std::fputc('C', rl_outstream); }
+      if (tty) {
+        wrap_move_below(rl_outstream);  // drop past a wrapped line before `^C'
+        wrap_reset();
+        std::fputc('^', rl_outstream);
+        std::fputc('C', rl_outstream);
+      }
       rl_line_buffer[0] = '\0';
       rl_point = rl_end = 0;
       break;
@@ -502,6 +646,7 @@ extern "C" char *readline(const char *prompt) {
   }
 
   if (tty) {
+    wrap_move_below(rl_outstream);  // step past a wrapped line's extra rows
     deprep_terminal(fd);
     std::fputc('\n', rl_outstream);
     std::fflush(rl_outstream);

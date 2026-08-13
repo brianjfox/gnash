@@ -27,6 +27,11 @@ extern int rl_end;
 extern int rl_mark;
 extern int rl_done;
 
+/* Redisplay of a line wider than the screen: 0 wraps it onto extra screen
+   rows (GNU Readline's default), non-zero keeps it on one row and scrolls
+   horizontally.  Controlled by the `horizontal-scroll-mode' inputrc variable. */
+extern int rl_horizontal_scroll_mode;
+
 /* The prompt and the I/O streams readline uses. */
 extern const char *rl_prompt;
 extern FILE *rl_instream;

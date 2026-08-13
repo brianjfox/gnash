@@ -27,6 +27,9 @@ int rl_point = 0;
 int rl_end = 0;
 int rl_mark = 0;
 int rl_done = 0;
+// 0 = wrap long lines onto extra screen rows (GNU Readline default); 1 = keep
+// the line on one row and scroll it horizontally.  Set by `horizontal-scroll-mode'.
+int rl_horizontal_scroll_mode = 0;
 }
 
 namespace gnash::readline {
