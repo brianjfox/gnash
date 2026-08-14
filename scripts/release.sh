@@ -72,7 +72,11 @@ git_push() {  # git_push DIR [REFSPEC...]
     https://github.com/*)
       local slug=${url#https://github.com/}; slug=${slug%.git}
       git -C "$dir" push "https://x-access-token:$(gh auth token)@github.com/$slug.git" \
-        "${@:-HEAD:$(git -C "$dir" symbolic-ref --short HEAD)}" ;;
+        "${@:-HEAD:$(git -C "$dir" symbolic-ref --short HEAD)}"
+      # A token-URL push does not move origin's remote-tracking refs, so the
+      # repo then looks out of date; `brew update` later rebases the tap onto
+      # a remote that already has these commits and conflicts.  Realign.
+      git -C "$dir" fetch -q origin || true ;;
     *) git -C "$dir" push origin "${@:-HEAD}" ;;
   esac
 }
