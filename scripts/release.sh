@@ -9,8 +9,8 @@
 # End to end this:
 #   1. bumps the version in CMakeLists.txt and README.md,
 #   2. commits "Release gnash X.Y.Z" and tags gnash-X.Y.Z, pushing both,
-#   3. builds a universal (arm64 + x86_64) macOS binary and packages
-#      gnash-X.Y.Z-macos-universal.tar.gz (+ .sha256),
+#   3. builds per-architecture macOS binaries and packages
+#      gnash-X.Y.Z-macos-{arm64,x86_64}.tar.gz (+ .sha256),
 #   4. creates the GitHub release on brianjfox/gnash with those assets,
 #   5. bumps the Homebrew formula (url + source sha256) in the tap,
 #   6. builds the arm64 Homebrew bottle, uploads it to the tap's release,
@@ -101,7 +101,8 @@ else
     echo '```'
     echo "brew tap $TAP_SLUG && brew trust $TAP_SLUG && brew install $FORMULA"
     echo '```'; echo
-    echo "Or download the universal (arm64 + x86_64) macOS tarball below."
+    echo "Or download the macOS tarball for your architecture (arm64 for"
+    echo "Apple Silicon, x86_64 for Intel) below."
   } > "$NOTES_TMP"
   info "notes:   (generated -- no scripts/notes/$TAG.md found)"
 fi
@@ -127,25 +128,29 @@ else
   git_push "$ROOT" "$TAG"
 fi
 
-# ---- 3. universal macOS tarball --------------------------------------------
-step "Build universal macOS binary"
+# ---- 3. per-architecture macOS tarballs -------------------------------------
+step "Build per-architecture macOS binaries"
 STAGE="$ROOT/dist"
-BUILD="$ROOT/build-release"
-PKG="$FORMULA-$VERSION-macos-universal"
-TARBALL="$STAGE/$PKG.tar.gz"
 mkdir -p "$STAGE"
-if [ -f "$TARBALL" ] && [ -f "$TARBALL.sha256" ]; then
-  skip "$PKG.tar.gz already built"
-else
+ASSETS=()
+for ARCH in arm64 x86_64; do
+  BUILD="$ROOT/build-release-$ARCH"
+  PKG="$FORMULA-$VERSION-macos-$ARCH"
+  TARBALL="$STAGE/$PKG.tar.gz"
+  ASSETS+=("$TARBALL" "$TARBALL.sha256")
+  if [ -f "$TARBALL" ] && [ -f "$TARBALL.sha256" ]; then
+    skip "$PKG.tar.gz already built"
+    continue
+  fi
   rm -rf "$BUILD"
   cmake -S "$ROOT" -B "$BUILD" \
     -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+    -DCMAKE_OSX_ARCHITECTURES="$ARCH" \
     -DGNASH_BUILD_TESTS=OFF -DGNASH_WERROR=OFF >/dev/null
   cmake --build "$BUILD" --target "$FORMULA" -j >/dev/null
   BIN="$BUILD/core/$FORMULA"
   archs=$(lipo -archs "$BIN")
-  [[ "$archs" == *arm64* && "$archs" == *x86_64* ]] || die "binary is not universal (got: $archs)"
+  [ "$archs" = "$ARCH" ] || die "binary is not $ARCH-only (got: $archs)"
   strip -x "$BIN" 2>/dev/null || true
   rm -rf "$STAGE/$PKG"; mkdir -p "$STAGE/$PKG"
   cp "$BIN" "$STAGE/$PKG/"
@@ -154,7 +159,7 @@ else
   ( cd "$STAGE" && shasum -a 256 "$PKG.tar.gz" > "$PKG.tar.gz.sha256" )
   rm -rf "$STAGE/$PKG"
   info "packaged $PKG.tar.gz ($(cd "$STAGE" && du -h "$PKG.tar.gz" | cut -f1)), $archs"
-fi
+done
 
 # ---- 4. GitHub release on the main repo ------------------------------------
 step "GitHub release on $MAIN_REPO"
@@ -164,14 +169,14 @@ if gh release view "$TAG" --repo "$MAIN_REPO" >/dev/null 2>&1; then
   # releases): uploads then fail with HTTP 422.  That is not fatal to the
   # release -- the tap formula builds from the source tarball -- so warn and
   # carry on to the Homebrew steps rather than aborting the whole run.
-  if ! gh release upload "$TAG" "$TARBALL" "$TARBALL.sha256" \
+  if ! gh release upload "$TAG" "${ASSETS[@]}" \
          --repo "$MAIN_REPO" --clobber 2>/tmp/gnash-relup.$$; then
     info "warning: could not attach assets to $TAG ($(tr -d '\n' </tmp/gnash-relup.$$ | tail -c 120))"
     info "         the release stands; Homebrew installs from the source tarball"
   fi
   rm -f /tmp/gnash-relup.$$
 else
-  gh release create "$TAG" "$TARBALL" "$TARBALL.sha256" \
+  gh release create "$TAG" "${ASSETS[@]}" \
     --repo "$MAIN_REPO" --title "$FORMULA $VERSION" --notes-file "$NOTES_FILE"
   info "created release $TAG"
 fi

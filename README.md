@@ -62,9 +62,9 @@ it, then run `bash install.sh`.
 
 ### Prebuilt macOS binary
 
-Every [release](https://github.com/brianjfox/gnash/releases) also ships a
-universal (Apple Silicon + Intel) macOS binary tarball, if you'd rather not use
-Homebrew or build anything.
+Every [release](https://github.com/brianjfox/gnash/releases) also ships
+prebuilt macOS binary tarballs — `arm64` for Apple Silicon, `x86_64` for
+Intel — if you'd rather not use Homebrew or build anything.
 
 ## How to Build It
 **gnash** needs a C++20 compiler and CMake ≥ 3.16.
