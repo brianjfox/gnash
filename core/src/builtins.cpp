@@ -4872,7 +4872,7 @@ static const BuiltinHelp kBuiltinHelp[] = {
     {"enable", "enable [-a] [-dnps] [-f filename] [name ...]", "Enable and disable shell builtins."},
     {"caller", "caller [expr]", "Return the context of the current subroutine call."},
     {"alias", "alias [-p] [name[=value] ... ]", "Define or display aliases."},
-    {"personality", "personality [-lLR] [{bash|strict-bash|zsh|sh|ksh|csh} [-c command]]", "Switch the shell's personality at runtime (zsh `emulate' syntax)."},
+    {"personality", "personality [-lLR] [{bash|strict-bash|zsh|sh|ksh|csh}] [-c command ...]", "Switch the shell's personality at runtime (zsh `emulate' syntax)."},
     {"unalias", "unalias [-a] name [name ...]", "Remove each NAME from the list of defined aliases."},
     {"history", "history [-c] [-d offset] [n] or history -anrw [filename] or history -ps arg [arg...]", "Display or manipulate the history list."},
     {"fc", "fc [-e ename] [-lnr] [first] [last] or fc -s [pat=rep] [command]", "Display or execute commands from the history list."},
@@ -5071,9 +5071,11 @@ static const struct { const char *name, *body; } kBuiltinLongDoc[] = {
      "  csh\t\tC shell\n\n"
      "Options:\n"
      "  -l\tlist the available personalities, one per line\n"
-     "  -L\tlist them, marking the current personality\n"
+     "  -L\tmake the switch local to the enclosing function, restored when\n"
+     "\t\tit returns (as zsh's `emulate -L')\n"
      "  -R\treset to the personality the shell was invoked with\n"
-     "  -c command\trun COMMAND under PERSONALITY, then restore the previous one\n\n"
+     "  -c command ...\trun the remaining words as a command under\n"
+     "\t\tPERSONALITY (or the current one), then restore\n\n"
      "Exit Status:\n"
      "Returns success unless an invalid personality or option is given."},
 };
@@ -6775,50 +6777,75 @@ std::vector<std::string> command_completions(Shell &sh, const std::string &prefi
 // the switch local to the enclosing function (restored on return); `-R'/`-l'
 // are accepted (a personality switch is already a full reconfiguration).
 int bi_personality(Shell &sh, const std::vector<std::string> &argv) {
-  static const std::set<std::string> kNames = {
-      "bash", "strict-bash", "zsh",  "sh",    "dash", "ash",
-      "ksh",  "ksh93",       "mksh", "pdksh", "rksh", "csh", "tcsh"};
+  // Accepted names, in the listing order `-l' prints (canonical first, then
+  // each personality's aliases).
+  static const char *const kListOrder[] = {
+      "bash", "strict-bash", "sh",    "dash", "ash",  "zsh", "ksh",
+      "ksh93", "mksh",       "pdksh", "rksh", "csh",  "tcsh"};
+  static const std::set<std::string> kNames(std::begin(kListOrder),
+                                            std::end(kListOrder));
   bool opt_l = false, opt_L = false, opt_R = false;
-  size_t i = 1;
-  for (; i < argv.size(); i++) {
+  bool have_mode = false, have_c = false;
+  std::string mode, cmd;
+  bool no_more_opts = false;
+  for (size_t i = 1; i < argv.size(); i++) {
     const std::string &a = argv[i];
-    if (a == "--") { i++; break; }
-    if (a.size() < 2 || a[0] != '-') break;
-    bool ok = true;
-    for (size_t k = 1; k < a.size(); k++) {
-      if (a[k] == 'l') opt_l = true;
-      else if (a[k] == 'L') opt_L = true;
-      else if (a[k] == 'R') opt_R = true;
-      else { ok = false; break; }
+    if (!no_more_opts && a == "--") { no_more_opts = true; continue; }
+    if (!no_more_opts && a == "-c") {
+      // `-c' takes the REST of the words as the command line (joined), so
+      // `personality -c echo hi' and `personality zsh -c "echo hi"' both
+      // work; a missing PERSONALITY runs under the current one (#660).
+      have_c = true;
+      for (size_t k = i + 1; k < argv.size(); k++) {
+        if (!cmd.empty()) cmd += ' ';
+        cmd += argv[k];
+      }
+      break;
     }
-    if (!ok) {
-      std::fprintf(stderr, "%s: bad option: %s\n", argv[0].c_str(), a.c_str());
-      return 1;
+    if (!no_more_opts && a.size() >= 2 && a[0] == '-') {
+      bool ok = true;
+      for (size_t k = 1; k < a.size(); k++) {
+        if (a[k] == 'l') opt_l = true;
+        else if (a[k] == 'L') opt_L = true;
+        else if (a[k] == 'R') opt_R = true;
+        else { ok = false; break; }
+      }
+      if (!ok) {
+        std::fprintf(stderr, "%s: bad option: %s\n", argv[0].c_str(), a.c_str());
+        return 1;
+      }
+      continue;
     }
+    if (!have_mode) { mode = a; have_mode = true; continue; }
+    std::fprintf(stderr, "%s: unknown argument: %s\n", argv[0].c_str(), a.c_str());
+    return 1;
   }
-  (void)opt_R;
-
-  if (i >= argv.size()) {  // no mode -> report the current personality
-    std::printf("%s\n", sh.personality_name.c_str());
-    return 0;
-  }
-
-  std::string mode = argv[i++];
-  if (!kNames.count(mode)) {
+  if (have_mode && !kNames.count(mode)) {
     std::fprintf(stderr, "%s: unknown personality: %s\n", argv[0].c_str(), mode.c_str());
     return 1;
   }
-  // Trailing `-c command' (and any other option-flags, which we accept quietly).
-  std::string cmd;
-  bool have_c = false;
-  for (; i < argv.size(); i++) {
-    if (argv[i] == "-c" && i + 1 < argv.size()) { cmd = argv[++i]; have_c = true; }
+
+  // `-l': list the available personalities, one per line, without switching.
+  if (opt_l) {
+    for (const char *n : kListOrder) std::printf("%s\n", n);
+    return 0;
+  }
+  // `-R': reset to the personality the shell was invoked with.
+  if (opt_R && !have_mode) {
+    mode = sh.invoked_personality.empty() ? "bash" : sh.invoked_personality;
+    have_mode = true;
   }
 
-  if (have_c) {  // run under MODE, then restore
+  if (have_c) {
+    if (cmd.empty()) {
+      std::fprintf(stderr, "%s: -c: command required\n", argv[0].c_str());
+      return 1;
+    }
+    if (!have_mode) return sh.run_string(cmd);  // current personality: no switch
+    // Run under MODE, then restore.  `strict-bash' leaves $BASHLY_CORRECT on,
+    // and restoring the personality name alone would not undo that -- so put
+    // the switch back as well.
     std::string saved = sh.personality_name;
-    // `strict-bash' leaves $BASHLY_CORRECT on, and restoring the personality
-    // name alone would not undo that -- so put the switch back as well.
     bool had_bc = sh.is_set("BASHLY_CORRECT");
     std::string saved_bc = sh.get("BASHLY_CORRECT");
     sh.set_personality(mode);
@@ -6828,10 +6855,16 @@ int bi_personality(Shell &sh, const std::vector<std::string> &argv) {
     else sh.unset("BASHLY_CORRECT");
     return st;
   }
+
+  if (!have_mode) {  // no mode -> report the current personality
+    std::printf("%s\n", sh.personality_name.c_str());
+    return 0;
+  }
+  // `-L': make the switch local to the enclosing function (zsh's emulate -L),
+  // restored when it returns.
   if (opt_L && !sh.persona_restore.empty() && !sh.persona_restore.back())
-    sh.persona_restore.back() = sh.personality_name;  // restore when the function returns
+    sh.persona_restore.back() = sh.personality_name;
   sh.set_personality(mode);
-  (void)opt_l;
   return 0;
 }
 

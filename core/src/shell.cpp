@@ -1969,6 +1969,8 @@ void Shell::set_personality(const std::string &name) {
   // up bash's startup files while the stricter limits apply.  Selecting any
   // other personality turns the switch back off.
   bool strict = name == "strict-bash";
+  // The first call is startup's: remember it so `personality -R' can reset.
+  if (invoked_personality.empty()) invoked_personality = name;
   personality_name = strict ? "bash" : name;
   const std::string &nm = personality_name;
   if (nm == "zsh") persona = Persona::Zsh;

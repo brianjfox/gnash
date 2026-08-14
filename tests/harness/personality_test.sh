@@ -71,6 +71,26 @@ check "non-exported var does not cross to csh" "0" bash \
 check "unknown name is an error" "1" bash \
   'personality nonesuch >/dev/null 2>&1; echo $?'
 
+# -l lists the available personalities, one per line, without switching (#660)
+check "-l lists without switching" $'bash\nstrict-bash\nbash' bash \
+  'personality -l | head -2; personality'
+
+# -c without a personality runs under the current one, joining the words
+check "-c without a name runs the words" "bash" bash \
+  'personality -c echo $GNASH_PERSONALITY'
+check "-c joins multiple words" "a b" bash 'personality -c echo a b'
+check "bare -c is an error" "1" bash 'personality -c 2>/dev/null; echo $?'
+
+# -R resets to the personality the shell was invoked with
+check "-R resets to invoked (zsh)" $'sh\nzsh' zsh \
+  'personality sh; personality; personality -R; personality'
+check "-R resets to invoked (bash)" $'csh\nbash' bash \
+  'personality csh; personality; personality -R; personality'
+
+# a stray extra argument is rejected
+check "extra argument is an error" "1" bash \
+  'personality sh extra >/dev/null 2>&1; echo $?'
+
 if [ $fails -eq 0 ]; then
   echo "personality_test: all checks passed"
   exit 0
