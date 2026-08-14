@@ -389,6 +389,9 @@ class Shell {
   enum class Persona { Bash, Zsh, Ash, Ksh, Csh };
   Persona persona = Persona::Bash;
   std::string personality_name = "gnash";  // exposed as $GNASH_PERSONALITY
+  // The personality the shell STARTED with (recorded by the first
+  // set_personality call, i.e. startup): `personality -R' resets to it.
+  std::string invoked_personality;
   bool is_zsh() const { return persona == Persona::Zsh; }
   bool is_ash() const { return persona == Persona::Ash; }
   bool is_ksh() const { return persona == Persona::Ksh; }
