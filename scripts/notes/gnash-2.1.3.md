@@ -1,6 +1,20 @@
 # gnash 2.1.3
 
-_(draft — summarize the release here before cutting it)_
+A patch release: the `personality` builtin's advertised options now all
+work as documented, and macOS release downloads are half the size.
+
+## Fixes
+
+- The `personality` builtin implements the options its help always
+  advertised (#660): `-l` lists the available personalities without
+  switching (it was silently ignored, so `personality -l sh` switched);
+  `-R` resets to the personality the shell was invoked with; `-c` no
+  longer requires a personality name (`personality -c echo $SHELL` runs
+  under the current one) and takes the rest of the words as the command
+  line instead of quietly ignoring them — a bare `-c` and stray extra
+  arguments are now errors. `-L` keeps its zsh-compatible
+  local-to-function switch, and the help text now describes the real
+  behavior.
 
 ## Build
 
