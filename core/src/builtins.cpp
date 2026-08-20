@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <climits>
 #include <csignal>
 #include <cstdio>
 #include <optional>
@@ -471,6 +472,33 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
   size_t argi = ai;
   std::string out;
   bool oversize = false;  // a field width too large to represent/allocate
+  // A diagnosed conversion error: POSIX says printf continues processing the
+  // remaining operands and writes the output accumulated so far, but the
+  // builtin's exit status is failure (bash's conversion_error).
+  bool conv_error = false;
+  // Parse a literal field width or precision the way bash's decodeint does: a
+  // value that does not fit in an int diagnoses `NNN: Result too large'
+  // (strerror(ERANGE)) and yields OVERFLOW_RETURN, so a pathological width
+  // like %100000000000ls cannot drive gigabytes of padding (or a bad_alloc
+  // abort).  OVERFLOW_RETURN is 0 for widths AND precisions: decodeint hands
+  // printwidestr -1, but the `if (pr < precision)' %Q adjustment then raises
+  // it to the per-conversion default of 0, so bash prints an empty field.
+  auto decode_fwpr = [&](const std::string &f, size_t &sp, size_t end,
+                         long overflow_return) -> long {
+    size_t d0 = sp;
+    long long v = 0;
+    bool ovf = false;
+    while (sp < end && std::isdigit(static_cast<unsigned char>(f[sp]))) {
+      v = v * 10 + (f[sp] - '0');
+      if (v > INT_MAX) { ovf = true; v = 0; }  // latch; keep consuming digits
+      sp++;
+    }
+    if (!ovf) return static_cast<long>(v);
+    std::fprintf(stderr, "%sprintf: %s: %s\n", sh.err_prefix().c_str(),
+                 f.substr(d0, sp - d0).c_str(), std::strerror(ERANGE));
+    conv_error = true;
+    return overflow_return;
+  };
   auto next = [&]() -> std::string {
     return argi < argv.size() ? argv[argi++] : std::string();
   };
@@ -593,15 +621,13 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
           bool ljust = false;
           size_t sp = i + 1;
           while (sp < j && std::strchr("-+ #0", fmt[sp])) { if (fmt[sp] == '-') ljust = true; sp++; }
-          long fw = 0;
-          while (sp < j && std::isdigit(static_cast<unsigned char>(fmt[sp])))
-            fw = fw * 10 + (fmt[sp++] - '0');
+          long fw = decode_fwpr(fmt, sp, j, 0);
           long pr = -1;
           if (sp < j && fmt[sp] == '.') {
-            pr = 0;
             sp++;
-            while (sp < j && std::isdigit(static_cast<unsigned char>(fmt[sp])))
-              pr = pr * 10 + (fmt[sp++] - '0');
+            // "a null digit string is treated as zero" -- decode_fwpr already
+            // returns 0 for an empty span, and 0 on overflow (see above).
+            pr = decode_fwpr(fmt, sp, j, 0);
           }
           long nc = (pr >= 0 && pr <= static_cast<long>(ws.size()))
                         ? pr : static_cast<long>(ws.size());
@@ -685,7 +711,7 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
   } else {
     std::fwrite(out.data(), 1, out.size(), stdout);
   }
-  return 0;
+  return conv_error ? 1 : 0;
 }
 
 // ---- test / [ ------------------------------------------------------------
