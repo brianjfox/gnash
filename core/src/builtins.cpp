@@ -360,24 +360,29 @@ void decode_fmt_escape(const std::string &fmt, size_t &i, std::string &out) {
 }
 
 // Format one numeric/string conversion with width/precision via snprintf.
-// Returns false if the conversion cannot be produced -- either the field width
-// is too large to represent (snprintf reports < 0) or the output buffer cannot
-// be allocated -- so the caller can report an error instead of letting a
-// pathological width (e.g. printf '%2000000000d') abort the shell on bad_alloc.
+// Returns false, with errno describing the failure, if the conversion cannot
+// be produced -- either the field width is too large to represent (snprintf
+// reports < 0, typically EOVERFLOW) or the output buffer cannot be allocated
+// -- so the caller can report an error instead of letting a pathological
+// width (e.g. printf '%2000000000d') abort the shell on bad_alloc.
 template <typename T>
 bool append_formatted(std::string &out, const std::string &spec, T value) {
+  errno = 0;
   int need = std::snprintf(nullptr, 0, spec.c_str(), value);
   if (need < 0) return false;
   std::vector<char> buf;
   try {
     buf.resize(static_cast<size_t>(need) + 1);
   } catch (const std::bad_alloc &) {
+    errno = ENOMEM;
     return false;
   }
   std::snprintf(buf.data(), buf.size(), spec.c_str(), value);
   out.append(buf.data(), static_cast<size_t>(need));
   return true;
 }
+
+static bool valid_identifier(const std::string &s);
 
 // A well-formed `NAME[subscript]' element reference: the bracket span is
 // balanced, ENDS at the final character, and is non-empty -- `A[]]' and
@@ -471,7 +476,10 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
   std::string fmt = argv[ai++];
   size_t argi = ai;
   std::string out;
-  bool oversize = false;  // a field width too large to represent/allocate
+  // A fatal conversion failure: bash's PF stops processing at once but still
+  // writes the output accumulated so far (streamed, in its case) and binds
+  // the -v variable to it, exiting 1.
+  bool fatal = false;
   // A diagnosed conversion error: POSIX says printf continues processing the
   // remaining operands and writes the output accumulated so far, but the
   // builtin's exit status is failure (bash's conversion_error).
@@ -502,9 +510,22 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
   auto next = [&]() -> std::string {
     return argi < argv.size() ? argv[argi++] : std::string();
   };
+  // Report a conversion the C library refused (huge field width -> EOVERFLOW,
+  // unallocatable buffer -> ENOMEM) the way bash's PF macro does: strerror
+  // (errno) and an immediate stop.  The caller must break out of the format
+  // scan; clearing argi ends the argument-reuse loop.
+  auto pf_fail = [&]() {
+    std::fprintf(stderr, "%sprintf: %s\n", sh.err_prefix().c_str(),
+                 std::strerror(errno));
+    fatal = true;
+    argi = argv.size();
+  };
   bool consumed_any = true;
   do {
     consumed_any = false;
+    // bash zeroes its total-written counter on every reuse of the format
+    // string, so %n stores the bytes written THIS pass, not overall.
+    size_t pass_start = out.size();
     for (size_t i = 0; i < fmt.size(); i++) {
       char c = fmt[i];
       if (c == '\\') {
@@ -584,8 +605,8 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
           }
           std::string q = shell_quote(a);
           std::string sspec = "%" + fw + "s";
-          if (!append_formatted(out, sspec, q.c_str())) oversize = true;
           consumed_any = true;
+          if (!append_formatted(out, sspec, q.c_str())) { pf_fail(); break; }
         } else if (conv == 'b') {
           bool stop = false;
           out += decode_b(next(), stop, /*bare_octal=*/true, &sh);
@@ -644,8 +665,8 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
           consumed_any = true;
           j++;  // the conversion consumed two characters (`ls' / `lc')
         } else if (conv == 's') {
-          if (!append_formatted(out, spec, next().c_str())) oversize = true;
           consumed_any = true;
+          if (!append_formatted(out, spec, next().c_str())) { pf_fail(); break; }
         } else if (conv == 'c') {
           std::string a = next();
           // An empty argument (explicit "" or a missing one) prints a single
@@ -661,12 +682,31 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
           long v = (!a.empty() && (a[0] == '\'' || a[0] == '"'))
                        ? (a.size() > 1 ? static_cast<unsigned char>(a[1]) : 0)
                        : std::strtol(a.c_str(), nullptr, 0);
-          if (!append_formatted(out, sp, v)) oversize = true;
           consumed_any = true;
+          if (!append_formatted(out, sp, v)) { pf_fail(); break; }
         } else if (conv == 'f' || conv == 'F' || conv == 'g' || conv == 'G' ||
                    conv == 'e' || conv == 'E' || conv == 'a' || conv == 'A') {
-          if (!append_formatted(out, spec, std::strtod(next().c_str(), nullptr))) oversize = true;
           consumed_any = true;
+          if (!append_formatted(out, spec, std::strtod(next().c_str(), nullptr))) { pf_fail(); break; }
+        } else if (conv == 'n') {
+          // %n: bind the named variable to the byte count written so far this
+          // pass.  A missing or empty name is silently ignored; an invalid
+          // identifier stops processing (accumulated output is still
+          // written) with status 1; a failed binding (e.g. a readonly
+          // variable) reports through Shell::set but does not change the
+          // exit status, all as bash's printf does.
+          std::string var = next();
+          consumed_any = true;
+          if (!var.empty()) {
+            if (!valid_identifier(var)) {
+              std::fprintf(stderr, "%sprintf: `%s': not a valid identifier\n",
+                           sh.err_prefix().c_str(), var.c_str());
+              fatal = true;
+              argi = argv.size();
+              break;
+            }
+            sh.set(var, std::to_string(out.size() - pass_start), "printf");
+          }
         } else {
           out += spec;
         }
@@ -676,12 +716,6 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
       }
     }
   } while (argi < argv.size() && consumed_any);
-
-  if (oversize) {
-    std::fprintf(stderr, "%sprintf: Value too large to be stored in data type\n",
-                 sh.err_prefix().c_str());
-    return 1;
-  }
 
   if (to_var) {
     auto lb = vname.find('[');
@@ -711,7 +745,7 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
   } else {
     std::fwrite(out.data(), 1, out.size(), stdout);
   }
-  return conv_error ? 1 : 0;
+  return (fatal || conv_error) ? 1 : 0;
 }
 
 // ---- test / [ ------------------------------------------------------------
