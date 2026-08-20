@@ -546,6 +546,22 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
     }
     return overflow ? overflow_return : static_cast<long>(v);
   };
+  // bash's chk_converror, applied after strto*() on a conversion argument: a
+  // partially or wholly unconverted argument is `S: invalid number'; a
+  // well-formed value out of range is `S: Result too large' (ERANGE).  Both
+  // set the conversion-error status; the (clamped/prefix) value still prints
+  // and processing continues, per POSIX.
+  auto chk_num = [&](const std::string &a, const char *ep, bool erange) {
+    if ((ep && *ep != '\0') || ep == a.c_str()) {
+      std::fprintf(stderr, "%sprintf: %s: invalid number\n",
+                   sh.err_prefix().c_str(), a.c_str());
+      conv_error = true;
+    } else if (erange) {
+      std::fprintf(stderr, "%sprintf: %s: %s\n", sh.err_prefix().c_str(),
+                   a.c_str(), std::strerror(ERANGE));
+      conv_error = true;
+    }
+  };
   bool consumed_any = true;
   // Resolve a flags/width/precision span of the format into ordinary digit
   // text, fetching `*' values from the argument list in bash's order: the
@@ -769,21 +785,57 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
           // field width (and ignores any precision), as bash's PF does.
           consumed_any = true;
           if (!append_formatted(out, spec, a.empty() ? '\0' : a[0])) { pf_fail(); break; }
-        } else if (conv == 'd' || conv == 'i' || conv == 'x' || conv == 'X' ||
-                   conv == 'o' || conv == 'u') {
+        } else if (conv == 'd' || conv == 'i') {
           std::string sp = spec;
-          sp.insert(sp.size() - 1, "l");  // promote to long
-          std::string a = next();
+          sp.insert(sp.size() - 1, "ll");  // bash formats through intmax_t
+          bool have_arg = argi < argv.size();  // MISSING is a silent 0;
+          std::string a = next();              // an EMPTY string diagnoses
+          long long v = 0;
           // A leading ' or " makes the value the next character's code.
-          long v = (!a.empty() && (a[0] == '\'' || a[0] == '"'))
-                       ? (a.size() > 1 ? static_cast<unsigned char>(a[1]) : 0)
-                       : std::strtol(a.c_str(), nullptr, 0);
+          if (!a.empty() && (a[0] == '\'' || a[0] == '"')) {
+            v = a.size() > 1 ? static_cast<unsigned char>(a[1]) : 0;
+          } else if (have_arg) {
+            errno = 0;
+            char *ep = nullptr;
+            v = std::strtoll(a.c_str(), &ep, 0);
+            chk_num(a, ep, errno == ERANGE);
+          }
+          consumed_any = true;
+          if (!append_formatted(out, sp, v)) { pf_fail(); break; }
+        } else if (conv == 'x' || conv == 'X' || conv == 'o' || conv == 'u') {
+          std::string sp = spec;
+          sp.insert(sp.size() - 1, "ll");  // bash formats through uintmax_t
+          bool have_arg = argi < argv.size();
+          std::string a = next();
+          unsigned long long v = 0;
+          if (!a.empty() && (a[0] == '\'' || a[0] == '"')) {
+            v = a.size() > 1 ? static_cast<unsigned char>(a[1]) : 0;
+          } else if (have_arg) {
+            // strtoumax semantics: `-1' wraps to UINTMAX_MAX with no error.
+            errno = 0;
+            char *ep = nullptr;
+            v = std::strtoull(a.c_str(), &ep, 0);
+            chk_num(a, ep, errno == ERANGE);
+          }
           consumed_any = true;
           if (!append_formatted(out, sp, v)) { pf_fail(); break; }
         } else if (conv == 'f' || conv == 'F' || conv == 'g' || conv == 'G' ||
                    conv == 'e' || conv == 'E' || conv == 'a' || conv == 'A') {
+          bool have_arg = argi < argv.size();
+          std::string a = next();
+          double v = 0;
+          // Floats take the leading ' / " character-code form too (bash
+          // getfloatmax -> asciicode).
+          if (!a.empty() && (a[0] == '\'' || a[0] == '"')) {
+            v = a.size() > 1 ? static_cast<unsigned char>(a[1]) : 0;
+          } else if (have_arg) {
+            errno = 0;
+            char *ep = nullptr;
+            v = std::strtod(a.c_str(), &ep);
+            chk_num(a, ep, errno == ERANGE);
+          }
           consumed_any = true;
-          if (!append_formatted(out, spec, std::strtod(next().c_str(), nullptr))) { pf_fail(); break; }
+          if (!append_formatted(out, spec, v)) { pf_fail(); break; }
         } else if (conv == 'n') {
           // %n: bind the named variable to the byte count written so far this
           // pass.  A missing or empty name is silently ignored; an invalid
