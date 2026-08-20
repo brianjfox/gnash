@@ -520,6 +520,32 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
     fatal = true;
     argi = argv.size();
   };
+  // Fetch a `*' field width/precision argument, as bash's getint: a leading
+  // ' or " yields the next character's code; a value outside int range
+  // diagnoses `NNN: Result too large' and yields OVERFLOW_RETURN; a
+  // malformed number diagnoses `S: invalid number' but still yields the
+  // parsed prefix (bash's strtoimax result), all with status 1 while
+  // processing continues.  A missing argument is 0 and consumes nothing.
+  auto star_int = [&](long overflow_return) -> long {
+    if (argi >= argv.size()) return 0;
+    std::string a = argv[argi++];
+    if (!a.empty() && (a[0] == '\'' || a[0] == '"'))
+      return a.size() > 1 ? static_cast<unsigned char>(a[1]) : 0;
+    errno = 0;
+    char *ep = nullptr;
+    long long v = std::strtoll(a.c_str(), &ep, 0);
+    bool overflow = errno == ERANGE || v < INT_MIN || v > INT_MAX;
+    if (*ep != '\0' || ep == a.c_str()) {
+      std::fprintf(stderr, "%sprintf: %s: invalid number\n",
+                   sh.err_prefix().c_str(), a.c_str());
+      conv_error = true;
+    } else if (overflow) {
+      std::fprintf(stderr, "%sprintf: %s: %s\n", sh.err_prefix().c_str(),
+                   a.c_str(), std::strerror(ERANGE));
+      conv_error = true;
+    }
+    return overflow ? overflow_return : static_cast<long>(v);
+  };
   bool consumed_any = true;
   do {
     consumed_any = false;
@@ -534,7 +560,7 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
         i = p - 1;  // loop increment lands on the next character
       } else if (c == '%' && i + 1 < fmt.size()) {
         size_t j = i + 1;
-        while (j < fmt.size() && std::strchr("-+ #0123456789.", fmt[j])) j++;
+        while (j < fmt.size() && std::strchr("-+ #0123456789.*", fmt[j])) j++;
         if (j >= fmt.size()) { out += '%'; break; }
         char conv = fmt[j];
         // %(DATEFMT)T: format an epoch-seconds argument through strftime.  The
@@ -582,29 +608,71 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
           if (j >= fmt.size()) { out += '%'; break; }  // dangling `%l' at end
           conv = fmt[j];
         }
+        // Resolve the flags/width/precision text into FWP, fetching `*'
+        // values from the argument list in bash's order: the width argument,
+        // then the precision, then the conversion's own argument.  A negative
+        // `*' width means left-justify (bash getint/printstr); a negative
+        // `*' precision is treated as if the precision were missing.
+        std::string fwp;
+        {
+          size_t sp = i + 1;
+          while (sp < flagsend && std::strchr("-+ #0", fmt[sp])) fwp += fmt[sp++];
+          if (sp < flagsend && fmt[sp] == '*') {
+            sp++;
+            consumed_any = true;
+            long w = star_int(0);
+            if (w < 0) { fwp += '-'; w = -w; }
+            fwp += std::to_string(w);
+          } else {
+            while (sp < flagsend && std::isdigit(static_cast<unsigned char>(fmt[sp])))
+              fwp += fmt[sp++];
+          }
+          if (sp < flagsend && fmt[sp] == '.') {
+            sp++;
+            if (sp < flagsend && fmt[sp] == '*') {
+              sp++;
+              consumed_any = true;
+              long p = star_int(-1);
+              if (p >= 0) { fwp += '.'; fwp += std::to_string(p); }
+            } else {
+              fwp += '.';
+              while (sp < flagsend && std::isdigit(static_cast<unsigned char>(fmt[sp])))
+                fwp += fmt[sp++];
+            }
+          }
+        }
         std::string spec = wide_lsc
-            ? fmt.substr(i, j - i + 1)
-            : fmt.substr(i, flagsend - i) + std::string(1, conv);
+            ? "%" + fwp + "l"
+            : "%" + fwp + std::string(1, conv);
         if (conv == '%') {
           out += '%';
         } else if (conv == 'q' || conv == 'Q') {
-          // Shell-quote the argument.  A precision truncates the argument (in
-          // bytes) BEFORE quoting; the field width then applies to the quoted
-          // result like `%s' (`%.3Q hello' -> `hel', `%10Q hi' -> `        hi').
+          // Shell-quote the argument.  %Q's precision truncates the argument
+          // (in bytes) BEFORE quoting and the quoted result is then never
+          // truncated (`%.3Q hello' -> `hel'); %q's precision truncates the
+          // QUOTED string, as bash formats it through printstr (`%.2q "a b"'
+          // -> `a\').  The field width applies to the quoted result like
+          // `%s' (`%10Q hi' -> `        hi').
           std::string a = next();
-          size_t sp = i + 1;
-          std::string fw;  // flags + field width
-          while (sp < j && std::strchr("-+ #0", fmt[sp])) fw += fmt[sp++];
-          while (sp < j && std::isdigit(static_cast<unsigned char>(fmt[sp]))) fw += fmt[sp++];
-          if (sp < j && fmt[sp] == '.') {
+          size_t sp = 0;
+          std::string flags;
+          while (sp < fwp.size() && std::strchr("-+ #0", fwp[sp])) flags += fwp[sp++];
+          long fw = decode_fwpr(fwp, sp, fwp.size(), 0);
+          long pr = -1;
+          if (sp < fwp.size() && fwp[sp] == '.') {
             sp++;
-            long pr = 0;
-            while (sp < j && std::isdigit(static_cast<unsigned char>(fmt[sp])))
-              pr = pr * 10 + (fmt[sp++] - '0');
-            if (static_cast<size_t>(pr) < a.size()) a = a.substr(0, pr);
+            pr = decode_fwpr(fwp, sp, fwp.size(), 0);
+          }
+          if (conv == 'Q') {
+            if (pr >= 0 && static_cast<size_t>(pr) < a.size()) a = a.substr(0, pr);
+            pr = -1;
           }
           std::string q = shell_quote(a);
-          std::string sspec = "%" + fw + "s";
+          if (pr >= 0 && static_cast<size_t>(pr) < q.size()) q = q.substr(0, pr);
+          // bash pads through printstr, which honours only `-' of the flags
+          // and always pads with spaces (`%08.2q' space-pads).
+          std::string sspec = std::string(flags.find('-') != std::string::npos ? "%-" : "%") +
+                              (fw > 0 ? std::to_string(fw) : "") + "s";
           consumed_any = true;
           if (!append_formatted(out, sspec, q.c_str())) { pf_fail(); break; }
         } else if (conv == 'b') {
@@ -638,17 +706,17 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
           // %lc uses only the first character; a null/empty argument produces
           // a single null byte (posix interp 1647).
           if (wconv == 'c') ws = ws.empty() ? std::wstring(1, L'\0') : ws.substr(0, 1);
-          // Parse `-', field width and precision out of the spec text.
+          // Parse `-', field width and precision out of the resolved text.
           bool ljust = false;
-          size_t sp = i + 1;
-          while (sp < j && std::strchr("-+ #0", fmt[sp])) { if (fmt[sp] == '-') ljust = true; sp++; }
-          long fw = decode_fwpr(fmt, sp, j, 0);
+          size_t sp = 0;
+          while (sp < fwp.size() && std::strchr("-+ #0", fwp[sp])) { if (fwp[sp] == '-') ljust = true; sp++; }
+          long fw = decode_fwpr(fwp, sp, fwp.size(), 0);
           long pr = -1;
-          if (sp < j && fmt[sp] == '.') {
+          if (sp < fwp.size() && fwp[sp] == '.') {
             sp++;
             // "a null digit string is treated as zero" -- decode_fwpr already
             // returns 0 for an empty span, and 0 on overflow (see above).
-            pr = decode_fwpr(fmt, sp, j, 0);
+            pr = decode_fwpr(fwp, sp, fwp.size(), 0);
           }
           long nc = (pr >= 0 && pr <= static_cast<long>(ws.size()))
                         ? pr : static_cast<long>(ws.size());
