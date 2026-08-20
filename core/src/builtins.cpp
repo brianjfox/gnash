@@ -82,6 +82,7 @@ std::string decode_b(const std::string &s, bool &stop, bool bare_octal = true,
       case 'b': out += '\b'; break;
       case 'f': out += '\f'; break;
       case 'v': out += '\v'; break;
+      case 'e': case 'E': out += '\033'; break;
       case '\\': out += '\\'; break;
       case 'c': stop = true; return out;
       case 'x': {
@@ -279,9 +280,21 @@ std::string printable_name(const std::string &s) {
 
 namespace {
 
-std::string shell_quote(const std::string &s) {
+std::string shell_quote(const std::string &s, bool altform = false) {
   if (s.empty()) return "''";
   if (q_needs_ansic(s)) return q_ansic(s);
+  // The alternate form (printf %#q -> bash sh_single_quote) ALWAYS
+  // single-quotes, even a string needing no quoting, with embedded single
+  // quotes spelled '\''.  ANSI-C quoting above still takes precedence.
+  if (altform) {
+    std::string r = "'";
+    for (char c : s) {
+      if (c == '\'') r += "'\\''";
+      else r += c;
+    }
+    r += '\'';
+    return r;
+  }
   // Characters bash leaves unescaped, plus alphanumerics; `~' and `#' are only
   // safe when they do not start the string.
   static const char *safe = "#%+-./:=@_~";
@@ -522,6 +535,33 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
   // remaining operands and writes the output accumulated so far, but the
   // builtin's exit status is failure (bash's conversion_error).
   bool conv_error = false;
+  // Output already written to stdout.  Every diagnostic first flushes the
+  // accumulated output UP TO ITS LAST NEWLINE, so stdout and stderr
+  // interleave as bash's line-buffered stdout does: `printf '%s\n%n' abc
+  // bad-var' shows abc before the error, but `printf 'ab%Mcd'' holds the
+  // unterminated `ab' until after it.  OUT itself is never truncated --
+  // %n's pass_start arithmetic depends on its full length.
+  size_t flushed = 0;
+  auto flush_out = [&]() {
+    if (to_var) return;
+    size_t nl = out.find_last_of('\n');
+    if (nl == std::string::npos || nl < flushed) return;
+    std::fwrite(out.data() + flushed, 1, nl + 1 - flushed, stdout);
+    std::fflush(stdout);
+    flushed = nl + 1;
+  };
+  // A leading ' or " takes the code of the next CHARACTER -- multibyte-aware
+  // (bash asciicode: printf %d \"'A\" is 192 for A-grave in a UTF-8 locale,
+  // not the first byte of its encoding).
+  auto char_code = [&](const std::string &a) -> long long {
+    if (a.size() <= 1) return 0;
+    if (MB_CUR_MAX > 1) {
+      wchar_t wc;
+      std::mbtowc(nullptr, nullptr, 0);  // reset shift state
+      if (std::mbtowc(&wc, a.c_str() + 1, a.size() - 1) > 0) return wc;
+    }
+    return static_cast<unsigned char>(a[1]);
+  };
   // Parse a literal field width or precision the way bash's decodeint does: a
   // value that does not fit in an int diagnoses `NNN: Result too large'
   // (strerror(ERANGE)) and yields OVERFLOW_RETURN, so a pathological width
@@ -540,6 +580,7 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
       sp++;
     }
     if (!ovf) return static_cast<long>(v);
+    flush_out();
     std::fprintf(stderr, "%sprintf: %s: %s\n", sh.err_prefix().c_str(),
                  f.substr(d0, sp - d0).c_str(), std::strerror(ERANGE));
     conv_error = true;
@@ -553,6 +594,7 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
   // (errno) and an immediate stop.  The caller must break out of the format
   // scan; clearing argi ends the argument-reuse loop.
   auto pf_fail = [&]() {
+    flush_out();
     std::fprintf(stderr, "%sprintf: %s\n", sh.err_prefix().c_str(),
                  std::strerror(errno));
     fatal = true;
@@ -568,16 +610,18 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
     if (argi >= argv.size()) return 0;
     std::string a = argv[argi++];
     if (!a.empty() && (a[0] == '\'' || a[0] == '"'))
-      return a.size() > 1 ? static_cast<unsigned char>(a[1]) : 0;
+      return static_cast<long>(char_code(a));
     errno = 0;
     char *ep = nullptr;
     long long v = std::strtoll(a.c_str(), &ep, 0);
     bool overflow = errno == ERANGE || v < INT_MIN || v > INT_MAX;
     if (*ep != '\0' || ep == a.c_str()) {
+      flush_out();
       std::fprintf(stderr, "%sprintf: %s: invalid number\n",
                    sh.err_prefix().c_str(), a.c_str());
       conv_error = true;
     } else if (overflow) {
+      flush_out();
       std::fprintf(stderr, "%sprintf: %s: %s\n", sh.err_prefix().c_str(),
                    a.c_str(), std::strerror(ERANGE));
       conv_error = true;
@@ -591,10 +635,12 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
   // and processing continues, per POSIX.
   auto chk_num = [&](const std::string &a, const char *ep, bool erange) {
     if ((ep && *ep != '\0') || ep == a.c_str()) {
+      flush_out();
       std::fprintf(stderr, "%sprintf: %s: invalid number\n",
                    sh.err_prefix().c_str(), a.c_str());
       conv_error = true;
     } else if (erange) {
+      flush_out();
       std::fprintf(stderr, "%sprintf: %s: %s\n", sh.err_prefix().c_str(),
                    a.c_str(), std::strerror(ERANGE));
       conv_error = true;
@@ -669,6 +715,7 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
         // dangling `%5' or `%lz' -- is `missing format character': report the
         // whole spec, stop processing, still write what accumulated (bash).
         auto missing_fmt_char = [&]() {
+          flush_out();
           std::fprintf(stderr, "%sprintf: `%s': missing format character\n",
                        sh.err_prefix().c_str(), fmt.substr(i).c_str());
           fatal = true;
@@ -754,13 +801,17 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
           long pr = -1;
           if (sp < fwp.size() && fwp[sp] == '.') {
             sp++;
-            pr = decode_fwpr(fwp, sp, fwp.size(), 0);
+            // On overflow %q truncates the quoted string to the default 0 but
+            // %Q loses the precision entirely (decodeint's -1 pre-truncation
+            // sentinel; printstr's precision was already raised to the quoted
+            // length), so `%.<TOOBIG>Q' prints the whole quoted argument.
+            pr = decode_fwpr(fwp, sp, fwp.size(), conv == 'Q' ? -1 : 0);
           }
           if (conv == 'Q') {
             if (pr >= 0 && static_cast<size_t>(pr) < a.size()) a = a.substr(0, pr);
             pr = -1;
           }
-          std::string q = shell_quote(a);
+          std::string q = shell_quote(a, flags.find('#') != std::string::npos);
           if (pr >= 0 && static_cast<size_t>(pr) < q.size()) q = q.substr(0, pr);
           // bash pads through printstr, which honours only `-' of the flags
           // and always pads with spaces (`%08.2q' space-pads).
@@ -846,7 +897,7 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
           long long v = 0;
           // A leading ' or " makes the value the next character's code.
           if (!a.empty() && (a[0] == '\'' || a[0] == '"')) {
-            v = a.size() > 1 ? static_cast<unsigned char>(a[1]) : 0;
+            v = char_code(a);
           } else if (have_arg) {
             errno = 0;
             char *ep = nullptr;
@@ -862,7 +913,7 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
           std::string a = next();
           unsigned long long v = 0;
           if (!a.empty() && (a[0] == '\'' || a[0] == '"')) {
-            v = a.size() > 1 ? static_cast<unsigned char>(a[1]) : 0;
+            v = static_cast<unsigned long long>(char_code(a));
           } else if (have_arg) {
             // strtoumax semantics: `-1' wraps to UINTMAX_MAX with no error.
             errno = 0;
@@ -880,7 +931,7 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
           // Floats take the leading ' / " character-code form too (bash
           // getfloatmax -> asciicode).
           if (!a.empty() && (a[0] == '\'' || a[0] == '"')) {
-            v = a.size() > 1 ? static_cast<unsigned char>(a[1]) : 0;
+            v = static_cast<double>(char_code(a));
           } else if (have_arg) {
             errno = 0;
             char *ep = nullptr;
@@ -900,12 +951,14 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
           consumed_any = true;
           if (!var.empty()) {
             if (!valid_identifier(var)) {
+              flush_out();
               std::fprintf(stderr, "%sprintf: `%s': not a valid identifier\n",
                            sh.err_prefix().c_str(), var.c_str());
               fatal = true;
               argi = argv.size();
               break;
             }
+            flush_out();  // a failed binding's `readonly variable' interleaves too
             sh.set(var, std::to_string(out.size() - pass_start), "printf");
           }
         } else if (conv == '(') {
@@ -916,6 +969,7 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
         } else {
           // Anything else is `C': invalid format character -- an error that
           // stops processing (bash); what accumulated is still written.
+          flush_out();
           std::fprintf(stderr, "%sprintf: `%c': invalid format character\n",
                        sh.err_prefix().c_str(), conv);
           fatal = true;
@@ -954,8 +1008,8 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
     } else if (!sh.set(vname, out, "printf")) {
       return 1;  // invalid nameref target: `printf: `X': not a valid identifier'
     }
-  } else {
-    std::fwrite(out.data(), 1, out.size(), stdout);
+  } else if (out.size() > flushed) {
+    std::fwrite(out.data() + flushed, 1, out.size() - flushed, stdout);
   }
   return (fatal || conv_error) ? 1 : 0;
 }
