@@ -1541,9 +1541,10 @@ static bool is_locale_var(const std::string &n) {
 
 // Re-apply the locale from the shell's own LC_ALL/LC_*/LANG variables, in
 // POSIX precedence order, so a runtime `export LC_ALL=en_US.UTF-8' makes
-// subsequent ${#var}/substring operations count characters.  Two categories
-// are tracked: LC_CTYPE (MB_CUR_MAX / mbrtowc / \u encoding) and LC_NUMERIC
-// (printf's radix character -- de_DE formats %.4f as `1,0000').
+// subsequent ${#var}/substring operations count characters.  Three categories
+// are tracked: LC_CTYPE (MB_CUR_MAX / mbrtowc / \u encoding), LC_NUMERIC
+// (printf's radix character -- de_DE formats %.4f as `1,0000') and LC_TIME
+// (strftime for printf %(fmt)T).
 static void apply_ctype_locale(Shell &sh) {
   auto val = [&](const char *k) -> std::string {
     auto it = sh.vars.find(k);
@@ -1558,6 +1559,12 @@ static void apply_ctype_locale(Shell &sh) {
   if (loc.empty()) loc = val("LC_NUMERIC");
   if (loc.empty()) loc = lang;
   if (!loc.empty()) std::setlocale(LC_NUMERIC, loc.c_str());
+  // LC_TIME drives strftime -- printf %(%x)T under `LC_ALL=C' must print
+  // the C locale's 05/30/10, not the startup locale's date format.
+  loc = all;
+  if (loc.empty()) loc = val("LC_TIME");
+  if (loc.empty()) loc = lang;
+  if (!loc.empty()) std::setlocale(LC_TIME, loc.c_str());
 }
 
 // Public re-application hook: the executor calls this after a temporary
