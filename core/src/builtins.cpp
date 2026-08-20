@@ -727,36 +727,78 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
         if (j >= fmt.size()) { missing_fmt_char(); break; }
         char conv = fmt[j];
         // %(DATEFMT)T: format an epoch-seconds argument through strftime.  The
-        // conversion char sits after the parenthesized format, so it is scanned
-        // separately from the ordinary single-letter conversions below.
+        // conversion char sits after the parenthesized format -- scanned to
+        // the BALANCED closing paren (`%((%Y))T' formats `(1969)') -- so it
+        // is handled separately from the single-letter conversions below.
         if (conv == '(') {
-          size_t close = fmt.find(")T", j);
-          if (close != std::string::npos) {
-            std::string datefmt = fmt.substr(j + 1, close - (j + 1));
-            // Field width and precision apply to the strftime result like
-            // `%s' (bash formats it through printstr); `*' values are
-            // fetched BEFORE the seconds argument.
-            std::string tfwp = resolve_fwp(i + 1, j);
-            // The argument is seconds since the epoch, with two special
-            // values (bash printf.def): -1 (the default when no argument is
-            // given) is the current time, and -2 is the shell's start time.
-            // Every other value -- INCLUDING other negatives -- is a literal
-            // time_t, so a pre-1970 date like -86400 formats as 1969-12-31.
-            std::string a = next();
-            long long v = a.empty() ? -1 : std::strtoll(a.c_str(), nullptr, 10);
-            time_t when = (v == -1) ? std::time(nullptr)
-                        : (v == -2) ? static_cast<time_t>(sh.seconds_base)
-                                    : static_cast<time_t>(v);
-            struct tm tmv;
-            localtime_r(&when, &tmv);
-            char tbuf[256];
-            tbuf[0] = '\0';
-            std::strftime(tbuf, sizeof tbuf, datefmt.c_str(), &tmv);
-            out += printstr_pad(tbuf, tfwp);
-            consumed_any = true;
-            i = close + 1;  // land on the 'T'; the loop ++ steps past it
-            continue;
+          size_t p = j + 1;
+          int depth = 1;
+          std::string datefmt;
+          while (p < fmt.size()) {
+            if (fmt[p] == '(') depth++;
+            else if (fmt[p] == ')' && --depth == 0) break;
+            datefmt += fmt[p++];
           }
+          if (p >= fmt.size() || p + 1 >= fmt.size() || fmt[p + 1] != 'T') {
+            // Not `)T': bash warns with the character after the paren scan
+            // (a NUL byte when the format simply ran out), prints the `%'
+            // literally and rescans the rest of the spec as ordinary text.
+            char bad = (p + 1 < fmt.size()) ? fmt[p + 1] : '\0';
+            flush_out();
+            std::fprintf(stderr,
+                         "%sprintf: warning: `%c': invalid time format specification\n",
+                         sh.err_prefix().c_str(), bad);
+            out += '%';
+            continue;  // the loop ++ resumes at the character after `%'
+          }
+          // Field width and precision apply to the strftime result like `%s'
+          // (bash formats it through printstr); `*' values are fetched
+          // BEFORE the seconds argument.
+          std::string tfwp = resolve_fwp(i + 1, j);
+          // An empty DATEFMT means the locale's time, %X (bash printf.def).
+          if (datefmt.empty()) datefmt = "%X";
+          // The argument is seconds since the epoch, with two special values
+          // (bash printf.def): -1 (the default when no argument is given) is
+          // the current time, and -2 is the shell's start time.  Every other
+          // value -- INCLUDING other negatives -- is a literal time_t, so a
+          // pre-1970 date like -86400 formats as 1969-12-31.  A present
+          // argument is validated like %d's (getintmax).
+          bool have_arg = argi < argv.size();
+          std::string a = next();
+          long long v = -1;
+          if (have_arg) {
+            if (!a.empty() && (a[0] == '\'' || a[0] == '"')) {
+              v = char_code(a);
+            } else {
+              errno = 0;
+              char *ep = nullptr;
+              v = std::strtoll(a.c_str(), &ep, 0);
+              chk_num(a, ep, errno == ERANGE);
+            }
+          }
+          time_t when = (v == -1) ? std::time(nullptr)
+                      : (v == -2) ? static_cast<time_t>(sh.seconds_base)
+                                  : static_cast<time_t>(v);
+          // bash sv_tz: hand the shell's EXPORTED TZ to libc before
+          // localtime, so `export TZ=EST5EDT' (or `unset TZ') mid-script
+          // takes effect.  An unexported TZ assignment does NOT (bash).
+          {
+            auto tzit = sh.vars.find("TZ");
+            if (tzit != sh.vars.end() && tzit->second.exported)
+              setenv("TZ", sh.get("TZ").c_str(), 1);
+            else if (tzit == sh.vars.end())
+              unsetenv("TZ");
+            tzset();
+          }
+          struct tm tmv;
+          localtime_r(&when, &tmv);
+          char tbuf[256];
+          tbuf[0] = '\0';
+          std::strftime(tbuf, sizeof tbuf, datefmt.c_str(), &tmv);
+          out += printstr_pad(tbuf, tfwp);
+          consumed_any = true;
+          i = p + 1;  // land on the 'T'; the loop ++ steps past it
+          continue;
         }
         // A C length modifier (l, ll, h, hh, L, j, z, t) before a numeric or
         // floating conversion is accepted and ignored: bash formats through
