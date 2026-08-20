@@ -547,6 +547,58 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
     return overflow ? overflow_return : static_cast<long>(v);
   };
   bool consumed_any = true;
+  // Resolve a flags/width/precision span of the format into ordinary digit
+  // text, fetching `*' values from the argument list in bash's order: the
+  // width argument, then the precision, then the conversion's own argument.
+  // A negative `*' width means left-justify (bash getint/printstr); a
+  // negative `*' precision is treated as if the precision were missing.
+  auto resolve_fwp = [&](size_t from, size_t to) -> std::string {
+    std::string fwp;
+    size_t sp = from;
+    while (sp < to && std::strchr("-+ #0", fmt[sp])) fwp += fmt[sp++];
+    if (sp < to && fmt[sp] == '*') {
+      sp++;
+      consumed_any = true;
+      long w = star_int(0);
+      if (w < 0) { fwp += '-'; w = -w; }
+      fwp += std::to_string(w);
+    } else {
+      while (sp < to && std::isdigit(static_cast<unsigned char>(fmt[sp])))
+        fwp += fmt[sp++];
+    }
+    if (sp < to && fmt[sp] == '.') {
+      sp++;
+      if (sp < to && fmt[sp] == '*') {
+        sp++;
+        consumed_any = true;
+        long p = star_int(-1);
+        if (p >= 0) { fwp += '.'; fwp += std::to_string(p); }
+      } else {
+        fwp += '.';
+        while (sp < to && std::isdigit(static_cast<unsigned char>(fmt[sp])))
+          fwp += fmt[sp++];
+      }
+    }
+    return fwp;
+  };
+  // bash's printstr, for conversions the C library cannot format directly
+  // (%b may hold NUL bytes, %(fmt)T): the precision truncates bytes, the
+  // field width pads with spaces, and `-' is the only honoured flag.
+  auto printstr_pad = [&](const std::string &s, const std::string &f) -> std::string {
+    bool ljust = false;
+    size_t sp = 0;
+    while (sp < f.size() && std::strchr("-+ #0", f[sp])) { if (f[sp] == '-') ljust = true; sp++; }
+    long fw = decode_fwpr(f, sp, f.size(), 0);
+    long pr = -1;
+    if (sp < f.size() && f[sp] == '.') {
+      sp++;
+      pr = decode_fwpr(f, sp, f.size(), 0);
+    }
+    std::string body = (pr >= 0 && static_cast<size_t>(pr) < s.size()) ? s.substr(0, pr) : s;
+    long pad = fw - static_cast<long>(body.size());
+    if (pad <= 0) return body;
+    return ljust ? body + std::string(pad, ' ') : std::string(pad, ' ') + body;
+  };
   do {
     consumed_any = false;
     // bash zeroes its total-written counter on every reuse of the format
@@ -570,6 +622,10 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
           size_t close = fmt.find(")T", j);
           if (close != std::string::npos) {
             std::string datefmt = fmt.substr(j + 1, close - (j + 1));
+            // Field width and precision apply to the strftime result like
+            // `%s' (bash formats it through printstr); `*' values are
+            // fetched BEFORE the seconds argument.
+            std::string tfwp = resolve_fwp(i + 1, j);
             // The argument is seconds since the epoch, with two special
             // values (bash printf.def): -1 (the default when no argument is
             // given) is the current time, and -2 is the shell's start time.
@@ -585,7 +641,7 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
             char tbuf[256];
             tbuf[0] = '\0';
             std::strftime(tbuf, sizeof tbuf, datefmt.c_str(), &tmv);
-            out += tbuf;
+            out += printstr_pad(tbuf, tfwp);
             consumed_any = true;
             i = close + 1;  // land on the 'T'; the loop ++ steps past it
             continue;
@@ -608,39 +664,7 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
           if (j >= fmt.size()) { out += '%'; break; }  // dangling `%l' at end
           conv = fmt[j];
         }
-        // Resolve the flags/width/precision text into FWP, fetching `*'
-        // values from the argument list in bash's order: the width argument,
-        // then the precision, then the conversion's own argument.  A negative
-        // `*' width means left-justify (bash getint/printstr); a negative
-        // `*' precision is treated as if the precision were missing.
-        std::string fwp;
-        {
-          size_t sp = i + 1;
-          while (sp < flagsend && std::strchr("-+ #0", fmt[sp])) fwp += fmt[sp++];
-          if (sp < flagsend && fmt[sp] == '*') {
-            sp++;
-            consumed_any = true;
-            long w = star_int(0);
-            if (w < 0) { fwp += '-'; w = -w; }
-            fwp += std::to_string(w);
-          } else {
-            while (sp < flagsend && std::isdigit(static_cast<unsigned char>(fmt[sp])))
-              fwp += fmt[sp++];
-          }
-          if (sp < flagsend && fmt[sp] == '.') {
-            sp++;
-            if (sp < flagsend && fmt[sp] == '*') {
-              sp++;
-              consumed_any = true;
-              long p = star_int(-1);
-              if (p >= 0) { fwp += '.'; fwp += std::to_string(p); }
-            } else {
-              fwp += '.';
-              while (sp < flagsend && std::isdigit(static_cast<unsigned char>(fmt[sp])))
-                fwp += fmt[sp++];
-            }
-          }
-        }
+        std::string fwp = resolve_fwp(i + 1, flagsend);
         std::string spec = wide_lsc
             ? "%" + fwp + "l"
             : "%" + fwp + std::string(1, conv);
@@ -676,8 +700,11 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
           consumed_any = true;
           if (!append_formatted(out, sspec, q.c_str())) { pf_fail(); break; }
         } else if (conv == 'b') {
+          // The field width and precision apply to the EXPANDED string
+          // (bash formats it through printstr, since it may hold NUL bytes);
+          // a \c still pads this conversion before stopping.
           bool stop = false;
-          out += decode_b(next(), stop, /*bare_octal=*/true, &sh);
+          out += printstr_pad(decode_b(next(), stop, /*bare_octal=*/true, &sh), fwp);
           consumed_any = true;
           if (stop) { argi = argv.size(); i = fmt.size(); break; }
         } else if (conv == 'l' && j + 1 < fmt.size() &&
@@ -738,9 +765,10 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
         } else if (conv == 'c') {
           std::string a = next();
           // An empty argument (explicit "" or a missing one) prints a single
-          // NUL byte, as bash does -- not nothing.
-          out += a.empty() ? '\0' : a[0];
+          // NUL byte, as bash does -- not nothing.  The C library applies the
+          // field width (and ignores any precision), as bash's PF does.
           consumed_any = true;
+          if (!append_formatted(out, spec, a.empty() ? '\0' : a[0])) { pf_fail(); break; }
         } else if (conv == 'd' || conv == 'i' || conv == 'x' || conv == 'X' ||
                    conv == 'o' || conv == 'u') {
           std::string sp = spec;
