@@ -626,10 +626,20 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
         size_t p = i;
         decode_fmt_escape(fmt, p, out);
         i = p - 1;  // loop increment lands on the next character
-      } else if (c == '%' && i + 1 < fmt.size()) {
+      } else if (c == '%') {
+        // A conversion that runs off the end of the format -- a bare `%', a
+        // dangling `%5' or `%lz' -- is `missing format character': report the
+        // whole spec, stop processing, still write what accumulated (bash).
+        auto missing_fmt_char = [&]() {
+          std::fprintf(stderr, "%sprintf: `%s': missing format character\n",
+                       sh.err_prefix().c_str(), fmt.substr(i).c_str());
+          fatal = true;
+          argi = argv.size();
+        };
+        if (i + 1 >= fmt.size()) { missing_fmt_char(); break; }
         size_t j = i + 1;
         while (j < fmt.size() && std::strchr("-+ #0123456789.*", fmt[j])) j++;
-        if (j >= fmt.size()) { out += '%'; break; }
+        if (j >= fmt.size()) { missing_fmt_char(); break; }
         char conv = fmt[j];
         // %(DATEFMT)T: format an epoch-seconds argument through strftime.  The
         // conversion char sits after the parenthesized format, so it is scanned
@@ -673,12 +683,17 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
         // `%ls' / `%lc' in a multibyte locale are NOT length-modified -- they
         // are the wide string/char forms handled specially below.
         size_t flagsend = j;  // end of flags/width/precision
-        bool wide_lsc = conv == 'l' && j + 1 < fmt.size() &&
-                        (fmt[j + 1] == 's' || fmt[j + 1] == 'c') && MB_CUR_MAX > 1;
+        // %S / %C are bash synonyms for the wide %ls / %lc in a multibyte
+        // locale (and plain %s / %c otherwise).
+        bool wide_lsc = ((conv == 'l' && j + 1 < fmt.size() &&
+                          (fmt[j + 1] == 's' || fmt[j + 1] == 'c')) ||
+                         conv == 'S' || conv == 'C') && MB_CUR_MAX > 1;
         if (!wide_lsc) {
           while (j < fmt.size() && std::strchr("lhLjzt", fmt[j])) j++;
-          if (j >= fmt.size()) { out += '%'; break; }  // dangling `%l' at end
+          if (j >= fmt.size()) { missing_fmt_char(); break; }  // dangling `%l'
           conv = fmt[j];
+          if (conv == 'S') conv = 's';
+          if (conv == 'C') conv = 'c';
         }
         std::string fwp = resolve_fwp(i + 1, flagsend);
         std::string spec = wide_lsc
@@ -723,12 +738,11 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
           out += printstr_pad(decode_b(next(), stop, /*bare_octal=*/true, &sh), fwp);
           consumed_any = true;
           if (stop) { argi = argv.size(); i = fmt.size(); break; }
-        } else if (conv == 'l' && j + 1 < fmt.size() &&
-                   (fmt[j + 1] == 's' || fmt[j + 1] == 'c') && MB_CUR_MAX > 1) {
-          // %ls / %lc: field width and precision count wide CHARACTERS, and
-          // padding is always spaces -- bash's printwidestr, not the C
-          // library's byte-counting %ls.
-          char wconv = fmt[j + 1];
+        } else if (wide_lsc) {
+          // %ls / %lc (and the %S / %C synonyms): field width and precision
+          // count wide CHARACTERS, and padding is always spaces -- bash's
+          // printwidestr, not the C library's byte-counting %ls.
+          char wconv = conv == 'S' ? 's' : conv == 'C' ? 'c' : fmt[j + 1];
           std::string a = next();
           std::wstring ws;
           {
@@ -774,7 +788,8 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
           }
           if (ljust) out.append(pad, ' ');
           consumed_any = true;
-          j++;  // the conversion consumed two characters (`ls' / `lc')
+          if (conv == 'l') j++;  // `ls' / `lc' consumed two characters; the
+                                 // %S / %C synonyms only one
         } else if (conv == 's') {
           consumed_any = true;
           if (!append_formatted(out, spec, next().c_str())) { pf_fail(); break; }
@@ -855,8 +870,19 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
             }
             sh.set(var, std::to_string(out.size() - pass_start), "printf");
           }
-        } else {
+        } else if (conv == '(') {
+          // An unclosed `%(' (no `)T') falls through to here: bash emits the
+          // text literally (with a time-format warning we do not reproduce)
+          // and does not fail, so keep the literal spec.
           out += spec;
+        } else {
+          // Anything else is `C': invalid format character -- an error that
+          // stops processing (bash); what accumulated is still written.
+          std::fprintf(stderr, "%sprintf: `%c': invalid format character\n",
+                       sh.err_prefix().c_str(), conv);
+          fatal = true;
+          argi = argv.size();
+          break;
         }
         i = j;
       } else {
