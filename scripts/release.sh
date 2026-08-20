@@ -275,6 +275,18 @@ fi
 step "Push tap $TAP_REPO"
 git_push "$TAP_DIR"
 
+# ---- 8. repour: leave this machine on the poured bottle --------------------
+# The `brew install --build-bottle' above leaves a from-source install whose
+# receipt (built_as_bottle, poured_from_bottle: false) makes every later
+# install/reinstall/upgrade on this machine compile from source again and
+# skip post_install (#671).  Swap it for the bottle that was just uploaded
+# and recorded in the formula.
+if [ "$SKIP_BOTTLE" != 1 ]; then
+  step "Reinstall $FORMULA from the new bottle"
+  brew uninstall --force "$FORMULA" >/dev/null 2>&1 || true
+  brew install "$TAP_SLUG/$FORMULA"
+fi
+
 step "Done: $TAG released"
 info "main release: https://github.com/$MAIN_REPO/releases/tag/$TAG"
 [ "$SKIP_BOTTLE" = 1 ] || info "bottle:       https://github.com/$TAP_REPO/releases/tag/$TAG"
