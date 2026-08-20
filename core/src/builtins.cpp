@@ -1074,6 +1074,12 @@ struct TestEval {
     switch (nargs) {
       case 0: return false;
       case 1: {
+        // arg(1), NOT arg(pos): bash's posixtest evaluates ONE_ARG_TEST
+        // (argv[1]) even when called recursively for a parenthesized
+        // sub-expression (term scans ahead and calls posixtest with pos > 1),
+        // so `test '(' '' ')' -a b' tests "(" -- not "" -- and succeeds.
+        // Deliberate bug-for-bug compatibility with bash 5.3 test.c; its
+        // CHANGES entry concedes "Such expressions remain ambiguous".
         bool value = one_arg(arg(1));
         advance(false);
         return value;
