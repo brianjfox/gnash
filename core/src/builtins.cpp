@@ -456,23 +456,61 @@ bool array_expand_once_name(Shell &sh, std::string &name) {
 }
 
 int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
-  // Options: -v NAME (assign to a variable), -- (end of options).
+  static const char *const kUsage =
+      "printf: usage: printf [-v var] format [arguments]\n";
+  // Options: -v NAME (assign to a variable), with the name attached (-vNAME)
+  // or separate; `--' ends options; a lone `-' is the format string.  Option
+  // errors are EX_USAGE (2): a prefixed `-x: invalid option' or `-v: option
+  // requires an argument' plus the bare usage line, or the bare usage line
+  // alone when the format operand is missing.  (`printf -v --' takes `--' as
+  // the -v argument, as getopt does, and fails identifier validation.)
   size_t ai = 1;
   bool to_var = false;
   std::string vname;
   size_t vname_idx = SIZE_MAX;
   while (ai < argv.size() && argv[ai].size() >= 2 && argv[ai][0] == '-') {
-    if (argv[ai] == "--") { ai++; break; }
-    if (argv[ai] == "-v" && ai + 1 < argv.size()) {
+    const std::string &opt = argv[ai];
+    if (opt == "--") { ai++; break; }
+    if (opt[1] == 'v') {
       to_var = true;
-      vname = argv[ai + 1];
-      vname_idx = ai + 1;
-      ai += 2;
+      if (opt.size() > 2) {  // attached form: -vNAME
+        vname = opt.substr(2);
+        ai++;
+      } else if (ai + 1 < argv.size()) {
+        vname = argv[ai + 1];
+        vname_idx = ai + 1;
+        ai += 2;
+      } else {
+        std::fprintf(stderr, "%sprintf: -v: option requires an argument\n",
+                     sh.err_prefix().c_str());
+        std::fputs(kUsage, stderr);
+        return 2;
+      }
       continue;
     }
-    break;
+    std::fprintf(stderr, "%sprintf: %s: invalid option\n",
+                 sh.err_prefix().c_str(), opt.substr(0, 2).c_str());
+    std::fputs(kUsage, stderr);
+    return 2;
   }
-  if (ai >= argv.size()) return 0;
+  // The -v target is validated BEFORE any format processing (bash's vflag
+  // block): a plain identifier, or IDENTIFIER[NON-EMPTY-SUBSCRIPT] with the
+  // closing bracket last.  Failures are EX_USAGE, like the option errors.
+  if (to_var) {
+    size_t lb = vname.find('[');
+    bool ok = valid_identifier(vname) ||
+              (lb != std::string::npos && lb > 0 && vname.size() >= lb + 3 &&
+               vname.back() == ']' && valid_identifier(vname.substr(0, lb)));
+    if (!ok) {
+      std::fprintf(stderr, "%sprintf: `%s': not a valid identifier\n",
+                   sh.err_prefix().c_str(), vname.c_str());
+      return 2;
+    }
+  }
+  if (ai >= argv.size()) {
+    std::fputs(kUsage, stderr);
+    return 2;
+  }
   std::string fmt = argv[ai++];
   size_t argi = ai;
   std::string out;
