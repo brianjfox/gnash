@@ -33,6 +33,14 @@ TAP_SLUG="brianjfox/tools"                  # `brew tap' name of TAP_REPO
 FORMULA="gnash"                             # formula / binary name
 BOTTLE_TAG="${BOTTLE_TAG:-}"                # host bottle platform label (detected below)
 TARBALL_EXTRA=(LICENSE.md README.md GPLv2-AI-Exception.md)  # shipped alongside the binary
+# Every published binary targets this macOS, so the bottle and tarballs run
+# on older systems, not just the release host's version (#690).
+MACOS_MIN="${MACOS_MIN:-13.0}"
+# The bottle is a self-contained binary (cellar :any_skip_relocation) built
+# for MACOS_MIN, so the SAME tarball is republished under these additional
+# platform labels; a machine on any of them then pours instead of compiling.
+# The built tag itself is always included; entries matching it are skipped.
+EXTRA_BOTTLE_TAGS="${EXTRA_BOTTLE_TAGS:-arm64_sonoma arm64_sequoia arm64_tahoe}"
 
 # ---- argument parsing ------------------------------------------------------
 VERSION=""
@@ -150,11 +158,15 @@ for ARCH in arm64 x86_64; do
   cmake -S "$ROOT" -B "$BUILD" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_OSX_ARCHITECTURES="$ARCH" \
+    -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOS_MIN" \
     -DGNASH_BUILD_TESTS=OFF -DGNASH_WERROR=OFF >/dev/null
   cmake --build "$BUILD" --target "$FORMULA" -j >/dev/null
   BIN="$BUILD/core/$FORMULA"
   archs=$(lipo -archs "$BIN")
   [ "$archs" = "$ARCH" ] || die "binary is not $ARCH-only (got: $archs)"
+  minos=$(otool -l "$BIN" | awk '/minos/ {print $2; exit}')
+  [ "${minos%%.*}" -le "${MACOS_MIN%%.*}" ] || \
+    die "$ARCH binary targets macOS $minos, not $MACOS_MIN"
   strip -x "$BIN" 2>/dev/null || true
   rm -rf "$STAGE/$PKG"; mkdir -p "$STAGE/$PKG"
   cp "$BIN" "$STAGE/$PKG/"
@@ -235,6 +247,15 @@ else
     info "building bottle in $WORK (brew install --build-bottle)"
     brew uninstall --force "$FORMULA" >/dev/null 2>&1 || true
     brew install --build-bottle "$TAP_SLUG/$FORMULA"
+    # The bottle is republished for OLDER macOS labels below, so the binary
+    # must actually target MACOS_MIN -- a keg built for the host version
+    # (formula or superenv regression) would crash on those systems (#690).
+    KEG_BIN=$(brew --prefix)/Cellar/$FORMULA/$VERSION/bin/$FORMULA
+    minos=$(otool -l "$KEG_BIN" 2>/dev/null | awk '/minos/ {print $2; exit}')
+    [ -n "$minos" ] || die "cannot read minos from $KEG_BIN"
+    [ "${minos%%.*}" -le "${MACOS_MIN%%.*}" ] || \
+      die "bottle binary targets macOS $minos, not $MACOS_MIN; check the formula's deployment target"
+    info "bottle binary minos: $minos"
     ( cd "$WORK" && brew bottle --json --no-rebuild \
         --root-url="$ROOT_URL" "$TAP_SLUG/$FORMULA" )
     built=$(ls "$WORK"/$FORMULA--$VERSION.$BOTTLE_TAG.bottle.tar.gz 2>/dev/null | head -1)
@@ -257,11 +278,41 @@ else
   [ ${#BOTTLE_SHA} -eq 64 ] || die "bad bottle sha256: ${BOTTLE_SHA:-<empty>}"
   info "bottle sha256: $BOTTLE_SHA"
 
+  # ---- 6b. republish the bottle for the extra platform labels ---------------
+  # The keg is a self-contained MACOS_MIN binary (cellar :any_skip_relocation),
+  # so the SAME tarball serves every newer macOS: upload it under each extra
+  # label so those machines pour instead of compiling from source (#690).
+  TAG_ARGS=(--tag "$BOTTLE_TAG")
+  if [ -n "$EXTRA_BOTTLE_TAGS" ]; then
+    have=$(gh release view "$TAG" --repo "$TAP_REPO" --json assets \
+             --jq '.assets[].name' 2>/dev/null)
+    W2=$(mktemp -d)
+    for t2 in $EXTRA_BOTTLE_TAGS; do
+      [ "$t2" = "$BOTTLE_TAG" ] && continue
+      TAG_ARGS+=(--tag "$t2")
+      a2="$FORMULA-$VERSION.$t2.bottle.tar.gz"
+      if printf '%s\n' "$have" | grep -qx "$a2"; then
+        skip "bottle $a2 already uploaded"
+        continue
+      fi
+      if [ ! -f "$W2/$BOTTLE_ASSET" ]; then
+        gh release download "$TAG" --repo "$TAP_REPO" \
+          --pattern "$BOTTLE_ASSET" --dir "$W2"
+        got=$(shasum -a 256 "$W2/$BOTTLE_ASSET" | cut -d' ' -f1)
+        [ "$got" = "$BOTTLE_SHA" ] || die "downloaded $BOTTLE_ASSET sha mismatch"
+      fi
+      cp "$W2/$BOTTLE_ASSET" "$W2/$a2"
+      gh release upload "$TAG" "$W2/$a2" --repo "$TAP_REPO" --clobber
+      info "uploaded $a2 (same bottle, relabeled)"
+    done
+    rm -rf "$W2"
+  fi
+
   # ---- 7. record bottle in the formula -------------------------------------
   step "Record bottle in formula and push tap"
   python3 "$ROOT/scripts/formula_edit.py" "$TAP_DIR/Formula/$FORMULA.rb" \
     set-bottle --root-url "https://github.com/$TAP_REPO/releases/download/$TAG" \
-    --tag "$BOTTLE_TAG" --sha "$BOTTLE_SHA" --formula-name "$FORMULA"
+    "${TAG_ARGS[@]}" --sha "$BOTTLE_SHA" --formula-name "$FORMULA"
   if git -C "$TAP_DIR" diff --quiet -- "Formula/$FORMULA.rb"; then
     skip "formula already records this bottle"
   else

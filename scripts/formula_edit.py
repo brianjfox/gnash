@@ -5,7 +5,7 @@
 # formula_edit.py -- surgical edits to a Homebrew formula for release.sh.
 #
 #   formula_edit.py FORMULA.rb set-source --url URL --sha SHA256
-#   formula_edit.py FORMULA.rb set-bottle --root-url URL --tag TAG --sha SHA256
+#   formula_edit.py FORMULA.rb set-bottle --root-url URL --tag TAG [--tag TAG2 ...] --sha SHA256
 #
 # set-source bumps the source `url' and top-level `sha256', and drops any
 # existing `bottle do ... end' block (a new bottle is added afterwards, once
@@ -71,7 +71,9 @@ def set_source(lines, url, sha):
     return collapse_blanks(remove_bottle(out))
 
 
-def set_bottle(lines, root_url, tag, sha, formula):
+def set_bottle(lines, root_url, tags, sha, formula):
+    # One sha256 line per platform tag; the release script republishes the
+    # same portable tarball under every label, so they all share one sha.
     lines = remove_bottle(lines)
     ind = "  "
     block = [
@@ -81,7 +83,7 @@ def set_bottle(lines, root_url, tag, sha, formula):
         f"{ind}# to the matching release in this tap's repo.\n",
         f"{ind}bottle do\n",
         f'{ind}  root_url "{root_url}"\n',
-        f'{ind}  sha256 cellar: :any_skip_relocation, {tag}: "{sha}"\n',
+        *[f'{ind}  sha256 cellar: :any_skip_relocation, {t}: "{sha}"\n' for t in tags],
         f"{ind}end\n",
     ]
     out, inserted = [], False
@@ -104,7 +106,8 @@ def main():
     s.add_argument("--sha", required=True)
     b = sub.add_parser("set-bottle")
     b.add_argument("--root-url", required=True)
-    b.add_argument("--tag", required=True)
+    b.add_argument("--tag", required=True, action="append",
+                   help="platform label; repeatable, all sharing --sha")
     b.add_argument("--sha", required=True)
     b.add_argument("--formula-name", default="gnash")
     args = ap.parse_args()
