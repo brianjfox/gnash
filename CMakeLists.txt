@@ -3,6 +3,16 @@
 
 cmake_minimum_required(VERSION 3.16)
 
+# Build for macOS 13+ by default (must be set before project()).  Without
+# this, binaries carry the build host's version as their minimum
+# (LC_BUILD_VERSION minos) and refuse to run on any older macOS -- which
+# made every published bottle and tarball macOS-27-only (#690).  An explicit
+# -DCMAKE_OSX_DEPLOYMENT_TARGET or MACOSX_DEPLOYMENT_TARGET still wins.
+if(APPLE AND NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET
+         AND "$ENV{MACOSX_DEPLOYMENT_TARGET}" STREQUAL "")
+  set(CMAKE_OSX_DEPLOYMENT_TARGET "13.0" CACHE STRING "Minimum macOS version")
+endif()
+
 project(gnash
   VERSION 2.2.0
   DESCRIPTION "A modular C++ reimplementation of bash 5.3"
