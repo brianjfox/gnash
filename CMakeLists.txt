@@ -14,7 +14,7 @@ if(APPLE AND NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET
 endif()
 
 project(gnash
-  VERSION 2.2.0
+  VERSION 2.2.1
   DESCRIPTION "A modular C++ reimplementation of bash 5.3"
   LANGUAGES C CXX)
 
