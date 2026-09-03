@@ -806,6 +806,19 @@ E'
   'd=$(mktemp -d); echo hi > "$d/f.x1"; echo "[$(< "$d"/f.x*)]"; set -o posix; echo "[$(< "$d"/f.x*)]" 2>&1 | sed -E "s/.*line [0-9]+: //"; rm -rf "$d"'
   '{ echo "$(1111111111111111111111</dev/stdin)"; } <<<hi 2>&1 | sed -E "s/.*line [0-9]+: //"'
   'echo "${HOME:-`echo }`}" >/dev/null && echo scan-ok; x=abcdef; echo "${x:`echo 2`}"'
+  # base#digits: the base is scanned like any literal, so a leading `0' makes
+  # it octal and `08#1' is an error; the digits are range-checked per base.
+  'echo $((08#1)); echo rc=$?'
+  'echo $((8#1)) $((16#FF)) $((36#Z)) $((64#Z)) $((64#@)) $((64#_)) $((10#00042))'
+  'echo $((010#1)); echo rc=$?'
+  'echo $((0#1)); echo rc=$?'
+  'echo $((1#0)); echo rc=$?'
+  'echo $((65#1)); echo rc=$?'
+  'echo $((2#2)); echo rc=$?'
+  'echo $((2#1x)); echo rc=$?'
+  'echo $((2#)); echo rc=$?'
+  'echo $((2#1#1)); echo rc=$?'
+  'echo $((0x)) $((0)) $((0x1f)) $((017))'
 )
 
 fails=0

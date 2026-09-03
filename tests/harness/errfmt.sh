@@ -23,6 +23,12 @@ cases=(
   'echo hi > /no/such/dir/file'
   './this/does/not/exist'
   'type no_such_command_xyz'
+  'echo $((08#1))'
+  'echo $((010#1))'
+  'echo $((1#0))'
+  'echo $((2#2))'
+  'echo $((2#))'
+  'echo $((2#1#1))'
 )
 
 # Replace the leading "<program name>:" token (which legitimately differs --
