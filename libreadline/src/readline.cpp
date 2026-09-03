@@ -388,7 +388,23 @@ int ml_oldpoint = 0;  // rl_point at the last paint (fixes the cursor's row)
 
 void wrap_reset() { ml_oldrows = 1; ml_oldpoint = 0; }
 
+// How long readline() waits for the terminal's cursor-position reply before
+// assuming the prompt starts at column 0 (and never asking again).
+constexpr int kCprTimeoutMs = 500;
+
+// Cursor to the start of the prompt on its row: column 0, then right to the
+// prompt's start column.  Text the previous command left before the prompt
+// (output without a trailing newline) stays on the screen, as with readline.
+std::string row_start() {
+  std::string s = "\r";
+  int col = gnash::readline::prompt_start_col;
+  if (col > 0) { s += "\033["; s += std::to_string(col); s += "C"; }
+  return s;
+}
+
 }  // namespace
+
+int gnash::readline::prompt_start_col = 0;
 
 // The terminal width in columns (from TIOCGWINSZ, else $COLUMNS, else 80).
 extern "C" int rl_get_screen_width(void) { return screen_width(); }
@@ -398,14 +414,14 @@ extern "C" int rl_get_screen_width(void) { return screen_width(); }
 // `horizontal-scroll-mode' is on.
 static void refresh_scrolled(FILE *o, const std::string &pemit, int plen) {
   int width = screen_width();
-  int avail = width - plen - 1;
+  int avail = width - gnash::readline::prompt_start_col - plen - 1;
   if (avail < 1) avail = 1;
 
   int off = (rl_point > avail) ? rl_point - avail : 0;
   int shown = rl_end - off;
   if (shown > avail) shown = avail;
 
-  std::fputc('\r', o);
+  std::fputs(row_start().c_str(), o);
   std::fwrite(pemit.data(), 1, pemit.size(), o);
   if (shown > 0) {
     if (rl_highlight_function && rl_end > 0) {
@@ -441,16 +457,18 @@ static void refresh_wrapped(FILE *o, const std::string &pemit, int plen) {
   int W = screen_width();
   if (W < 1) W = 1;
 
-  int rows = (plen + rl_end + W - 1) / W;             // rows the buffer needs (ceil)
+  const int pre = gnash::readline::prompt_start_col + plen;  // columns before the buffer
+  int rows = (pre + rl_end + W - 1) / W;              // rows the buffer needs (ceil)
   if (rows < 1) rows = 1;
-  int rpos = (plen + ml_oldpoint + W) / W;            // cursor's row last time (1-based)
+  int rpos = (pre + ml_oldpoint + W) / W;             // cursor's row last time (1-based)
   int old_rows = ml_oldrows;
 
   std::string out;
   // 1. Erase the previous paint: drop to its last row, clear each row going up.
   if (old_rows - rpos > 0) { out += "\033["; out += std::to_string(old_rows - rpos); out += "B"; }
   for (int j = 0; j < old_rows - 1; j++) out += "\r\033[K\033[A";
-  out += "\r\033[K";
+  out += row_start();
+  out += "\033[K";
 
   // 2. Prompt + buffer; the terminal wraps at the right edge on its own.
   out += pemit;
@@ -459,15 +477,15 @@ static void refresh_wrapped(FILE *o, const std::string &pemit, int plen) {
   // 3. If the cursor is at the very end and lands exactly on the right edge,
   //    emit a newline so it sits at the start of a fresh row (else it would
   //    hang in the last column with the wrap pending).
-  if (rl_point > 0 && rl_point == rl_end && (plen + rl_point) % W == 0) {
+  if (rl_point > 0 && rl_point == rl_end && (pre + rl_point) % W == 0) {
     out += "\r\n";
     rows++;
   }
 
   // 4. Move the cursor up to its target row, then to its column.
-  int rpos2 = (plen + rl_point + W) / W;              // cursor's row now (1-based)
+  int rpos2 = (pre + rl_point + W) / W;               // cursor's row now (1-based)
   if (rows - rpos2 > 0) { out += "\033["; out += std::to_string(rows - rpos2); out += "A"; }
-  int colpos = (plen + rl_point) % W;
+  int colpos = (pre + rl_point) % W;
   out += '\r';
   if (colpos) { out += "\033["; out += std::to_string(colpos); out += "C"; }
 
@@ -499,7 +517,7 @@ static void wrap_move_below(FILE *o) {
   std::string pemit;
   int plen;
   prompt_metrics(rl_prompt ? rl_prompt : "", pemit, plen);
-  int cur_row = (plen + ml_oldpoint) / W;   // 0-based cursor row
+  int cur_row = (gnash::readline::prompt_start_col + plen + ml_oldpoint) / W;  // 0-based
   int last_row = ml_oldrows - 1;
   std::string out;
   if (last_row - cur_row > 0) { out += "\033["; out += std::to_string(last_row - cur_row); out += "B"; }
@@ -514,6 +532,7 @@ extern "C" int rl_clear_screen(int /*count*/, int /*key*/) {
   if (rl_outstream == nullptr) rl_outstream = stdout;
   std::fputs(clear_screen_seq(), rl_outstream);
   wrap_reset();     // the screen is now blank: no prior rows to erase
+  gnash::readline::prompt_start_col = 0;
   rl_redisplay();   // repaint prompt + buffer at row 0
   return 0;
 }
@@ -530,7 +549,7 @@ extern "C" void rl_clear_current_line(void) {
     std::string pemit;
     int plen;
     prompt_metrics(rl_prompt ? rl_prompt : "", pemit, plen);
-    int cur_row = (plen + ml_oldpoint) / W;
+    int cur_row = (gnash::readline::prompt_start_col + plen + ml_oldpoint) / W;
     std::string out;
     if ((ml_oldrows - 1) - cur_row > 0) {
       out += "\033[";
@@ -542,11 +561,13 @@ extern "C" void rl_clear_current_line(void) {
     std::fwrite(out.data(), 1, out.size(), o);
     std::fflush(o);
     wrap_reset();
+    gnash::readline::prompt_start_col = 0;  // the row is clear from column 0
     return;
   }
   std::fputc('\r', o);
   std::fputs(clear_eol(), o);
   std::fflush(o);
+  gnash::readline::prompt_start_col = 0;
 }
 
 // ---- top level ------------------------------------------------------------
@@ -614,6 +635,11 @@ extern "C" char *readline(const char *prompt) {
     if (sigaction(SIGINT, &sa, &old_int) == 0) int_installed = true;
     prep_terminal(fd);
     wrap_reset();  // a fresh line: no previous wrapped rows to erase
+    // Where is the cursor?  When the last command's output did not end in a
+    // newline, readline paints the prompt right after it (`line2$ ') rather
+    // than erasing that text; learn the column so the repaint math holds.
+    int col = gnash::readline::query_cursor_column(kCprTimeoutMs);
+    gnash::readline::prompt_start_col = (col > 0 && col < screen_width()) ? col : 0;
     rl_redisplay();
   } else {
     // Interactive on a non-terminal (bash -i on a pipe): the prompt goes to

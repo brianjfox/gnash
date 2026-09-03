@@ -17,9 +17,12 @@
 
 #include <cerrno>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <deque>
 #include <string>
 #include <sys/select.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 #include "gnash/readline_internal.hpp"
@@ -57,6 +60,67 @@ bool input_pending(int timeout_ms) {
   tv.tv_sec = timeout_ms / 1000;
   tv.tv_usec = (timeout_ms % 1000) * 1000;
   return select(fd + 1, &rfds, nullptr, nullptr, &tv) > 0;
+}
+
+// Cursor Position Report: send `ESC [ 6 n' and read the terminal's
+// `ESC [ row ; col R' reply.  The terminal answers in input order, so any
+// bytes the user typed ahead arrive BEFORE the reply; they are collected and
+// stuffed back for rl_read_key.  A terminal that never answers (the test
+// harness pty, some emulators) costs the timeout once: the failure is
+// remembered and no further queries are sent this session.
+int query_cursor_column(int timeout_ms) {
+  static bool unsupported = false;
+  if (unsupported) return -1;
+  if (rl_instream == nullptr) rl_instream = stdin;
+  if (rl_outstream == nullptr) rl_outstream = stdout;
+  int fd = fileno(rl_instream);
+  int ofd = fileno(rl_outstream);
+  if (!isatty(fd) || !isatty(ofd)) return -1;
+  const char *term = std::getenv("TERM");
+  if (term == nullptr || *term == '\0' || std::strcmp(term, "dumb") == 0) return -1;
+  std::fflush(rl_outstream);
+  if (write(ofd, "\033[6n", 4) != 4) return -1;
+
+  std::string buf;  // everything read while waiting for the reply
+  struct timeval deadline;
+  gettimeofday(&deadline, nullptr);
+  deadline.tv_sec += timeout_ms / 1000;
+  deadline.tv_usec += (timeout_ms % 1000) * 1000;
+  if (deadline.tv_usec >= 1000000) { deadline.tv_sec++; deadline.tv_usec -= 1000000; }
+  int col = -1;
+  for (;;) {
+    if (rl_sigint_flag) break;
+    struct timeval now, tv;
+    gettimeofday(&now, nullptr);
+    long left_us = (deadline.tv_sec - now.tv_sec) * 1000000L + (deadline.tv_usec - now.tv_usec);
+    if (left_us <= 0) break;
+    tv.tv_sec = left_us / 1000000L;
+    tv.tv_usec = left_us % 1000000L;
+    fd_set rfds;
+    FD_ZERO(&rfds);
+    FD_SET(fd, &rfds);
+    int r = select(fd + 1, &rfds, nullptr, nullptr, &tv);
+    if (r < 0) {
+      if (errno == EINTR) continue;
+      break;
+    }
+    if (r == 0) break;  // timed out
+    unsigned char ch;
+    if (read(fd, &ch, 1) != 1) break;
+    buf += static_cast<char>(ch);
+    if (ch != 'R') continue;
+    size_t e = buf.rfind("\033[");
+    if (e == std::string::npos) continue;
+    int row = 0, c = 0;
+    if (std::sscanf(buf.c_str() + e, "\033[%d;%dR", &row, &c) == 2 && c >= 1) {
+      col = c - 1;
+      buf.erase(e);  // what precedes the reply is typeahead
+      break;
+    }
+  }
+  if (col < 0) unsupported = true;
+  stuff_input(buf);
+  return col;
 }
 
 }  // namespace gnash::readline

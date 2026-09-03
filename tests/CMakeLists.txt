@@ -72,6 +72,15 @@ if(NOT APPLE)
 endif()
 add_test(NAME job_notify_test COMMAND job_notify_test $<TARGET_FILE:gnash>)
 
+# The prompt after output without a trailing newline (cursor-position query),
+# driven over a pty against the built shell.
+add_executable(prompt_column_test prompt_column_test.cpp)
+target_link_libraries(prompt_column_test PRIVATE gnash_warnings)
+if(NOT APPLE)
+  target_link_libraries(prompt_column_test PRIVATE util)  # forkpty lives in libutil
+endif()
+add_test(NAME prompt_column_test COMMAND prompt_column_test $<TARGET_FILE:gnash>)
+
 # Differential execution check vs bash over the implemented feature set.
 if(BASH_EXECUTABLE)
   add_test(
