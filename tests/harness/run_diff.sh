@@ -819,6 +819,9 @@ E'
   'echo $((2#)); echo rc=$?'
   'echo $((2#1#1)); echo rc=$?'
   'echo $((0x)) $((0)) $((0x1f)) $((017))'
+  # The true branch of `? :' is a comma expression; the false branch is not.
+  'echo $((1 ? 2 , 3 : 4)) $((0 ? 2 , 3 : 4)) $((1 ? 2 : 3 , 4)) $((1 ? x=5 , 3 : 4)) $x'
+  'echo $((1 ? 2 , : 4)); echo rc=$?'
 )
 
 fails=0

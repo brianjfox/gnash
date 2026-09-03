@@ -89,6 +89,14 @@ int main() {
   eq("-5 + 3", -2);
   eq("3 > 2 ? 10 : 20", 10);
   eq("0 ? 10 : 20", 20);
+  // The true branch of `?:' is a full comma expression in bash (expcond
+  // parses it with EXP_HIGHEST); the false branch binds tighter than `,'.
+  eq("1 ? 2 , 3 : 4", 3);
+  eq("0 ? 2 , 3 : 4", 4);
+  eq("1 ? 2 : 3 , 4", 4);
+  eq("1 ? 2 , 3 : 4 , 5", 5);
+  eq("1 ? 2 ? 3 , 4 : 5 : 6", 4);
+  eq("0 ? 1 / 0 , 2 : 3", 3);
   eq("1, 2, 3", 3);
   eq("7 ^ 3", 4);
 
