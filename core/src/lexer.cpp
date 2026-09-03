@@ -187,6 +187,11 @@ struct Lexer {
                   bool array_lit = false) {  // pos at '('
     int startln = line_for(pos);  // the open line, reported for an unterminated array literal
     int depth = 0;
+    // A span opening with `((' is scanned by bash as an arithmetic expansion
+    // (parse_comsub -> parse_matched_pair with P_ARITH), which knows nothing
+    // of comments: a `#' there is an ordinary character (`$(( 2#101 ))',
+    // `$(( $(echo 1)#1 ))'), never the start of a comment.
+    const bool arith = comsub_ctx && pos + 1 < n && in[pos + 1] == '(';
     struct PHd { std::string delim; bool strip; int depth; bool quoted; };
     std::vector<PHd> paren_heredocs;  // pending heredocs inside the parens
     // A `)' that terminates a `case' pattern (`case x in x)') must not be
@@ -397,7 +402,7 @@ struct Lexer {
         if (depth == 0) break;  // an alias body supplied the closer (see above)
         w += c;
         pos++;
-      } else if (c == '#' && !saw_word) {
+      } else if (c == '#' && !saw_word && !arith) {
         // A comment runs to the end of the line: a `)' in it is not the closer.
         while (pos < n && in[pos] != '\n') { w += in[pos]; pos++; }
       } else if (array_lit && c == '[' && !saw_word) {

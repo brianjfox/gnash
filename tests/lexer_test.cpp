@@ -56,6 +56,11 @@ int main() {
   expect("{ a; }", "{ a ; }");
   expect("a |& b", "a |& b");
   expect("case x in a) b;; esac", "case x in a ) b ;; esac");
+  // Inside `$((' a `#' is never a comment (bash scans the span with P_ARITH):
+  // the word ends at the matching `))', and the rest is still tokenized.
+  expect("echo $(( $(echo 1)#1 ))\nnext", "echo $(( $(echo 1)#1 )) <NL> next");
+  expect("echo $(( 2#101 )); y\nz", "echo $(( 2#101 )) ; y <NL> z");
+  expect("echo $(echo a #c\n) z", "echo $(echo a #c\n) z");  // `$(cmd)' keeps comments
 
   // Here-document body is collected and attached to the delimiter word.
   {
