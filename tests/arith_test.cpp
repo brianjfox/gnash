@@ -21,6 +21,17 @@ static void eq(const char *expr, long long want) {
   }
 }
 
+// The expression must FAIL to evaluate (a bash arithmetic error).
+static void bad(const char *expr) {
+  static core::Shell sh;
+  bool ok = true;
+  long long got = core::eval_arith(sh, expr, &ok);
+  if (ok) {
+    std::fprintf(stderr, "FAIL eval(\"%s\") = %lld, wanted an error\n", expr, got);
+    failures++;
+  }
+}
+
 int main() {
   eq("2+3*4", 14);
   eq("(2+3)*4", 20);
@@ -39,6 +50,34 @@ int main() {
   eq("64#_", 63);         // ... then @ (62) and _ (63)
   eq("16#1f + 1", 32);    // base#digits inside an expression
   eq("10#00042", 42);     // leading zeros are decimal, not octal
+  // The base is scanned like any literal (bash's strlong): a leading `0'
+  // makes it OCTAL, so `08#1' fails on the `8' rather than reading base 8.
+  bad("08#1");
+  bad("08#7");
+  bad("010#1");            // base already found (octal) when `#' arrives
+  bad("0x10#f");
+  bad("0#1");
+  bad("00#1");
+  eq("8#1", 1);
+  eq("0x1F", 31);
+  eq("017", 15);
+  eq("0", 0);
+  eq("0x", 0);             // empty hex run is 0 (non-strict bash)
+  bad("1#0");              // invalid arithmetic base
+  bad("65#1");
+  bad("2#2");              // value too great for base
+  bad("2#1x");
+  bad("8#8");
+  bad("10#a");
+  bad("08");
+  bad("0xg");
+  bad("2#");               // `#' must be followed by a digit character
+  bad("2##1");
+  bad("2#1#1");            // a second `#' is an invalid number
+  bad("1e3");
+  eq("37#A", 36);          // base > 36: uppercase starts at 36
+  eq("36#A", 10);
+  eq("2#1 + 2#1", 2);
   eq("5 > 3", 1);
   eq("3 >= 4", 0);
   eq("5 == 5", 1);

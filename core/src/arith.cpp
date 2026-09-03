@@ -87,27 +87,6 @@ bool arith_operand_start(char c) {
 
 NodeP mk(K k) { auto n = std::make_unique<Node>(); n->k = k; return n; }
 
-// Digit value of C in the given BASE for bash's `base#digits' notation, or -1 if
-// C is not a digit in that base.  Digits run 0-9, then a-z (10-35); for a base
-// above 36, A-Z are 36-61 and `@'/`_' are 62/63, while for base <= 36 upper- and
-// lowercase letters are interchangeable (10-35), matching bash.
-int base_digit(char c, long long base) {
-  int d;
-  if (c >= '0' && c <= '9') d = c - '0';
-  else if (base <= 36) {
-    if (c >= 'a' && c <= 'z') d = c - 'a' + 10;
-    else if (c >= 'A' && c <= 'Z') d = c - 'A' + 10;
-    else return -1;
-  } else {
-    if (c >= 'a' && c <= 'z') d = c - 'a' + 10;
-    else if (c >= 'A' && c <= 'Z') d = c - 'A' + 36;
-    else if (c == '@') d = 62;
-    else if (c == '_') d = 63;
-    else return -1;
-  }
-  return d < base ? d : -1;
-}
-
 // Parse an integer literal with bash's WRAPPING overflow semantics: expr.c's
 // strlong accumulates `value*base + digit' with no overflow check, so
 // 9223372036854775808 wraps to INTMAX_MIN.  strtoll would saturate at
@@ -507,76 +486,60 @@ struct Parser {
     if (pos < s.size() && std::isdigit(static_cast<unsigned char>(s[pos]))) {
       size_t numstart = pos;
       last_tok = pos;
-      // bash `base#digits': a decimal base (2..64) followed by '#' and digits in
-      // that base.  Detected by looking past the leading run of decimal digits.
-      size_t p = pos;
-      while (p < s.size() && std::isdigit(static_cast<unsigned char>(s[p]))) p++;
-      if (p < s.size() && s[p] == '#') {
-        long long base = std::strtoll(s.substr(pos, p - pos).c_str(), nullptr, 10);
-        size_t q = p + 1;
-        long long v = 0;
-        bool any = false;
-        for (; q < s.size(); q++) {
-          int d = base_digit(s[q], base);
-          if (d < 0) break;
-          v = v * base + d;
-          any = true;
-        }
-        if (base >= 2 && base <= 64 && any &&
-            !(q < s.size() && (std::isalnum(static_cast<unsigned char>(s[q])) || s[q] == '#' ||
-                               s[q] == '@' || s[q] == '_'))) {
-          pos = q;
-          auto n = mk(K::Num); n->num = v; n->src = numstart; return n;
-        }
-        // Malformed base#constant: classify the error the way bash does.
-        const char *m;
-        if (base > 64) m = arith_err::kBadBase;
-        else if (base < 2) m = arith_err::kBadNumber;
-        else if (!any)
-          m = (q < s.size() && std::isalnum(static_cast<unsigned char>(s[q])))
-                  ? arith_err::kTooGreat
-                  : arith_err::kBadConst;
-        else m = arith_err::kBadNumber;
-        note(m, numstart);
-        // Consume the whole token so parsing terminates.
-        while (q < s.size() && (std::isalnum(static_cast<unsigned char>(s[q])) || s[q] == '#' ||
-                                s[q] == '@' || s[q] == '_'))
-          q++;
-        pos = q;
-        auto n = mk(K::Num); n->src = numstart; return n;
-      }
-      // Plain integer literal (bash's strlong, non-strict): read the WHOLE
-      // VALID_NUMCHAR run as one token, then map each character to a digit and
-      // check it against the base.  A digit value >= base is bash's `value too
-      // great for base' (`0xg', `08', `0x1p2', `1e3'); an empty run after a
-      // `0x'/`0X' prefix, or a lone `0', is the value 0 (`$((0x))' -> 0).
+      // Integer literal: a port of bash's strlong (expr.c).  readtok reads the
+      // whole `[alnum#@_]' run as ONE token and strlong scans it left to right
+      // under a single running base.  A leading `0' selects octal (`0x'/`0X'
+      // hex) and marks the base as found; a `#' takes the value read so far
+      // as the base (2..64, else `invalid arithmetic base') -- unless a base
+      // was already found (`0#1', `010#1', `2#1#1': `invalid number').  Each
+      // digit character maps through the full 0-9 a-z A-Z @ _ alphabet and is
+      // checked against the CURRENT base, so `08#1' fails on the `8' (`value
+      // too great for base') before its `#' is ever seen, as do `0xg', `08'
+      // and `2#1x'.  A `#' must be followed by a digit character (`2#',
+      // `2##1': `invalid integer constant').  Values accumulate with wrapping
+      // and no overflow check, so 9223372036854775808 wraps to INTMAX_MIN.
+      // An empty run after `0x', or a lone `0', is the value 0.
       size_t q = pos;
-      unsigned nbase = 10;
-      if (s[q] == '0') {
+      while (q < s.size() && (std::isalnum(static_cast<unsigned char>(s[q])) || s[q] == '#' ||
+                              s[q] == '@' || s[q] == '_'))
         q++;
-        if (q < s.size() && (s[q] == 'x' || s[q] == 'X')) { nbase = 16; q++; }
-        else nbase = 8;
+      const char *err = nullptr;
+      unsigned long long base = 10, val = 0;
+      bool foundbase = false;
+      size_t k = pos;
+      if (s[k] == '0') {
+        k++;
+        if (k < q && (s[k] == 'x' || s[k] == 'X')) { base = 16; k++; }
+        else base = 8;
+        foundbase = true;
       }
-      unsigned long long uv = 0;
-      bool too_great = false;
-      for (; q < s.size(); q++) {
-        unsigned char c = static_cast<unsigned char>(s[q]);
-        if (!(std::isalnum(c) || c == '_' || c == '@')) break;
-        unsigned d;
+      for (; k < q && !err; k++) {
+        unsigned char c = static_cast<unsigned char>(s[k]);
+        if (c == '#') {
+          if (foundbase) { err = arith_err::kBadNumber; break; }
+          long long b = static_cast<long long>(val);  // bash compares the signed value
+          if (b < 2 || b > 64) { err = arith_err::kBadBase; break; }
+          base = val;
+          val = 0;
+          foundbase = true;
+          if (k + 1 >= q || s[k + 1] == '#') err = arith_err::kBadConst;
+          continue;
+        }
+        unsigned long long d;
         if (c >= '0' && c <= '9') d = c - '0';
         else if (c >= 'a' && c <= 'z') d = c - 'a' + 10;
-        else if (c >= 'A' && c <= 'Z') d = c - 'A' + (nbase <= 36 ? 10 : 36);
+        else if (c >= 'A' && c <= 'Z') d = c - 'A' + (base <= 36 ? 10 : 36);
         else if (c == '@') d = 62;
         else d = 63;  // '_'
-        if (d >= nbase) too_great = true;  // keep consuming the whole token
-        uv = uv * nbase + d;
+        if (d >= base) { err = arith_err::kTooGreat; break; }
+        val = val * base + d;
       }
       pos = q;
-      if (too_great) {
-        note(arith_err::kTooGreat, numstart);
-        auto n = mk(K::Num); n->src = numstart; return n;
-      }
-      auto n = mk(K::Num); n->num = static_cast<long long>(uv); n->src = numstart; return n;
+      auto n = mk(K::Num);
+      n->src = numstart;
+      if (err) note(err, numstart);
+      else n->num = static_cast<long long>(val);
+      return n;
     }
     size_t start = pos;
     auto ref = mk(K::Var);
