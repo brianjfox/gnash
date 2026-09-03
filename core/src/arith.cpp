@@ -315,7 +315,7 @@ struct Parser {
       skip();
       if (peek() == ':' || peek() == '\0')  // empty true branch
         note(arith_err::kExprExpected, pos);
-      n->b = assignment();
+      n->b = comma();  // bash: the true branch is a full comma expression
       skip();
       if (peek() == ':') { mark_op(); pos++; }
       else note(arith_err::kColonExpected, last_tok);
