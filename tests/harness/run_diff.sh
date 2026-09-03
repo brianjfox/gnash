@@ -822,6 +822,20 @@ E'
   # The true branch of `? :' is a comma expression; the false branch is not.
   'echo $((1 ? 2 , 3 : 4)) $((0 ? 2 , 3 : 4)) $((1 ? 2 : 3 , 4)) $((1 ? x=5 , 3 : 4)) $x'
   'echo $((1 ? 2 , : 4)); echo rc=$?'
+  # `$((' is arithmetic when the `$(' span (nested `$(...)' opaque, quotes
+  # honored) begins with `(', ends with `)' and is balanced in between --
+  # even when a nested substitution's OUTPUT is unbalanced (then the
+  # arithmetic fails).  A top-level `)' before the end makes it `$( (cmd) )'.
+  'echo $(( $(echo "(1" ) )); echo rc=$?'
+  'x=$(( $(echo "(1" ) )); echo rc=$?'
+  'echo $(( $(echo "(1)" ) )) $(( $(echo 1) + 1 )) $(( $(( 1 + 2 )) * 2 )) $(( 1 + `echo 2` ))'
+  'echo $(( $(echo ")") )); echo rc=$?'
+  'echo $(( "$(echo ")")" )); echo rc=$?'
+  'echo $(( $(echo "$(echo "(4")") )); echo rc=$?'
+  'echo $((echo a);(echo b)); echo $((cat) ) </dev/null; echo rc=$?'
+  'echo $((echo hi)); echo rc=$?'
+  'echo $(( "(" )); echo rc=$?'
+  'echo $(( (1+2) * 3 )) $(( 1 << 2 )) $(( x=(1) )) $(( 1 ? (2) : (3) )) $(( a[$(echo 0)] )) $(())'
 )
 
 fails=0

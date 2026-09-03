@@ -261,6 +261,104 @@ size_t scan_balanced(const std::string &t, size_t i, char open, char close,
   return std::string::npos;
 }
 
+// ---- `$((' arithmetic-vs-command-substitution detection --------------------
+//
+// bash decides between `$((expr))' and the command substitution `$( (...) )'
+// at EXPANSION time (subst.c param_expand, case LPAREN): the `$(' span is
+// extracted first with extract_delimited_string, and the result is arithmetic
+// only when it begins with `(' and ends with `)' and the text between is
+// itself paren-balanced with quotes honored (chk_arithsub).  Otherwise the
+// whole span runs as a command.  The helpers below mirror those two scans.
+
+using AliasMap = std::map<std::string, std::string>;
+
+// Index of the `)' closing the command substitution whose `(' is at OPEN_POS
+// (the lexer's scanner, with the plain balanced scan as fallback -- the same
+// rule as the `$(cmd)' branch of expand_dollar), or npos when unterminated.
+size_t comsub_close(const std::string &t, size_t open_pos, const AliasMap *aliases) {
+  size_t end = aliases ? comsub_span_end_aliased(t, open_pos, *aliases)
+                       : comsub_span_end(t, open_pos);
+  return end == std::string::npos ? scan_balanced(t, open_pos, '(', ')') : end - 1;
+}
+
+size_t arith_span_close(const std::string &t, size_t i, const AliasMap *aliases);
+
+// Index of the `"' closing a double-quoted string whose opening quote is at
+// I (bash's skip_double_quoted): a backslash passes the next character, and a
+// nested `$(...)' / `${...}' / backquoted span is skipped whole, so a `"'
+// inside it does not close the string.  t.size() when unterminated.
+size_t skip_dquote(const std::string &t, size_t i, const AliasMap *aliases) {
+  for (i++; i < t.size(); i++) {
+    char c = t[i];
+    if (c == '\\') { i++; continue; }
+    if (c == '"') return i;
+    if (c == '`') {
+      while (++i < t.size() && t[i] != '`')
+        if (t[i] == '\\') i++;
+      continue;
+    }
+    if (c == '$' && i + 1 < t.size() && (t[i + 1] == '(' || t[i + 1] == '{')) {
+      size_t e;
+      if (t[i + 1] == '{') e = scan_balanced(t, i + 1, '{', '}', /*firstclose=*/true);
+      else if (i + 2 < t.size() && t[i + 2] == '(') e = arith_span_close(t, i + 1, aliases);
+      else e = comsub_close(t, i + 1, aliases);
+      if (e == std::string::npos) return t.size();
+      i = e;
+    }
+  }
+  return t.size();
+}
+
+// Index of the `)' closing a `$(' span whose `(' is at I, scanned the way
+// bash's extract_delimited_string("$(", "(", ")", SX_COMMAND) does: parens
+// balance; a backslash passes the next character; single-quoted,
+// double-quoted and backquoted text is opaque; a `#' at a word start opens a
+// comment to end of line; a nested `$(' is one opaque span -- parsed as a
+// command (`$(cmd)') or scanned recursively (`$((').  npos when unterminated.
+size_t arith_span_close(const std::string &t, size_t i, const AliasMap *aliases) {
+  int depth = 0;
+  for (; i < t.size(); i++) {
+    char c = t[i];
+    if (c == '\\') { i++; continue; }
+    if (c == '#' && (i == 0 || t[i - 1] == '\n' || t[i - 1] == ' ' || t[i - 1] == '\t')) {
+      while (i + 1 < t.size() && t[i + 1] != '\n') i++;
+      continue;
+    }
+    if (c == '$' && i + 1 < t.size() && t[i + 1] == '(') {
+      size_t e = (i + 2 < t.size() && t[i + 2] == '(') ? arith_span_close(t, i + 1, aliases)
+                                                        : comsub_close(t, i + 1, aliases);
+      if (e == std::string::npos) return std::string::npos;
+      i = e;
+      continue;
+    }
+    if (c == '\'') { while (++i < t.size() && t[i] != '\'') {} continue; }
+    if (c == '"') { i = skip_dquote(t, i, aliases); continue; }
+    if (c == '`') {
+      while (++i < t.size() && t[i] != '`')
+        if (t[i] == '\\') i++;
+      continue;
+    }
+    if (c == '(') depth++;
+    else if (c == ')' && --depth == 0) return i;
+  }
+  return std::string::npos;
+}
+
+// bash's chk_arithsub over t[b, e): the parens balance and never go negative,
+// with backslash-escaped, single-quoted and double-quoted text skipped.
+bool arith_balanced(const std::string &t, size_t b, size_t e, const AliasMap *aliases) {
+  int count = 0;
+  for (size_t i = b; i < e; i++) {
+    char c = t[i];
+    if (c == '(') count++;
+    else if (c == ')' && --count < 0) return false;
+    if (c == '\\') i++;
+    else if (c == '\'') { while (++i < e && t[i] != '\'') {} }
+    else if (c == '"') i = skip_dquote(t, i, aliases);
+  }
+  return count == 0;
+}
+
 // --- multibyte helpers ------------------------------------------------------
 // Character (code point) length of s under the current LC_CTYPE.  In a unibyte
 // or C locale (MB_CUR_MAX==1) this is the byte count, exactly as bash falls
@@ -1174,26 +1272,21 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
     }
   };
 
-  // $((expr)) -- but `$((cmd);(cmd))' is the command substitution `$( (...)':
-  // it is ARITHMETIC only when the paren depth never falls below 2 before the
-  // closing `))', i.e. no top-level `)' appears inside (bash's rule; probe:
-  // `$((echo a);(echo b))' runs the subshells, `$((echo hi))' is an
-  // arithmetic syntax error).
+  // $((expr)) -- or the command substitution `$( (...) )': bash decides at
+  // expansion time (see arith_span_close).  The `$(' span is extracted with
+  // nested `$(...)' spans, quotes, backquotes and backslashes skipped, and it
+  // is ARITHMETIC only when the text inside `$(' begins with `(' and ends
+  // with `)' and the expression between is paren-balanced with quotes
+  // honored.  So `$(( $(echo "(1" ) ))' is arithmetic (the nested substitution
+  // is one opaque span, and the `(' inside its quotes does not count) and
+  // fails with `missing )' once the substitution has run, while
+  // `$((echo a);(echo b))' has a top-level `)' before the end and runs the
+  // two subshells; `$((echo hi))' is an arithmetic syntax error.
   if (n1 == '(' && i + 2 < t.size() && t[i + 2] == '(') {
-    size_t p = i + 3;
-    int depth = 2;
-    size_t end = std::string::npos;
-    bool cmd_sub = false;
-    for (; p < t.size(); p++) {
-      if (t[p] == '(') depth++;
-      else if (t[p] == ')') {
-        if (--depth == 0) { end = p; break; }
-        if (depth == 1 && !(p + 1 < t.size() && t[p + 1] == ')'))
-          cmd_sub = true;  // a top-level `)' not immediately closing the whole span
-      }
-    }
-    if (cmd_sub) end = std::string::npos;  // fall through to the $(cmd) branch
-    if (end != std::string::npos) {
+    const AliasMap *aliases = sh_.aliases_active() ? &sh_.aliases : nullptr;
+    size_t end = arith_span_close(t, i + 1, aliases);  // the `)' closing `$('
+    if (end != std::string::npos && end - 1 > i + 2 && t[end - 1] == ')' &&
+        arith_balanced(t, i + 3, end - 1, aliases)) {
       std::string expr = t.substr(i + 3, (end - 1) - (i + 3));
       bool ok = true;
       long long v = eval_arith_msg(sh_, expand_arith(expr), "", &ok, /*expand_subs=*/1);
