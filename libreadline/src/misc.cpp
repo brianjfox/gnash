@@ -183,6 +183,7 @@ extern "C" int rl_insert_comment(int /*count*/, int key) {
 extern "C" int rl_clear_display(int /*count*/, int /*key*/) {
   FILE *o = rl_outstream ? rl_outstream : stdout;
   std::fputs("\033[H\033[2J\033[3J", o);  // home + clear screen + clear scrollback
+  gnash::readline::prompt_start_col = 0;
   rl_redisplay();
   return 0;
 }

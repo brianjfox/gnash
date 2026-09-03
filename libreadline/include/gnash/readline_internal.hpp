@@ -59,6 +59,18 @@ void stuff_input(const std::string &keys);
 // A key is readable within TIMEOUT_MS (pushback queue or the input fd).
 bool input_pending(int timeout_ms);
 
+// Ask the terminal where its cursor is (CSI 6 n) and return the 0-based
+// column, or -1 when it cannot be learned (no terminal, a dumb/unset $TERM, or
+// no reply within TIMEOUT_MS -- after which no further queries are sent).
+// Typed-ahead bytes read while waiting go back on the pushback queue.
+int query_cursor_column(int timeout_ms);
+
+// Column where the prompt starts on its row (readline.cpp).  Normally 0; when
+// the previous command left the cursor mid-line, the prompt is painted right
+// there, as readline does, and every repaint's column math adds this offset.
+// Anything that clears the row from column 0 resets it.
+extern int prompt_start_col;
+
 extern bool macro_recording;   // C-x ( .. C-x ): tap keys into macro_keys
 extern std::string macro_keys;
 extern bool redo_capturing;    // vi change command in progress: tap keys
