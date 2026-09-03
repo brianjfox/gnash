@@ -836,6 +836,9 @@ E'
   'echo $((echo hi)); echo rc=$?'
   'echo $(( "(" )); echo rc=$?'
   'echo $(( (1+2) * 3 )) $(( 1 << 2 )) $(( x=(1) )) $(( 1 ? (2) : (3) )) $(( a[$(echo 0)] )) $(())'
+  # A `#' inside `$(( ))' is never a comment, even right after a nested `$(...)'.
+  'echo $(( $(echo 16)#ff )) $(( 2#101 )); x=$(( $(echo 2)#10 )); echo $x'
+  'echo $(( $(echo 1)#1 )); echo rc=$?'
 )
 
 fails=0

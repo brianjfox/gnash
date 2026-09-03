@@ -32,6 +32,7 @@ cases=(
   'echo $(( $(echo "(1" ) ))'
   'echo $(( $(echo ")") ))'
   'echo $((echo hi))'
+  'echo $(( $(echo 1)#1 ))'
 )
 
 # Replace the leading "<program name>:" token (which legitimately differs --
