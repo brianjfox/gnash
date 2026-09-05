@@ -7,6 +7,8 @@
 #define GNASH_CORE_SHELL_HPP
 
 #include <csignal>
+#include <cstdarg>
+#include <cstdio>
 #include <functional>
 #include <map>
 #include <optional>
@@ -426,6 +428,16 @@ class Shell {
   // "NAME: line N: " prefix that bash prints before runtime errors.
   std::string err_prefix() const {
     return shell_name + ": line " + std::to_string(cur_lineno > 0 ? cur_lineno : 1) + ": ";
+  }
+  // Print a runtime error to stderr with the err_prefix() prepended, in printf
+  // style: the caller supplies only the message body.  Keeps the prefix
+  // formatting in one place and the hundreds of call sites short.
+  void errorf(const char *fmt, ...) const {
+    std::va_list ap;
+    va_start(ap, fmt);
+    std::fputs(err_prefix().c_str(), stderr);
+    std::vfprintf(stderr, fmt, ap);
+    va_end(ap);
   }
 
   // --- directory stack (pushd/popd/dirs); entries below the current dir ---

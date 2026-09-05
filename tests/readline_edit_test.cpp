@@ -12,17 +12,11 @@
 #include "gnash/readline.hpp"
 #include "readline/readline.h"
 
+#include "testcheck.hpp"
+
 namespace rl = gnash::readline;
 
-static int failures = 0;
-
-#define CHECK(cond)                                                        \
-  do {                                                                     \
-    if (!(cond)) {                                                         \
-      std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
-      failures++;                                                          \
-    }                                                                      \
-  } while (0)
+using gnashtest::failures;
 
 static void check_line(const char *want) {
   if (rl::line() != want) {
@@ -121,10 +115,5 @@ int main() {
   rl_downcase_word(1, 0);
   check_line("hello");
 
-  if (failures == 0) {
-    std::printf("all readline editing tests passed\n");
-    return 0;
-  }
-  std::fprintf(stderr, "%d readline editing test(s) failed\n", failures);
-  return 1;
+  return gnashtest::finish("readline editing");
 }

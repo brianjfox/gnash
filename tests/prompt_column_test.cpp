@@ -29,7 +29,9 @@
 #include <pty.h>
 #endif
 
-static int failures = 0;
+#include "testcheck.hpp"
+
+using gnashtest::failures;
 
 // A minimal terminal: tracks the cursor column over the shell's output and,
 // when `answer' is set, replies to `ESC [ 6 n' with `ESC [ 1 ; col R'.
@@ -88,14 +90,6 @@ static bool drain(Term &t, std::string &out, int settle_ms) {
 static void send(Term &t, const char *s, std::string &out, int settle_ms = 400) {
   (void)!write(t.fd, s, std::strlen(s));
   drain(t, out, settle_ms);
-}
-
-static size_t count_of(const std::string &hay, const std::string &needle) {
-  size_t n = 0;
-  for (size_t at = hay.find(needle); at != std::string::npos;
-       at = hay.find(needle, at + needle.size()))
-    n++;
-  return n;
 }
 
 // Run one interactive session: `printf abc', then `echo hi', then exit.
@@ -163,7 +157,7 @@ int main(int argc, char **argv) {
   //    before), and the query is sent only once per session.
   {
     std::string out = session(argv[1], /*answer=*/false);
-    size_t queries = count_of(out, "\033[6n");
+    size_t queries = gnashtest::count_of(out, "\033[6n");
     if (queries != 1) {
       std::fprintf(stderr, "FAIL expected exactly 1 unanswered query, got %zu\n%s\n", queries,
                    out.c_str());

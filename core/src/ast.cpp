@@ -9,6 +9,7 @@
 
 #include "gnash/core/ast.hpp"
 #include "gnash/core/parser.hpp"
+#include "gnash/core/quote.hpp"
 
 namespace gnash::core {
 
@@ -624,17 +625,6 @@ struct MPrinter {
 // displays as `v='^A'' and `v=$"msg"' as `v="msg"'.  gnash keeps the source
 // text in the AST, so the printer performs the same expansion.
 
-// bash's sh_single_quote: wrap S in single quotes, ' -> '\''.
-std::string ansi_single_quote(const std::string &s) {
-  std::string out = "'";
-  for (char c : s) {
-    if (c == '\'') out += "'\\''";
-    else out += c;
-  }
-  out += '\'';
-  return out;
-}
-
 void utf8_append(std::string &out, unsigned long cp) {
   if (cp < 0x80) out += static_cast<char>(cp);
   else if (cp < 0x800) {
@@ -779,7 +769,7 @@ std::string ansi_expand_word(const std::string &w) {
         size_t j = i + 2;  // find the closing ', honoring backslash escapes
         while (j < w.size() && w[j] != '\'') j += (w[j] == '\\' && j + 1 < w.size()) ? 2 : 1;
         if (j >= w.size()) { out += w.substr(i); break; }
-        out += ansi_single_quote(ansi_c_decode(w.substr(i + 2, j - (i + 2))));
+        out += single_quote(ansi_c_decode(w.substr(i + 2, j - (i + 2))));
         i = j + 1;
         continue;
       }

@@ -110,8 +110,7 @@ static bool expand_redir_target(Shell &sh, const Word &w, std::string &out) {
   sh.arith_error = saved_ae;
   if (expfail) return false;
   if (words.size() != 1) {
-    std::fprintf(stderr, "%s%s: ambiguous redirect\n", sh.err_prefix().c_str(),
-                 w.text.c_str());
+    sh.errorf("%s: ambiguous redirect\n", w.text.c_str());
     return false;
   }
   out = std::move(words[0]);
@@ -190,8 +189,7 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved,
       case RedirOp::AndAppend: {
         Expander rex(sh);
         std::string fn = rex.expand_no_split(r.target.text, true);
-        std::fprintf(stderr, "%s%s: restricted: cannot redirect output\n",
-                     sh.err_prefix().c_str(), fn.c_str());
+        sh.errorf("%s: restricted: cannot redirect output\n", fn.c_str());
         return false;
       }
       default: break;
@@ -220,8 +218,7 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved,
         ok = sh.set(r.fd_var, std::to_string(f), fdvar_ctx);
       }
       if (!ok) {
-        std::fprintf(stderr, "%s%s: cannot assign fd to variable\n", sh.err_prefix().c_str(),
-                     r.fd_var.c_str());
+        sh.errorf("%s: cannot assign fd to variable\n", r.fd_var.c_str());
         close(f);
         return false;
       }
@@ -250,8 +247,7 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved,
         std::fprintf(stderr, "%s: redirection error: cannot duplicate fd: %s\n",
                      sh.shell_name.c_str(), std::strerror(e));
         if (!fn.empty())
-          std::fprintf(stderr, "%s%s: %s\n", sh.err_prefix().c_str(), fn.c_str(),
-                       std::strerror(e));
+          sh.errorf("%s: %s\n", fn.c_str(), std::strerror(e));
         close(f);
         return false;
       }
@@ -263,8 +259,7 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved,
       if (!expand_redir_target(sh, r.target, fn)) return false;
       int f = open(fn.c_str(), flags, 0666);
       if (f < 0) {
-        std::fprintf(stderr, "%s%s: %s\n", sh.err_prefix().c_str(), fn.c_str(),
-                     std::strerror(errno));
+        sh.errorf("%s: %s\n", fn.c_str(), std::strerror(errno));
         return false;
       }
       return assign_fd(f, fn);
@@ -283,8 +278,7 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved,
           if (cur.empty()) {
             // `exec {v}>&-' with no fd number in the variable: bash reports
             // the bare variable name as an ambiguous redirect.
-            std::fprintf(stderr, "%s%s: ambiguous redirect\n", sh.err_prefix().c_str(),
-                         r.fd_var.c_str());
+            sh.errorf("%s: ambiguous redirect\n", r.fd_var.c_str());
             return false;
           }
           int n = std::atoi(cur.c_str());
@@ -301,8 +295,7 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved,
         // report prints an uninitialized number; the ambiguous/converted
         // reports here cover those deterministically.)
         if (w.empty() || w.find_first_not_of("0123456789") != std::string::npos) {
-          std::fprintf(stderr, "%s%s: ambiguous redirect\n", sh.err_prefix().c_str(),
-                       r.fd_var.c_str());
+          sh.errorf("%s: ambiguous redirect\n", r.fd_var.c_str());
           return false;
         }
         errno = 0;
@@ -320,8 +313,7 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved,
           std::string shown = inrange ? std::to_string(src) : w;
           std::fprintf(stderr, "%s: redirection error: cannot duplicate fd: %s\n",
                        sh.shell_name.c_str(), std::strerror(e));
-          std::fprintf(stderr, "%s%s: %s\n", sh.err_prefix().c_str(), shown.c_str(),
-                       std::strerror(e));
+          sh.errorf("%s: %s\n", shown.c_str(), std::strerror(e));
           return false;
         }
         if (move) close(static_cast<int>(src));
@@ -364,7 +356,7 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved,
       std::string fn;
       if (!expand_redir_target(sh, r.target, fn)) return false;
       int f = open(fn.c_str(), O_RDONLY);
-      if (f < 0) { std::fprintf(stderr, "%s%s: %s\n", sh.err_prefix().c_str(), fn.c_str(), std::strerror(errno)); return false; }
+      if (f < 0) { sh.errorf("%s: %s\n", fn.c_str(), std::strerror(errno)); return false; }
       redir_to(f, target_fd < 0 ? 0 : target_fd);
       return true;
     }
@@ -375,11 +367,10 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved,
       // `>' honors noclobber; `>|' (Clobber) always overrides it.
       int f = open_redir_output(sh, fn, r.op == RedirOp::OutputRedir);
       if (f == kNoclobberRefused) {
-        std::fprintf(stderr, "%s%s: cannot overwrite existing file\n",
-                     sh.err_prefix().c_str(), fn.c_str());
+        sh.errorf("%s: cannot overwrite existing file\n", fn.c_str());
         return false;
       }
-      if (f < 0) { std::fprintf(stderr, "%s%s: %s\n", sh.err_prefix().c_str(), fn.c_str(), std::strerror(errno)); return false; }
+      if (f < 0) { sh.errorf("%s: %s\n", fn.c_str(), std::strerror(errno)); return false; }
       redir_to(f, target_fd < 0 ? 1 : target_fd);
       return true;
     }
@@ -387,7 +378,7 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved,
       std::string fn;
       if (!expand_redir_target(sh, r.target, fn)) return false;
       int f = open(fn.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0666);
-      if (f < 0) { std::fprintf(stderr, "%s%s: %s\n", sh.err_prefix().c_str(), fn.c_str(), std::strerror(errno)); return false; }
+      if (f < 0) { sh.errorf("%s: %s\n", fn.c_str(), std::strerror(errno)); return false; }
       redir_to(f, target_fd < 0 ? 1 : target_fd);
       return true;
     }
@@ -409,8 +400,7 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved,
       } else {  // `&>' truncates, so it honors noclobber
         f = open_redir_output(sh, fn, true);
         if (f == kNoclobberRefused) {
-          std::fprintf(stderr, "%s%s: cannot overwrite existing file\n",
-                       sh.err_prefix().c_str(), fn.c_str());
+          sh.errorf("%s: cannot overwrite existing file\n", fn.c_str());
           return false;
         }
       }
@@ -444,28 +434,24 @@ bool apply_redirect(Shell &sh, const Redirect &r, std::vector<SavedFd> &saved,
         if (r.op == RedirOp::DupOutput && target_fd < 0 && !w.empty()) {
           int f = open_redir_output(sh, w, true);  // `>&file' honors noclobber
           if (f == kNoclobberRefused) {
-            std::fprintf(stderr, "%s%s: cannot overwrite existing file\n",
-                         sh.err_prefix().c_str(), w.c_str());
+            sh.errorf("%s: cannot overwrite existing file\n", w.c_str());
             return false;
           }
           if (f < 0) {
-            std::fprintf(stderr, "%s%s: %s\n", sh.err_prefix().c_str(), w.c_str(),
-                         std::strerror(errno));
+            sh.errorf("%s: %s\n", w.c_str(), std::strerror(errno));
             return false;
           }
           install_both(f);
           return true;
         }
-        std::fprintf(stderr, "%s%s: ambiguous redirect\n", sh.err_prefix().c_str(),
-                     w.c_str());
+        sh.errorf("%s: ambiguous redirect\n", w.c_str());
         return false;
       }
       int src = std::atoi(w.c_str());
       // A source fd that is not open is an error, reported with the
       // UNEXPANDED word (`echo foo >&$fd' -> `$fd: Bad file descriptor').
       if (fcntl(src, F_GETFD) < 0) {
-        std::fprintf(stderr, "%s%s: %s\n", sh.err_prefix().c_str(), r.target.text.c_str(),
-                     std::strerror(EBADF));
+        sh.errorf("%s: %s\n", r.target.text.c_str(), std::strerror(EBADF));
         return false;
       }
       save_fd(fd, saved);
@@ -625,13 +611,11 @@ parse_array_elems(Shell &sh, Expander &ex, const std::string &name, bool integer
           // bash stops the whole compound assignment at the first bad subscript
           // (the array has already been cleared, so the partial result stands).
           if (sub.empty()) {
-            std::fprintf(stderr, "%s%s: bad array subscript\n",
-                         sh.err_prefix().c_str(), e.c_str());
+            sh.errorf("%s: bad array subscript\n", e.c_str());
             break;
           }
           if (sub == "*" || sub == "@") {
-            std::fprintf(stderr, "%s%s: cannot assign to non-numeric index\n",
-                         sh.err_prefix().c_str(), e.c_str());
+            sh.errorf("%s: cannot assign to non-numeric index\n", e.c_str());
             break;
           }
           // `shopt -s array_expand_once': a compound assignment must not perform
@@ -649,8 +633,7 @@ parse_array_elems(Shell &sh, Expander &ex, const std::string &name, bool integer
           ok = true;
           if (ok && k < 0) k += maxidx + 1;  // resolve negative against running max
           if (ok && k < 0) {
-            std::fprintf(stderr, "%s%s: bad array subscript\n",
-                         sh.err_prefix().c_str(), e.c_str());
+            sh.errorf("%s: bad array subscript\n", e.c_str());
             break;
           }
           if (ok) { sub = std::to_string(k); if (k > maxidx) maxidx = k; }
@@ -673,9 +656,8 @@ parse_array_elems(Shell &sh, Expander &ex, const std::string &name, bool integer
     // An associative array in subscript mode cannot take a bare value: bash
     // reports the offending word and stops the assignment.
     if (assoc && saw_sub) {
-      std::fprintf(stderr,
-                   "%s%s: %s: must use subscript when assigning associative array\n",
-                   sh.err_prefix().c_str(), name.c_str(), e.c_str());
+      sh.errorf("%s: %s: must use subscript when assigning associative array\n", name.c_str(),
+                e.c_str());
       break;
     }
     if (assoc) {
@@ -708,8 +690,7 @@ void apply_array_assign(Shell &sh, Expander &ex, const Assign &a,
       const std::string &fn =
           sh.call_stack.empty() ? std::string() : sh.call_stack.back().func;
       std::string who = ctx ? std::string(ctx) : fn;
-      std::fprintf(stderr, "%s%s%s%s: readonly variable\n", sh.err_prefix().c_str(),
-                   who.c_str(), who.empty() ? "" : ": ", a.name.c_str());
+      sh.errorf("%s%s%s: readonly variable\n", who.c_str(), who.empty() ? "" : ": ", a.name.c_str());
       sh.last_status = 1;
       return;
     }
@@ -724,14 +705,13 @@ void apply_array_assign(Shell &sh, Expander &ex, const Assign &a,
     // identifier' and leaves ref an unset reference.
     auto nit = sh.vars.find(a.name);
     if (nit != sh.vars.end() && nit->second.nameref && nit->second.value.empty()) {
-      std::fprintf(stderr, "%s`': not a valid identifier\n", sh.err_prefix().c_str());
+      sh.errorf("`': not a valid identifier\n");
       sh.last_status = 1;
       return;
     }
     std::string dn = sh.deref(a.name);
     if (dn.find('[') != std::string::npos) {
-      std::fprintf(stderr, "%s`%s': not a valid identifier\n", sh.err_prefix().c_str(),
-                   dn.c_str());
+      sh.errorf("`%s': not a valid identifier\n", dn.c_str());
       sh.last_status = 1;
       return;
     }
@@ -743,8 +723,7 @@ void apply_array_assign(Shell &sh, Expander &ex, const Assign &a,
     auto sit = sh.vars.find(sh.deref(a.name));
     bool assoc = sit != sh.vars.end() && sit->second.kind == VarKind::Assoc;
     if (a.sub->empty() || (!assoc && (*a.sub == "*" || *a.sub == "@"))) {
-      std::fprintf(stderr, "%s%s[%s]: bad array subscript\n", sh.err_prefix().c_str(),
-                   a.name.c_str(), a.sub->c_str());
+      sh.errorf("%s[%s]: bad array subscript\n", a.name.c_str(), a.sub->c_str());
       sh.last_status = 1;
       return;
     }
@@ -762,8 +741,7 @@ void apply_array_assign(Shell &sh, Expander &ex, const Assign &a,
     // (`a[0]=(x y)').  zsh has its own array semantics, so only enforce this
     // outside the zsh personality.
     if (a.is_array && !sh.is_zsh()) {
-      std::fprintf(stderr, "%s%s[%s]: cannot assign list to array member\n",
-                   sh.err_prefix().c_str(), a.name.c_str(), a.sub->c_str());
+      sh.errorf("%s[%s]: cannot assign list to array member\n", a.name.c_str(), a.sub->c_str());
       sh.last_status = 1;
       return;
     }
@@ -1474,8 +1452,7 @@ int Executor::run_simple(const SimpleCommand *c) {
   for (const Assign &a : pending_elem) {
     if (!argv.empty()) {
       std::string disp = a.name + "[" + (a.sub ? *a.sub : std::string()) + "]";
-      std::fprintf(stderr, "%s`%s': not a valid identifier\n", sh_.err_prefix().c_str(),
-                   disp.c_str());
+      sh_.errorf("`%s': not a valid identifier\n", disp.c_str());
     } else {
       apply_array_assign(sh_, ex, a);
     }
@@ -1537,7 +1514,7 @@ int Executor::run_simple(const SimpleCommand *c) {
         if (o[j] == 'v' || o[j] == 'V') describe = true;
         else if (o[j] == 'p') {  // default PATH; forbidden in a restricted shell
           if (sh_.opt_restricted) {
-            std::fprintf(stderr, "%scommand: -p: restricted\n", sh_.err_prefix().c_str());
+            sh_.errorf("command: -p: restricted\n");
             return (sh_.last_status = 2);
           }
         }
@@ -1609,8 +1586,7 @@ int Executor::run_simple(const SimpleCommand *c) {
   // function of that literal name would already have matched by exact name).
   if (sh_.opt_restricted && argv[0].find('/') != std::string::npos &&
       sh_.functions.find(argv[0]) == sh_.functions.end()) {
-    std::fprintf(stderr, "%s%s: restricted: cannot specify `/' in command names\n",
-                 sh_.err_prefix().c_str(), argv[0].c_str());
+    sh_.errorf("%s: restricted: cannot specify `/' in command names\n", argv[0].c_str());
     return (sh_.last_status = 126);
   }
 
@@ -1674,8 +1650,7 @@ int Executor::run_simple(const SimpleCommand *c) {
       if (nit != sh_.vars.end() && nit->second.nameref) continue;
       auto it = sh_.vars.find(sh_.deref(assigns[ai].first));
       if (it != sh_.vars.end() && it->second.readonly) {
-        std::fprintf(stderr, "%s%s: readonly variable\n", sh_.err_prefix().c_str(),
-                     assigns[ai].first.c_str());
+        sh_.errorf("%s: readonly variable\n", assigns[ai].first.c_str());
         temp_fail = true;
       }
     }
@@ -1761,8 +1736,7 @@ int Executor::run_simple(const SimpleCommand *c) {
     if (sh_.is_set("FUNCNEST")) {
       long fn_max = std::strtol(sh_.get("FUNCNEST").c_str(), nullptr, 10);
       if (fn_max > 0 && static_cast<long>(sh_.local_stack.size()) >= fn_max) {
-        std::fprintf(stderr, "%s%s: maximum function nesting level exceeded (%ld)\n",
-                     sh_.err_prefix().c_str(), argv[0].c_str(), fn_max);
+        sh_.errorf("%s: maximum function nesting level exceeded (%ld)\n", argv[0].c_str(), fn_max);
         sh_.last_status = 1;
         return 1;
       }
@@ -2050,11 +2024,10 @@ int Executor::run_simple(const SimpleCommand *c) {
       std::fflush(nullptr);
       do_exec(cargv);
       if (errno == ENOENT && exec_file.find('/') == std::string::npos)
-        std::fprintf(stderr, "%s%s: %s\n", sh_.err_prefix().c_str(), printable_name(exec_file).c_str(),
-                     exec_file == argv[0] ? "command not found" : "not found");
+        sh_.errorf("%s: %s\n", printable_name(exec_file).c_str(),
+                   exec_file == argv[0] ? "command not found" : "not found");
       else if (!report_bad_interpreter(exec_file))
-        std::fprintf(stderr, "%s%s: %s\n", sh_.err_prefix().c_str(),
-                     printable_name(exec_file).c_str(), std::strerror(errno));
+        sh_.errorf("%s: %s\n", printable_name(exec_file).c_str(), std::strerror(errno));
       _exit(errno == EACCES ? 126 : 127);
     }
     // external command, in its own process group
@@ -2086,11 +2059,10 @@ int Executor::run_simple(const SimpleCommand *c) {
       cargv.push_back(nullptr);
       do_exec(cargv);
       if (errno == ENOENT && exec_file.find('/') == std::string::npos)
-        std::fprintf(stderr, "%s%s: %s\n", sh_.err_prefix().c_str(), printable_name(exec_file).c_str(),
-                     exec_file == argv[0] ? "command not found" : "not found");
+        sh_.errorf("%s: %s\n", printable_name(exec_file).c_str(),
+                   exec_file == argv[0] ? "command not found" : "not found");
       else if (!report_bad_interpreter(exec_file))
-        std::fprintf(stderr, "%s%s: %s\n", sh_.err_prefix().c_str(),
-                     printable_name(exec_file).c_str(), std::strerror(errno));
+        sh_.errorf("%s: %s\n", printable_name(exec_file).c_str(), std::strerror(errno));
       _exit(errno == EACCES ? 126 : 127);
     }
     if (sh_.job_control) setpgid(pid, pid);
@@ -2155,15 +2127,14 @@ int Executor::run_coproc(const CoprocCommand *c) {
     for (char ch : c->name)
       if (!(std::isalnum(static_cast<unsigned char>(ch)) || ch == '_')) ok = false;
     if (!ok) {
-      std::fprintf(stderr, "%s`%s': not a valid identifier\n", sh_.err_prefix().c_str(),
-                   c->name.c_str());
+      sh_.errorf("`%s': not a valid identifier\n", c->name.c_str());
       return (sh_.last_status = 1);
     }
   }
   const std::string name = c->name.empty() ? std::string("COPROC") : c->name;
   int out_pipe[2], in_pipe[2];  // out: coproc->shell;  in: shell->coproc
   if (pipe(out_pipe) < 0) {
-    std::fprintf(stderr, "%scoproc: pipe: %s\n", sh_.err_prefix().c_str(), std::strerror(errno));
+    sh_.errorf("coproc: pipe: %s\n", std::strerror(errno));
     return (sh_.last_status = 1);
   }
   // bash's sh_openpipe moves each pipe end to the HIGHEST free descriptor
@@ -2183,7 +2154,7 @@ int Executor::run_coproc(const CoprocCommand *c) {
   out_pipe[0] = move_high64(out_pipe[0]);
   out_pipe[1] = move_high64(out_pipe[1]);
   if (pipe(in_pipe) < 0) {
-    std::fprintf(stderr, "%scoproc: pipe: %s\n", sh_.err_prefix().c_str(), std::strerror(errno));
+    sh_.errorf("coproc: pipe: %s\n", std::strerror(errno));
     close(out_pipe[0]); close(out_pipe[1]);
     return (sh_.last_status = 1);
   }
@@ -2341,8 +2312,7 @@ int Executor::run_for(const ForCommand *c) {
     for (char ch : c->var)
       if (!(std::isalnum(static_cast<unsigned char>(ch)) || ch == '_')) okname = false;
     if (!okname) {
-      std::fprintf(stderr, "%s`%s': not a valid identifier\n", sh_.err_prefix().c_str(),
-                   c->var.c_str());
+      sh_.errorf("`%s': not a valid identifier\n", c->var.c_str());
       // In posix mode a bad iteration-variable name is a fatal error in a
       // non-interactive shell: the shell (or subshell) exits rather than
       // continuing past the loop.
@@ -2429,13 +2399,11 @@ int Executor::run_for(const ForCommand *c) {
     auto vit = sh_.vars.find(c->var);
     if (vit != sh_.vars.end() && vit->second.nameref) {
       if (vit->second.readonly)
-        std::fprintf(stderr, "%s%s: readonly variable\n", sh_.err_prefix().c_str(),
-                     c->var.c_str());
+        sh_.errorf("%s: readonly variable\n", c->var.c_str());
       else if (!Shell::valid_nameref_target(item)) {
         // Retargeting a nameref to a non-identifier (`for r in /') is an error,
         // like `declare -n r=/'; bash aborts the loop rather than continuing.
-        std::fprintf(stderr, "%s`%s': not a valid identifier\n", sh_.err_prefix().c_str(),
-                     item.c_str());
+        sh_.errorf("`%s': not a valid identifier\n", item.c_str());
         st = 1;
         break;
       } else
@@ -2478,8 +2446,7 @@ int Executor::run_select(const ForCommand *c) {
     for (char ch : c->var)
       if (!(std::isalnum(static_cast<unsigned char>(ch)) || ch == '_')) okname = false;
     if (!okname) {
-      std::fprintf(stderr, "%s`%s': not a valid identifier\n", sh_.err_prefix().c_str(),
-                   c->var.c_str());
+      sh_.errorf("`%s': not a valid identifier\n", c->var.c_str());
       if (sh_.opt_posix && !sh_.interactive) { sh_.exiting = true; sh_.exit_status = 1; }
       return (sh_.last_status = 1);
     }
@@ -2681,8 +2648,7 @@ int Executor::run_funcdef(const FunctionDef *c) {
   if (c->name.find_first_of("$'\"\\") != std::string::npos ||
       // A process-substitution-shaped name (`<(:) ()') is likewise rejected.
       ((c->name[0] == '<' || c->name[0] == '>') && c->name.size() > 1 && c->name[1] == '(')) {
-    std::fprintf(stderr, "%s`%s': not a valid identifier\n",
-                 sh_.err_prefix().c_str(), c->name.c_str());
+    sh_.errorf("`%s': not a valid identifier\n", c->name.c_str());
     return (sh_.last_status = 1);
   }
   // Posix interpretation 383: a function may not have the name of a special
@@ -2694,8 +2660,7 @@ int Executor::run_funcdef(const FunctionDef *c) {
         "exit",   "export", "readonly", "return", "set", "shift",
         "source", "times", "trap",  "unset"};
     if (kSpecialB.count(c->name)) {
-      std::fprintf(stderr, "%s`%s': is a special builtin\n", sh_.err_prefix().c_str(),
-                   c->name.c_str());
+      sh_.errorf("`%s': is a special builtin\n", c->name.c_str());
       sh_.last_status = 2;
       if (!sh_.interactive) { sh_.exiting = true; sh_.exit_status = 2; }
       return 2;
@@ -2703,8 +2668,7 @@ int Executor::run_funcdef(const FunctionDef *c) {
   }
   // A readonly function cannot be redefined.
   if (sh_.readonly_functions.count(c->name)) {
-    std::fprintf(stderr, "%s%s: readonly function\n", sh_.err_prefix().c_str(),
-                 c->name.c_str());
+    sh_.errorf("%s: readonly function\n", c->name.c_str());
     return (sh_.last_status = 1);
   }
   sh_.functions[c->name] = c->body.get();

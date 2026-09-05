@@ -14,17 +14,11 @@
 #include "gnash/history.hpp"
 #include "readline/history.h"
 
+#include "testcheck.hpp"
+
 namespace hist = gnash::history;
 
-static int failures = 0;
-
-#define CHECK(cond)                                                       \
-  do {                                                                    \
-    if (!(cond)) {                                                        \
-      std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
-      failures++;                                                         \
-    }                                                                     \
-  } while (0)
+using gnashtest::failures;
 
 static std::string tmp_path(const char *name) {
   const char *dir = std::getenv("TMPDIR");
@@ -203,10 +197,5 @@ int main() {
   test_file_timestamps();
   test_c_shim();
 
-  if (failures == 0) {
-    std::printf("all history tests passed\n");
-    return 0;
-  }
-  std::fprintf(stderr, "%d history test(s) failed\n", failures);
-  return 1;
+  return gnashtest::finish("history");
 }

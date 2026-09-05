@@ -786,18 +786,17 @@ static bool resolve_sub(const Node *n, Ctx &ctx, std::string &out, bool writing 
       // `(( a[""]=24 ))' -- an assignment target: `a[]': not a valid
       // identifier (with the command prefix).
       // Unlike the read below, this one carries the command prefix (`((: ').
-      std::fprintf(stderr, "%s%s%s`%s[]': not a valid identifier\n",
-                   ctx.sh.err_prefix().c_str(),
-                   (ctx.cmd_name && *ctx.cmd_name) ? ctx.cmd_name : "",
-                   (ctx.cmd_name && *ctx.cmd_name) ? ": " : "", n->name.c_str());
+      ctx.sh.errorf("%s%s`%s[]': not a valid identifier\n",
+                    (ctx.cmd_name && *ctx.cmd_name) ? ctx.cmd_name : "",
+                    (ctx.cmd_name && *ctx.cmd_name) ? ": " : "", n->name.c_str());
     } else {
       // `(( y[$none] ))' -- a read: y[]: bad array subscript (bare).  bash
       // reports it TWICE: once while resolving the reference and again when
       // the arithmetic command reports the failed expression (array27.sub).
       std::string m = n->name + "[]: bad array subscript";
-      std::fprintf(stderr, "%s%s\n", ctx.sh.err_prefix().c_str(), m.c_str());
+      ctx.sh.errorf("%s\n", m.c_str());
       if (ctx.expand_subs == 1)
-        std::fprintf(stderr, "%s%s\n", ctx.sh.err_prefix().c_str(), m.c_str());
+        ctx.sh.errorf("%s\n", m.c_str());
     }
     return false;
   }
@@ -868,8 +867,7 @@ long long ref_get(const Node *n, Ctx &ctx, const std::string *rsub = nullptr) {
     // set -u: an unset variable in arithmetic aborts like any other expansion
     // (non-interactive bash exits with 127); the message is already printed,
     // so fail without queueing a second diagnostic.
-    std::fprintf(stderr, "%s%s: unbound variable\n", ctx.sh.err_prefix().c_str(),
-                 n->name.c_str());
+    ctx.sh.errorf("%s: unbound variable\n", n->name.c_str());
     ctx.sh.exiting = true;
     ctx.sh.exit_status = 127;
     ctx.ok = false;
@@ -1050,15 +1048,14 @@ long long eval_arith_msg(Shell &sh, const std::string &expr, const char *cmd_nam
     // A nested value-evaluation failure carries its own fully formatted
     // diagnostic naming the VALUE as the expression; a subscript failure
     // prints bare (no `((: ' prefix), as bash's array layer does.
-    std::fprintf(stderr, "%s%s%s\n", sh.err_prefix().c_str(),
-                 ctx.full_msg_bare ? "" : prefix.c_str(), rendere(ctx.full_msg).c_str());
+    sh.errorf("%s%s\n", ctx.full_msg_bare ? "" : prefix.c_str(), rendere(ctx.full_msg).c_str());
     // A failure raised by the ARRAY layer while evaluating a subscript unwinds
     // the command list, even from `let', where a failure of the top-level
     // expression (`let "x+"') merely returns non-zero and execution continues.
     if (ctx.full_msg_bare) sh.arith_abort = true;
   } else if (!ctx.ok && ctx.err_pos != std::string::npos && ctx.err_pos <= expr.size()) {
-    std::fprintf(stderr, "%s%s%s\n", sh.err_prefix().c_str(), prefix.c_str(),
-                 rendere(format_arith_err(expr, ctx.err_msg, ctx.err_pos)).c_str());
+    sh.errorf("%s%s\n", prefix.c_str(),
+              rendere(format_arith_err(expr, ctx.err_msg, ctx.err_pos)).c_str());
   }
   return v;
 }

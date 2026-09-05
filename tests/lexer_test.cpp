@@ -8,9 +8,11 @@
 
 #include "gnash/core/lexer.hpp"
 
+#include "testcheck.hpp"
+
 namespace core = gnash::core;
 
-static int failures = 0;
+using gnashtest::failures;
 
 // Render the token stream compactly: word/io text verbatim, operators by name,
 // joined with spaces (EOF omitted).
@@ -91,10 +93,5 @@ int main() {
       }
   }
 
-  if (failures == 0) {
-    std::printf("all lexer tests passed\n");
-    return 0;
-  }
-  std::fprintf(stderr, "%d lexer test(s) failed\n", failures);
-  return 1;
+  return gnashtest::finish("lexer");
 }

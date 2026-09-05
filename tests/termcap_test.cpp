@@ -13,15 +13,9 @@
 #include "gnash/termcap.hpp"
 #include "termcap.h"
 
-static int failures = 0;
+#include "testcheck.hpp"
 
-#define CHECK(cond)                                                        \
-  do {                                                                     \
-    if (!(cond)) {                                                         \
-      std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
-      failures++;                                                          \
-    }                                                                      \
-  } while (0)
+using gnashtest::failures;
 
 static bool str_is(const char *cap, const char *want) {
   char *s = tgetstr(cap, nullptr);
@@ -81,10 +75,5 @@ int main() {
   auto ce = gnash::termcap::str("ce");
   CHECK(ce && *ce == std::string("\033[K"));
 
-  if (failures == 0) {
-    std::printf("all termcap tests passed\n");
-    return 0;
-  }
-  std::fprintf(stderr, "%d termcap test(s) failed\n", failures);
-  return 1;
+  return gnashtest::finish("termcap");
 }

@@ -7,9 +7,11 @@
 
 #include "gnash/core/shell.hpp"
 
+#include "testcheck.hpp"
+
 namespace core = gnash::core;
 
-static int failures = 0;
+using gnashtest::failures;
 
 static void eq(const char *expr, long long want) {
   static core::Shell sh;
@@ -113,10 +115,5 @@ int main() {
     if (core::eval_arith(sh, "y * 2", &ok) != 42) { std::fprintf(stderr, "FAIL recursive y\n"); failures++; }
   }
 
-  if (failures == 0) {
-    std::printf("all arith tests passed\n");
-    return 0;
-  }
-  std::fprintf(stderr, "%d arith test(s) failed\n", failures);
-  return 1;
+  return gnashtest::finish("arith");
 }
