@@ -8,9 +8,11 @@
 
 #include "gnash/core/parser.hpp"
 
+#include "testcheck.hpp"
+
 namespace core = gnash::core;
 
-static int failures = 0;
+using gnashtest::failures;
 
 // Parse `in`; assert it succeeds and renders to `want`.
 static void ok(const std::string &in, const char *want) {
@@ -140,10 +142,5 @@ int main() {
   alias_ok("readme.md", {}, {}, {{"md", "less"}}, "less readme.md");    // suffix
   alias_ok("a.txt b.txt", {}, {}, {{"txt", "cat"}}, "cat a.txt b.txt"); // suffix only in cmd pos
 
-  if (failures == 0) {
-    std::printf("all parser tests passed\n");
-    return 0;
-  }
-  std::fprintf(stderr, "%d parser test(s) failed\n", failures);
-  return 1;
+  return gnashtest::finish("parser");
 }

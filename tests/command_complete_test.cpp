@@ -15,9 +15,11 @@
 #include "gnash/core/builtins.hpp"
 #include "gnash/core/shell.hpp"
 
+#include "testcheck.hpp"
+
 namespace core = gnash::core;
 
-static int failures = 0;
+using gnashtest::failures;
 
 static bool has(const std::vector<std::string> &v, const std::string &s) {
   return std::find(v.begin(), v.end(), s) != v.end();
@@ -80,10 +82,5 @@ int main() {
   unlink(noexe.c_str());
   rmdir(dir);
 
-  if (failures == 0) {
-    std::printf("all command-completion tests passed\n");
-    return 0;
-  }
-  std::fprintf(stderr, "%d command-completion test(s) failed\n", failures);
-  return 1;
+  return gnashtest::finish("command-completion");
 }

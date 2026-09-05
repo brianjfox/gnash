@@ -14,15 +14,9 @@
 
 #include "readline/history.h"
 
-static int failures = 0;
+#include "testcheck.hpp"
 
-#define CHECK(cond)                                                        \
-  do {                                                                     \
-    if (!(cond)) {                                                         \
-      std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
-      failures++;                                                          \
-    }                                                                      \
-  } while (0)
+using gnashtest::failures;
 
 // Expand SRC and assert the return code and expanded text.
 static void expect(const char *src, int want_ret, const char *want_out) {
@@ -113,10 +107,5 @@ int main() {
 
   clear_history();
 
-  if (failures == 0) {
-    std::printf("all history_expand tests passed\n");
-    return 0;
-  }
-  std::fprintf(stderr, "%d history_expand test(s) failed\n", failures);
-  return 1;
+  return gnashtest::finish("history_expand");
 }

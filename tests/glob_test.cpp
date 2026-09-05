@@ -15,17 +15,11 @@
 #include "glob.h"
 #include "strmatch.h"
 
+#include "testcheck.hpp"
+
 namespace glob = gnash::glob;
 
-static int failures = 0;
-
-#define CHECK(cond)                                                        \
-  do {                                                                     \
-    if (!(cond)) {                                                         \
-      std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
-      failures++;                                                          \
-    }                                                                      \
-  } while (0)
+using gnashtest::failures;
 
 static void m(const char *pat, const char *str, int flags, bool want) {
   bool got = glob::fnmatch(pat, str, flags);
@@ -170,10 +164,5 @@ int main() {
     if (system(rm.c_str()) != 0) { /* best effort */ }
   }
 
-  if (failures == 0) {
-    std::printf("all glob tests passed\n");
-    return 0;
-  }
-  std::fprintf(stderr, "%d glob test(s) failed\n", failures);
-  return 1;
+  return gnashtest::finish("glob");
 }

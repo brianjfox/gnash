@@ -14,15 +14,9 @@
 #include "gnash/tilde.hpp"
 #include "readline/tilde.h"
 
-static int failures = 0;
+#include "testcheck.hpp"
 
-#define CHECK(cond)                                                        \
-  do {                                                                     \
-    if (!(cond)) {                                                         \
-      std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
-      failures++;                                                          \
-    }                                                                      \
-  } while (0)
+using gnashtest::failures;
 
 static void expect(const char *in, const char *want) {
   char *r = tilde_expand(in);
@@ -58,10 +52,5 @@ int main() {
   CHECK(gnash::tilde::expand("~/z") == "/test/home/z");
   CHECK(gnash::tilde::expand_word("~") == "/test/home");
 
-  if (failures == 0) {
-    std::printf("all tilde tests passed\n");
-    return 0;
-  }
-  std::fprintf(stderr, "%d tilde test(s) failed\n", failures);
-  return 1;
+  return gnashtest::finish("tilde");
 }

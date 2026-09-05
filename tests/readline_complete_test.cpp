@@ -13,15 +13,9 @@
 #include "readline/history.h"
 #include "readline/readline.h"
 
-static int failures = 0;
+#include "readline_test_support.hpp"
 
-#define CHECK(cond)                                                        \
-  do {                                                                     \
-    if (!(cond)) {                                                         \
-      std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
-      failures++;                                                          \
-    }                                                                      \
-  } while (0)
+using gnashtest::failures;
 
 // ---- a fixed word list used by the custom completion hook ----------------
 static const char *kWords[] = {"foobar", "foobaz", "fizz", nullptr};
@@ -62,30 +56,6 @@ static char **sort_attempt(const char *text, int /*start*/, int /*end*/) {
   return rl_completion_matches(text, sort_generator);
 }
 
-// Feed INPUT to readline(); return the produced line.
-static char *run(const std::string &input) {
-  FILE *f = std::tmpfile();
-  if (input.size()) std::fwrite(input.data(), 1, input.size(), f);
-  std::rewind(f);
-  rl_instream = f;
-  rl_outstream = std::fopen("/dev/null", "w");
-  char *r = readline("");
-  std::fclose(f);
-  if (rl_outstream) std::fclose(rl_outstream);
-  rl_instream = nullptr;
-  rl_outstream = nullptr;
-  return r;
-}
-
-static void expect(const std::string &in, const char *want) {
-  char *r = run(in);
-  if (r == nullptr || std::strcmp(r, want) != 0) {
-    std::fprintf(stderr, "FAIL run: got \"%s\", wanted \"%s\"\n", r ? r : "(null)", want);
-    failures++;
-  }
-  std::free(r);
-}
-
 int main() {
   // -- rl_completion_matches: longest common prefix + entries --------------
   char **m = rl_completion_matches("foo", word_generator);
@@ -103,18 +73,18 @@ int main() {
   rl_attempted_completion_function = attempt;
 
   // Ambiguous: "fo" -> common prefix "fooba" (no append, no accept yet).
-  expect("fo\t\n", "fooba");
+  gnashtest::expect_line("fo\t\n", "fooba");
   // Unique: "fi" -> "fizz" + append space.
-  expect("fi\t\n", "fizz ");
+  gnashtest::expect_line("fi\t\n", "fizz ");
 
   // zsh-style menu completion: the first TAB only lists the candidates (the
   // line is unchanged); each subsequent TAB inserts the next one, cycling and
   // wrapping.  (foobar/foobaz are the two matches for "foob".)
   rl_bind_key('\t', rl_menu_complete);
-  expect("foob\t\n", "foob");          // first TAB lists; line unchanged
-  expect("foob\t\t\n", "foobar");      // second TAB inserts the first candidate
-  expect("foob\t\t\t\n", "foobaz");    // next candidate
-  expect("foob\t\t\t\t\n", "foobar");  // wraps back to the first
+  gnashtest::expect_line("foob\t\n", "foob");          // first TAB lists; line unchanged
+  gnashtest::expect_line("foob\t\t\n", "foobar");      // second TAB inserts the first candidate
+  gnashtest::expect_line("foob\t\t\t\n", "foobaz");    // next candidate
+  gnashtest::expect_line("foob\t\t\t\t\n", "foobar");  // wraps back to the first
   rl_bind_key('\t', rl_complete);      // restore the default TAB completion
 
   rl_attempted_completion_function = nullptr;
@@ -123,10 +93,10 @@ int main() {
   // the order the generator produced them (Delta, alpha, Charlie, bravo).
   rl_attempted_completion_function = sort_attempt;
   rl_bind_key('\t', rl_menu_complete);
-  expect("\t\t\n", "alpha");          // 1st TAB lists, 2nd inserts sorted[0]
-  expect("\t\t\t\n", "bravo");        // sorted[1]
-  expect("\t\t\t\t\n", "Charlie");    // sorted[2]
-  expect("\t\t\t\t\t\n", "Delta");    // sorted[3]
+  gnashtest::expect_line("\t\t\n", "alpha");          // 1st TAB lists, 2nd inserts sorted[0]
+  gnashtest::expect_line("\t\t\t\n", "bravo");        // sorted[1]
+  gnashtest::expect_line("\t\t\t\t\n", "Charlie");    // sorted[2]
+  gnashtest::expect_line("\t\t\t\t\t\n", "Delta");    // sorted[3]
   rl_bind_key('\t', rl_complete);
   rl_attempted_completion_function = nullptr;
 
@@ -184,8 +154,8 @@ int main() {
     fclose(fopen((std::string(dir) + "/subfile").c_str(), "w"));
     rl_attempted_completion_function = nullptr;  // use filename completion
     rl_bind_key('\t', rl_menu_complete);
-    expect("sub\t\t\n", "subdir/");    // 1st TAB lists, 2nd inserts subdir + `/'
-    expect("sub\t\t\t\n", "subfile");  // next candidate is a file: no slash
+    gnashtest::expect_line("sub\t\t\n", "subdir/");    // 1st TAB lists, 2nd inserts subdir + `/'
+    gnashtest::expect_line("sub\t\t\t\n", "subfile");  // next candidate is a file: no slash
     rl_bind_key('\t', rl_complete);
     unlink((std::string(dir) + "/subfile").c_str());
     rmdir((std::string(dir) + "/subdir").c_str());
@@ -195,8 +165,8 @@ int main() {
     // already carrying those escapes (`zz\ s') still matches the real name.
     fclose(fopen((std::string(dir) + "/zz s$(x).txt").c_str(), "w"));
     rl_attempted_completion_function = nullptr;
-    expect("cat zz\t\n", "cat zz\\ s\\$\\(x\\).txt ");   // escaped + trailing space
-    expect("cat zz\\ s\t\n", "cat zz\\ s\\$\\(x\\).txt ");  // re-complete an escaped word
+    gnashtest::expect_line("cat zz\t\n", "cat zz\\ s\\$\\(x\\).txt ");   // escaped + trailing space
+    gnashtest::expect_line("cat zz\\ s\t\n", "cat zz\\ s\\$\\(x\\).txt ");  // re-complete an escaped word
     unlink((std::string(dir) + "/zz s$(x).txt").c_str());
 
     if (cwd) {
@@ -215,19 +185,14 @@ int main() {
   add_history("foobaz");
   add_history("find me");
   // C-r, type "bar", RET -> matches "foobar".
-  expect("\x12"
+  gnashtest::expect_line("\x12"
          "bar\r",
          "foobar");
   // C-r, type "baz", RET -> matches "foobaz".
-  expect("\x12"
+  gnashtest::expect_line("\x12"
          "baz\r",
          "foobaz");
   clear_history();
 
-  if (failures == 0) {
-    std::printf("all completion/isearch tests passed\n");
-    return 0;
-  }
-  std::fprintf(stderr, "%d completion/isearch test(s) failed\n", failures);
-  return 1;
+  return gnashtest::finish("completion/isearch");
 }

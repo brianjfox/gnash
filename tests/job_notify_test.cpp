@@ -24,7 +24,9 @@
 #include <pty.h>
 #endif
 
-static int failures = 0;
+#include "testcheck.hpp"
+
+using gnashtest::failures;
 
 // Read everything the shell writes to the pty until it stays quiet for
 // `settle_ms', appending to `out'.  Returns false once the child hangs up.
@@ -43,14 +45,6 @@ static bool drain(int fd, std::string &out, int settle_ms) {
 static void send(int fd, const char *s, std::string &out) {
   (void)!write(fd, s, std::strlen(s));
   drain(fd, out, 400);
-}
-
-static size_t count_of(const std::string &hay, const std::string &needle) {
-  size_t n = 0;
-  for (size_t at = hay.find(needle); at != std::string::npos;
-       at = hay.find(needle, at + needle.size()))
-    n++;
-  return n;
 }
 
 int main(int argc, char **argv) {
@@ -81,7 +75,7 @@ int main(int argc, char **argv) {
 
   // The stop of a foreground job is reported exactly once (bash prints one
   // "[1]+  Stopped" line, not one at stop time and another before the prompt).
-  size_t notices = count_of(out, "Stopped");
+  size_t notices = gnashtest::count_of(out, "Stopped");
   if (notices != 1) {
     std::fprintf(stderr, "FAIL expected exactly 1 Stopped notice after ^Z, got %zu\n%s\n",
                  notices, out.c_str());
