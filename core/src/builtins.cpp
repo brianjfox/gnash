@@ -4,6 +4,7 @@
 // builtins.cpp -- shell builtins, plus the test/[ and [[ ]] evaluators.
 
 #include "gnash/core/builtins.hpp"
+#include "gnash/core/quote.hpp"
 #include "gnash/core/subscript.hpp"
 
 #include <algorithm>
@@ -282,17 +283,9 @@ std::string shell_quote(const std::string &s, bool altform = false) {
   if (s.empty()) return "''";
   if (q_needs_ansic(s)) return q_ansic(s);
   // The alternate form (printf %#q -> bash sh_single_quote) ALWAYS
-  // single-quotes, even a string needing no quoting, with embedded single
-  // quotes spelled '\''.  ANSI-C quoting above still takes precedence.
-  if (altform) {
-    std::string r = "'";
-    for (char c : s) {
-      if (c == '\'') r += "'\\''";
-      else r += c;
-    }
-    r += '\'';
-    return r;
-  }
+  // single-quotes, even a string needing no quoting.  ANSI-C quoting above
+  // still takes precedence.
+  if (altform) return single_quote(s);
   // Characters bash leaves unescaped, plus alphanumerics; `~' and `#' are only
   // safe when they do not start the string.
   static const char *safe = "#%+-./:=@_~";
@@ -1658,9 +1651,7 @@ std::string xtrace_quote_word(const std::string &w) {
     }
   }
   if (!meta) return w;
-  std::string r = "'";
-  for (char c : w) { if (c == '\'') r += "'\\''"; else r += c; }
-  return r + "'";
+  return single_quote(w);
 }
 
 std::vector<std::string> Shell::dirstack() const {
@@ -2345,48 +2336,14 @@ std::string set_quote(const std::string &v) {
     break;
   }
   if (simple) return v;
-  std::string r = "'";
-  for (char c : v) { if (c == '\'') r += "'\\''"; else r += c; }
-  return r + "'";
-}
-
-std::string set_elem(const std::string &v) {  // array element form: "value"
-  std::string r = "\"";
-  for (char c : v) { if (c == '"' || c == '\\' || c == '$' || c == '`') r += '\\'; r += c; }
-  return r + "\"";
+  return single_quote(v);
 }
 
 // Quote a value for `declare -p': ANSI-C ($'...') for non-printable bytes,
 // double quotes otherwise (escaping " \\ $ `).
 std::string declare_quote(const std::string &v) {
   if (q_needs_ansic(v)) return q_ansic(v);
-  std::string r = "\"";
-  for (char c : v) { if (c == '"' || c == '\\' || c == '$' || c == '`') r += '\\'; r += c; }
-  return r + "\"";
-}
-
-// True if KEY contains a shell metacharacter (bash's sh_contains_shell_metas),
-// used to decide whether an associative-array subscript must be quoted.
-static bool sub_has_metas(const std::string &s) {
-  for (size_t i = 0; i < s.size(); i++) {
-    switch (s[i]) {
-      case ' ': case '\t': case '\n':
-      case '\'': case '"': case '\\':
-      case '|': case '&': case ';':
-      case '(': case ')': case '<': case '>':
-      case '!': case '{': case '}':
-      case '*': case '[': case '?': case ']':
-      case '^': case '$': case '`':
-        return true;
-      case '~':
-        if (i == 0 || s[i - 1] == '=' || s[i - 1] == ':') return true;
-        break;
-      case '#':
-        if (i == 0) return true;
-        break;
-    }
-  }
-  return false;
+  return double_quote(v);
 }
 
 // Quote an associative-array subscript for `declare -p' the way bash does:
@@ -2394,10 +2351,8 @@ static bool sub_has_metas(const std::string &s) {
 // metacharacter or is the lone `*'/`@' selector, otherwise bare.
 std::string declare_sub_quote(const std::string &k) {
   if (q_needs_ansic(k)) return q_ansic(k);
-  if (!sub_has_metas(k) && k != "*" && k != "@") return k;
-  std::string r = "\"";
-  for (char c : k) { if (c == '"' || c == '\\' || c == '$' || c == '`') r += '\\'; r += c; }
-  return r + "\"";
+  if (!contains_shell_metas(k) && k != "*" && k != "@") return k;
+  return double_quote(k);
 }
 
 // `declare -p NAME': the attribute flags plus the reproducible assignment.
@@ -2478,7 +2433,7 @@ void set_print_var(const std::string &name, const Variable &v) {
     for (const auto &kv : v.idx) {
       if (!first) s += ' ';
       first = false;
-      s += "[" + std::to_string(kv.first) + "]=" + set_elem(kv.second);
+      s += "[" + std::to_string(kv.first) + "]=" + double_quote(kv.second);
     }
     std::printf("%s)\n", s.c_str());
   } else if (v.kind == VarKind::Assoc) {
@@ -2487,7 +2442,7 @@ void set_print_var(const std::string &name, const Variable &v) {
     for (const auto &k : Shell::assoc_order(v)) {
       if (!first) s += ' ';
       first = false;
-      s += "[" + declare_sub_quote(k) + "]=" + set_elem(v.assoc.at(k));
+      s += "[" + declare_sub_quote(k) + "]=" + double_quote(v.assoc.at(k));
     }
     // bash prints a trailing space before `)' for a non-empty associative array.
     std::printf("%s%s)\n", s.c_str(), first ? "" : " ");
@@ -6029,12 +5984,6 @@ int bi_caller(Shell &sh, const std::vector<std::string> &argv) {
 }
 
 // ---- alias / unalias -----------------------------------------------------
-static std::string alias_quote(const std::string &v) {
-  std::string r = "'";
-  for (char c : v) { if (c == '\'') r += "'\\''"; else r += c; }
-  return r + "'";
-}
-
 int bi_alias(Shell &sh, const std::vector<std::string> &argv) {
   size_t i = 1;
   char kind = 0;  // 0 = regular; 'g' = global, 's' = suffix (zsh `alias -g'/`-s')
@@ -6052,9 +6001,9 @@ int bi_alias(Shell &sh, const std::vector<std::string> &argv) {
   // list as `name=value'.
   auto show = [&](const std::string &n, const std::string &v) {
     if (kind == 0)
-      std::printf("alias %s=%s\n", n.c_str(), alias_quote(v).c_str());
+      std::printf("alias %s=%s\n", n.c_str(), single_quote(v).c_str());
     else
-      std::printf("%s=%s\n", n.c_str(), alias_quote(v).c_str());
+      std::printf("%s=%s\n", n.c_str(), single_quote(v).c_str());
   };
   if (i >= argv.size()) {
     for (const auto &kv : table) show(kv.first, kv.second);
@@ -6557,13 +6506,6 @@ static const CompActEnt kCompActs[] = {
     {"signal", 0},    {"stopped", 0},   {"user", 'u'},   {"variable", 'v'},
     {nullptr, 0}};
 
-// bash's sh_single_quote: wrap in single quotes, embedded ' becomes '\''.
-static std::string comp_squote(const std::string &s) {
-  std::string r = "'";
-  for (char c : s) { if (c == '\'') r += "'\\''"; else r += c; }
-  return r + "'";
-}
-
 // FNV variant matching bash's hash_string / gnash's assoc_hash_string, so the
 // compspec listing walks the same 512-bucket table order bash does.
 static unsigned comp_hash(const std::string &s) {
@@ -6817,13 +6759,13 @@ int bi_complete(Shell &sh, const std::vector<std::string> &argv) {
     if (e->opt && act_set.count(e->name)) add(std::string("-") + e->opt);
   for (const CompActEnt *e = kCompActs; e->name; e++)  // then long-only -A actions
     if (e->opt == 0 && act_set.count(e->name)) add(std::string("-A ") + e->name);
-  if (has_g) add("-G " + comp_squote(g_arg));
-  if (has_w) add("-W " + comp_squote(w_arg));
-  if (has_p) add("-P " + comp_squote(p_arg));
-  if (has_s) add("-S " + comp_squote(s_arg));
-  if (has_x) add("-X " + comp_squote(x_arg));
-  if (has_c) add("-C " + comp_squote(c_arg));
-  if (has_f) add("-F " + (sub_has_metas(f_arg) ? comp_squote(f_arg) : f_arg));
+  if (has_g) add("-G " + single_quote(g_arg));
+  if (has_w) add("-W " + single_quote(w_arg));
+  if (has_p) add("-P " + single_quote(p_arg));
+  if (has_s) add("-S " + single_quote(s_arg));
+  if (has_x) add("-X " + single_quote(x_arg));
+  if (has_c) add("-C " + single_quote(c_arg));
+  if (has_f) add("-F " + (contains_shell_metas(f_arg) ? single_quote(f_arg) : f_arg));
 
   auto emit = [&](const std::string &name, const std::string &sp) {
     if (sp.empty()) std::printf("complete %s\n", name.c_str());
@@ -7886,7 +7828,7 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
       for (size_t j = i; j < argv.size(); j++) {
         const std::string &n = argv[j];
         if (aliases_on && sh.aliases.count(n)) {
-          std::printf("alias %s=%s\n", n.c_str(), alias_quote(sh.aliases.at(n)).c_str());
+          std::printf("alias %s=%s\n", n.c_str(), single_quote(sh.aliases.at(n)).c_str());
         } else if (sh.functions.count(n) || is_builtin_name(n) || is_reserved_word(n)) {
           std::printf("%s\n", n.c_str());
         } else if (const std::string *hp = sh.hash_lookup(n)) {

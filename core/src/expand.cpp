@@ -10,6 +10,7 @@
 #include "gnash/core/builtins.hpp"
 #include "gnash/core/expand.hpp"
 #include "gnash/core/lexer.hpp"
+#include "gnash/core/quote.hpp"
 #include "gnash/core/subscript.hpp"
 
 #include <algorithm>
@@ -2539,107 +2540,24 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
   for (char c : v) { out += c; mask += qm; }
 }
 
-// Parse and apply ${...} operators.
-// ${var@Q}: single-quote the value so it can be re-read as shell input, using
-// $'...' when it contains control characters.
+// The ${var@Q} transformation: single-quote the value so it can be re-read
+// as shell input, using $'...' when it holds non-printable bytes (quote.hpp
+// carries both idioms).
 static std::string atq_quote(const std::string &s) {
-  bool ctrl = false;
-  for (unsigned char c : s)
-    if (c < 32 || c == 127) { ctrl = true; break; }
-  if (ctrl) {
-    std::string r = "$'";
-    for (unsigned char c : s) {
-      switch (c) {
-        case '\n': r += "\\n"; break;
-        case '\t': r += "\\t"; break;
-        case '\r': r += "\\r"; break;
-        case '\\': r += "\\\\"; break;
-        case '\'': r += "\\'"; break;
-        default:
-          if (c < 32 || c == 127) { char b[8]; std::snprintf(b, sizeof b, "\\%03o", c); r += b; }
-          else r += static_cast<char>(c);
-      }
-    }
-    return r + "'";
-  }
-  std::string r = "'";
-  for (char c : s) {
-    if (c == '\'') r += "'\\''";
-    else r += c;
-  }
-  return r + "'";
-}
-
-// True if S contains any non-printable byte (bash's ansic_shouldquote).
-static bool kv_has_nonprint(const std::string &s) {
-  for (unsigned char c : s)
-    if (c < 32 || c == 127) return true;
-  return false;
-}
-
-// Produce a $'...' ANSI-C quotation of S (used when a kvpair key/value holds
-// non-printable bytes).
-static std::string kv_ansic_quote(const std::string &s) {
-  std::string r = "$'";
-  for (unsigned char c : s) {
-    switch (c) {
-      case '\n': r += "\\n"; break;
-      case '\t': r += "\\t"; break;
-      case '\r': r += "\\r"; break;
-      case '\\': r += "\\\\"; break;
-      case '\'': r += "\\'"; break;
-      default:
-        if (c < 32 || c == 127) { char b[8]; std::snprintf(b, sizeof b, "\\%03o", c); r += b; }
-        else r += static_cast<char>(c);
-    }
-  }
-  return r + "'";
-}
-
-// Double-quote S, backslash-escaping the characters special inside "..."
-// (bash's sh_double_quote).
-static std::string kv_double_quote(const std::string &s) {
-  std::string r = "\"";
-  for (char c : s) {
-    if (c == '"' || c == '\\' || c == '$' || c == '`') r += '\\';
-    r += c;
-  }
-  return r + "\"";
-}
-
-// True if KEY contains a shell metacharacter that forces quoting in an assoc
-// kvpair key (bash's sh_contains_shell_metas).
-static bool kv_contains_metas(const std::string &s) {
-  for (size_t i = 0; i < s.size(); i++) {
-    char c = s[i];
-    switch (c) {
-      case ' ': case '\t': case '\n': case '\'': case '"': case '\\':
-      case '|': case '&': case ';': case '(': case ')': case '<': case '>':
-      case '!': case '{': case '}': case '*': case '[': case '?': case ']':
-      case '^': case '$': case '`':
-        return true;
-      case '~':
-        if (i == 0 || s[i - 1] == '=' || s[i - 1] == ':') return true;
-        break;
-      case '#':
-        if (i == 0) return true;
-        break;
-    }
-  }
-  return false;
+  return has_nonprint(s) ? ansic_quote(s) : single_quote(s);
 }
 
 // Quote a kvpair value: $'...' if it holds non-printables, else "...".
 static std::string kv_value_quote(const std::string &v) {
   if (v.empty()) return "\"\"";
-  return kv_has_nonprint(v) ? kv_ansic_quote(v) : kv_double_quote(v);
+  return has_nonprint(v) ? ansic_quote(v) : double_quote(v);
 }
 
 // Quote an assoc kvpair key: bare unless it needs $'...'/double-quoting.
 static std::string kv_key_quote(const std::string &k) {
-  if (kv_has_nonprint(k)) return kv_ansic_quote(k);
-  if (kv_contains_metas(k)) return kv_double_quote(k);
-  if (k.size() == 1 && (k[0] == '@' || k[0] == '*')) return kv_double_quote(k);
+  if (has_nonprint(k)) return ansic_quote(k);
+  if (contains_shell_metas(k)) return double_quote(k);
+  if (k.size() == 1 && (k[0] == '@' || k[0] == '*')) return double_quote(k);
   return k;
 }
 
