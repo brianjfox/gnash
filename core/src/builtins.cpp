@@ -99,8 +99,7 @@ std::string decode_b(const std::string &s, bool &stop, bool bare_octal = true,
         if (k == 0) {
           out += "\\x";
           if (warn_sh)
-            std::fprintf(stderr, "%sprintf: missing hex digit for \\x\n",
-                         warn_sh->err_prefix().c_str());
+            warn_sh->errorf("printf: missing hex digit for \\x\n");
           break;
         }
         out += static_cast<char>(v);
@@ -182,8 +181,7 @@ int bi_echo(Shell &sh, const std::vector<std::string> &argv) {
   // fails only HERE, because duplicating a read-only descriptor onto stdout
   // succeeds and only the write itself gets EBADF.
   if (std::fflush(stdout) != 0 || std::ferror(stdout)) {
-    std::fprintf(stderr, "%secho: write error: %s\n", sh.err_prefix().c_str(),
-                 std::strerror(errno));
+    sh.errorf("echo: write error: %s\n", std::strerror(errno));
     std::clearerr(stdout);
     return 1;
   }
@@ -494,15 +492,13 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
         vname_idx = ai + 1;
         ai += 2;
       } else {
-        std::fprintf(stderr, "%sprintf: -v: option requires an argument\n",
-                     sh.err_prefix().c_str());
+        sh.errorf("printf: -v: option requires an argument\n");
         std::fputs(kUsage, stderr);
         return 2;
       }
       continue;
     }
-    std::fprintf(stderr, "%sprintf: %s: invalid option\n",
-                 sh.err_prefix().c_str(), opt.substr(0, 2).c_str());
+    sh.errorf("printf: %s: invalid option\n", opt.substr(0, 2).c_str());
     std::fputs(kUsage, stderr);
     return 2;
   }
@@ -515,8 +511,7 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
               (lb != std::string::npos && lb > 0 && vname.size() >= lb + 3 &&
                vname.back() == ']' && valid_identifier(vname.substr(0, lb)));
     if (!ok) {
-      std::fprintf(stderr, "%sprintf: `%s': not a valid identifier\n",
-                   sh.err_prefix().c_str(), vname.c_str());
+      sh.errorf("printf: `%s': not a valid identifier\n", vname.c_str());
       return 2;
     }
   }
@@ -581,8 +576,7 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
     }
     if (!ovf) return static_cast<long>(v);
     flush_out();
-    std::fprintf(stderr, "%sprintf: %s: %s\n", sh.err_prefix().c_str(),
-                 f.substr(d0, sp - d0).c_str(), std::strerror(ERANGE));
+    sh.errorf("printf: %s: %s\n", f.substr(d0, sp - d0).c_str(), std::strerror(ERANGE));
     conv_error = true;
     return overflow_return;
   };
@@ -595,8 +589,7 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
   // scan; clearing argi ends the argument-reuse loop.
   auto pf_fail = [&]() {
     flush_out();
-    std::fprintf(stderr, "%sprintf: %s\n", sh.err_prefix().c_str(),
-                 std::strerror(errno));
+    sh.errorf("printf: %s\n", std::strerror(errno));
     fatal = true;
     argi = argv.size();
   };
@@ -617,13 +610,11 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
     bool overflow = errno == ERANGE || v < INT_MIN || v > INT_MAX;
     if (*ep != '\0' || ep == a.c_str()) {
       flush_out();
-      std::fprintf(stderr, "%sprintf: %s: invalid number\n",
-                   sh.err_prefix().c_str(), a.c_str());
+      sh.errorf("printf: %s: invalid number\n", a.c_str());
       conv_error = true;
     } else if (overflow) {
       flush_out();
-      std::fprintf(stderr, "%sprintf: %s: %s\n", sh.err_prefix().c_str(),
-                   a.c_str(), std::strerror(ERANGE));
+      sh.errorf("printf: %s: %s\n", a.c_str(), std::strerror(ERANGE));
       conv_error = true;
     }
     return overflow ? overflow_return : static_cast<long>(v);
@@ -636,13 +627,11 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
   auto chk_num = [&](const std::string &a, const char *ep, bool erange) {
     if ((ep && *ep != '\0') || ep == a.c_str()) {
       flush_out();
-      std::fprintf(stderr, "%sprintf: %s: invalid number\n",
-                   sh.err_prefix().c_str(), a.c_str());
+      sh.errorf("printf: %s: invalid number\n", a.c_str());
       conv_error = true;
     } else if (erange) {
       flush_out();
-      std::fprintf(stderr, "%sprintf: %s: %s\n", sh.err_prefix().c_str(),
-                   a.c_str(), std::strerror(ERANGE));
+      sh.errorf("printf: %s: %s\n", a.c_str(), std::strerror(ERANGE));
       conv_error = true;
     }
   };
@@ -716,8 +705,7 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
         // whole spec, stop processing, still write what accumulated (bash).
         auto missing_fmt_char = [&]() {
           flush_out();
-          std::fprintf(stderr, "%sprintf: `%s': missing format character\n",
-                       sh.err_prefix().c_str(), fmt.substr(i).c_str());
+          sh.errorf("printf: `%s': missing format character\n", fmt.substr(i).c_str());
           fatal = true;
           argi = argv.size();
         };
@@ -745,9 +733,7 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
             // literally and rescans the rest of the spec as ordinary text.
             char bad = (p + 1 < fmt.size()) ? fmt[p + 1] : '\0';
             flush_out();
-            std::fprintf(stderr,
-                         "%sprintf: warning: `%c': invalid time format specification\n",
-                         sh.err_prefix().c_str(), bad);
+            sh.errorf("printf: warning: `%c': invalid time format specification\n", bad);
             out += '%';
             continue;  // the loop ++ resumes at the character after `%'
           }
@@ -994,8 +980,7 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
           if (!var.empty()) {
             if (!valid_identifier(var)) {
               flush_out();
-              std::fprintf(stderr, "%sprintf: `%s': not a valid identifier\n",
-                           sh.err_prefix().c_str(), var.c_str());
+              sh.errorf("printf: `%s': not a valid identifier\n", var.c_str());
               fatal = true;
               argi = argv.size();
               break;
@@ -1012,8 +997,7 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
           // Anything else is `C': invalid format character -- an error that
           // stops processing (bash); what accumulated is still written.
           flush_out();
-          std::fprintf(stderr, "%sprintf: `%c': invalid format character\n",
-                       sh.err_prefix().c_str(), conv);
+          sh.errorf("printf: `%c': invalid format character\n", conv);
           fatal = true;
           argi = argv.size();
           break;
@@ -1030,8 +1014,7 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
     if (lb != std::string::npos &&
         ((!lenient_element_target(sh, vname_idx) && !well_formed_element(vname)) ||
          !subscript_reexpands(sh, vname))) {
-      std::fprintf(stderr, "%sprintf: `%s': not a valid identifier\n",
-                   sh.err_prefix().c_str(), vname.c_str());
+      sh.errorf("printf: `%s': not a valid identifier\n", vname.c_str());
       return 1;
     }
     if (lb != std::string::npos && !vname.empty() && vname.back() == ']') {
@@ -1041,8 +1024,7 @@ int bi_printf(Shell &sh, const std::vector<std::string> &argv) {
       auto pvit = sh.vars.find(sh.deref(base));
       bool pv_assoc = pvit != sh.vars.end() && pvit->second.kind == VarKind::Assoc;
       if (!pv_assoc && (sub == "@" || sub == "*")) {
-        std::fprintf(stderr, "%s%s: bad array subscript\n", sh.err_prefix().c_str(),
-                     vname.c_str());
+        sh.errorf("%s: bad array subscript\n", vname.c_str());
         return 1;
       }
       if (!sh.array_expand_once_ok(base, sub)) return 1;
@@ -1193,7 +1175,7 @@ struct TestEval {
   const char *at(size_t p) const { return p < v.size() ? v[p].c_str() : nullptr; }
 
   [[noreturn]] void syntax_error(const std::string &msg) {
-    std::fprintf(stderr, "%s%s: %s\n", sh.err_prefix().c_str(), cmd, msg.c_str());
+    sh.errorf("%s: %s\n", cmd, msg.c_str());
     throw TestSyntaxError{};
   }
   [[noreturn]] void integer_expected(const std::string &s) {
@@ -1541,8 +1523,7 @@ int change_dir(Shell &sh, const std::string &dir, bool physical, const char *cal
   logical = canon_logical(logical);
   const std::string &target = physical ? dir : logical;
   if (chdir(target.c_str()) != 0) {
-    std::fprintf(stderr, "%s%s: %s: %s\n", sh.err_prefix().c_str(), caller,
-                 printable_name(dir).c_str(), std::strerror(errno));
+    sh.errorf("%s: %s: %s\n", caller, printable_name(dir).c_str(), std::strerror(errno));
     return 1;
   }
   // Updating a readonly PWD/OLDPWD fails (bash reports it and cd returns 1),
@@ -1553,13 +1534,13 @@ int change_dir(Shell &sh, const std::string &dir, bool physical, const char *cal
   };
   if (!oldpwd.empty()) {
     if (is_ro("OLDPWD")) {
-      std::fprintf(stderr, "%sOLDPWD: readonly variable\n", sh.err_prefix().c_str());
+      sh.errorf("OLDPWD: readonly variable\n");
       return 1;
     }
     sh.set_exported("OLDPWD", oldpwd);
   }
   if (is_ro("PWD")) {
-    std::fprintf(stderr, "%sPWD: readonly variable\n", sh.err_prefix().c_str());
+    sh.errorf("PWD: readonly variable\n");
     return 1;
   }
   sh.set_exported("PWD", physical ? phys_cwd() : logical);
@@ -1569,7 +1550,7 @@ int change_dir(Shell &sh, const std::string &dir, bool physical, const char *cal
 int bi_cd(Shell &sh, const std::vector<std::string> &argv) {
   bool print_target = false;  // `cd -' echoes where it went, on success only
   if (sh.opt_restricted) {
-    std::fprintf(stderr, "%scd: restricted\n", sh.err_prefix().c_str());
+    sh.errorf("cd: restricted\n");
     return 1;
   }
   bool physical = false;
@@ -1581,20 +1562,20 @@ int bi_cd(Shell &sh, const std::vector<std::string> &argv) {
     else break;
   }
   if (argv.size() - i > 1) {
-    std::fprintf(stderr, "%scd: too many arguments\n", sh.err_prefix().c_str());
+    sh.errorf("cd: too many arguments\n");
     return 1;
   }
   std::string dir;
   if (i >= argv.size()) {
     if (!sh.is_set("HOME")) {
-      std::fprintf(stderr, "%scd: HOME not set\n", sh.err_prefix().c_str());
+      sh.errorf("cd: HOME not set\n");
       return 1;
     }
     dir = sh.get("HOME");
   } else if (argv[i] == "-") {
     print_target = true;  // set below, once the destination is known to be good
     if (!sh.is_set("OLDPWD")) {
-      std::fprintf(stderr, "%scd: OLDPWD not set\n", sh.err_prefix().c_str());
+      sh.errorf("cd: OLDPWD not set\n");
       return 1;
     }
     dir = sh.get("OLDPWD");
@@ -1724,7 +1705,7 @@ int bi_dirs(Shell &sh, const std::vector<std::string> &argv) {
     // A `-<non-digit>' is read as a bad `-N' index (invalid number); a bare
     // argument with no leading dash is an invalid option.
     if (a.empty() || a[0] != '-') {
-      std::fprintf(stderr, "%sdirs: %s: invalid option\n", sh.err_prefix().c_str(), a.c_str());
+      sh.errorf("dirs: %s: invalid option\n", a.c_str());
       std::fprintf(stderr, "dirs: usage: dirs [-clpv] [+N] [-N]\n");
       return 2;
     }
@@ -1737,7 +1718,7 @@ int bi_dirs(Shell &sh, const std::vector<std::string> &argv) {
       else bad = true;
     }
     if (bad) {
-      std::fprintf(stderr, "%sdirs: %s: invalid number\n", sh.err_prefix().c_str(), a.c_str());
+      sh.errorf("dirs: %s: invalid number\n", a.c_str());
       std::fprintf(stderr, "dirs: usage: dirs [-clpv] [+N] [-N]\n");
       return 2;
     }
@@ -1747,8 +1728,7 @@ int bi_dirs(Shell &sh, const std::vector<std::string> &argv) {
     int idx = rot_index(select, v.size());
     if (idx < 0) {
       // dirs reports the bare number (bash strips the +/- here, unlike pushd/popd).
-      std::fprintf(stderr, "%sdirs: %s: directory stack index out of range\n",
-                   sh.err_prefix().c_str(), select.substr(1).c_str());
+      sh.errorf("dirs: %s: directory stack index out of range\n", select.substr(1).c_str());
       return 1;
     }
     std::string s = tilde_abbrev(sh, v[static_cast<size_t>(idx)], longform);
@@ -1794,7 +1774,7 @@ int bi_pushd(Shell &sh, const std::vector<std::string> &argv) {
     // Rotate so the Nth entry becomes the top.
     std::vector<std::string> v = full_dirstack(sh);
     int idx = rot_index(a[1], v.size());
-    if (idx < 0) { std::fprintf(stderr, "%spushd: %s: directory stack index out of range\n", sh.err_prefix().c_str(), a[1].c_str()); return 1; }
+    if (idx < 0) { sh.errorf("pushd: %s: directory stack index out of range\n", a[1].c_str()); return 1; }
     std::rotate(v.begin(), v.begin() + idx, v.end());
     if (!no_cd && change_dir(sh, v[0], false, "pushd") != 0) return 1;
     sh.dir_stack.assign(v.begin() + 1, v.end());
@@ -1804,8 +1784,7 @@ int bi_pushd(Shell &sh, const std::vector<std::string> &argv) {
   }
   // A `+'/`-' argument that isn't a numeric index is a malformed rotation count.
   if (!opts_end && a.size() > 1 && (a[1][0] == '+' || a[1][0] == '-')) {
-    std::fprintf(stderr, "%spushd: %s: invalid number\n", sh.err_prefix().c_str(),
-                 a[1].c_str());
+    sh.errorf("pushd: %s: invalid number\n", a[1].c_str());
     std::fprintf(stderr, "pushd: usage: pushd [-n] [+N | -N | dir]\n");
     return 2;
   }
@@ -1818,7 +1797,7 @@ int bi_pushd(Shell &sh, const std::vector<std::string> &argv) {
   }
   // No argument: swap the top two directories.
   if (sh.dir_stack.empty()) {
-    std::fprintf(stderr, "%spushd: no other directory\n", sh.err_prefix().c_str());
+    sh.errorf("pushd: no other directory\n");
     return 1;
   }
   std::string target = sh.dir_stack.front();
@@ -1844,9 +1823,9 @@ int bi_popd(Shell &sh, const std::vector<std::string> &argv) {
       std::isdigit(static_cast<unsigned char>(a[1][1]))) {
     std::vector<std::string> v = full_dirstack(sh);
     int idx = rot_index(a[1], v.size());
-    if (idx < 0) { std::fprintf(stderr, "%spopd: %s: directory stack index out of range\n", sh.err_prefix().c_str(), a[1].c_str()); return 1; }
+    if (idx < 0) { sh.errorf("popd: %s: directory stack index out of range\n", a[1].c_str()); return 1; }
     if (idx == 0) {  // removing the top: cd to the next entry (unless `-n')
-      if (sh.dir_stack.empty()) { std::fprintf(stderr, "%spopd: directory stack empty\n", sh.err_prefix().c_str()); return 1; }
+      if (sh.dir_stack.empty()) { sh.errorf("popd: directory stack empty\n"); return 1; }
       std::string target = sh.dir_stack.front();
       sh.dir_stack.erase(sh.dir_stack.begin());
       if (!no_cd && change_dir(sh, target, false, "popd") != 0) return 1;
@@ -1859,19 +1838,17 @@ int bi_popd(Shell &sh, const std::vector<std::string> &argv) {
   // any other argument (without `--') is invalid outright -- popd takes no
   // directory name.
   if (!opts_end && a.size() > 1 && (a[1][0] == '+' || a[1][0] == '-')) {
-    std::fprintf(stderr, "%spopd: %s: invalid number\n", sh.err_prefix().c_str(),
-                 a[1].c_str());
+    sh.errorf("popd: %s: invalid number\n", a[1].c_str());
     std::fprintf(stderr, "popd: usage: popd [-n] [+N | -N]\n");
     return 2;
   }
   if (!opts_end && a.size() > 1) {
-    std::fprintf(stderr, "%spopd: %s: invalid argument\n", sh.err_prefix().c_str(),
-                 a[1].c_str());
+    sh.errorf("popd: %s: invalid argument\n", a[1].c_str());
     std::fprintf(stderr, "popd: usage: popd [-n] [+N | -N]\n");
     return 2;
   }
   if (sh.dir_stack.empty()) {
-    std::fprintf(stderr, "%spopd: directory stack empty\n", sh.err_prefix().c_str());
+    sh.errorf("popd: directory stack empty\n");
     return 1;
   }
   // Remove the entry that would become the current directory; `popd' cd's to it,
@@ -1931,8 +1908,7 @@ int bi_mapfile(Shell &sh, const std::vector<std::string> &argv) {
         char *end = nullptr;
         long f = std::strtol(val.c_str(), &end, 10);
         if (val.empty() || *end != '\0') {
-          std::fprintf(stderr, "%smapfile: %s: invalid file descriptor specification\n",
-                       sh.err_prefix().c_str(), val.c_str());
+          sh.errorf("mapfile: %s: invalid file descriptor specification\n", val.c_str());
           return 1;
         }
         fd = static_cast<int>(f);
@@ -1947,12 +1923,11 @@ int bi_mapfile(Shell &sh, const std::vector<std::string> &argv) {
 
   // Validate the descriptor and the target array name before reading.
   if (have_u && fcntl(fd, F_GETFD) == -1) {
-    std::fprintf(stderr, "%smapfile: %d: invalid file descriptor: %s\n", sh.err_prefix().c_str(),
-                 fd, std::strerror(errno));
+    sh.errorf("mapfile: %d: invalid file descriptor: %s\n", fd, std::strerror(errno));
     return 1;
   }
   if (name.empty()) {
-    std::fprintf(stderr, "%smapfile: empty array variable name\n", sh.err_prefix().c_str());
+    sh.errorf("mapfile: empty array variable name\n");
     return 1;
   }
   {
@@ -1960,8 +1935,7 @@ int bi_mapfile(Shell &sh, const std::vector<std::string> &argv) {
     for (char c : name)
       if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '_')) ok = false;
     if (!ok) {
-      std::fprintf(stderr, "%smapfile: `%s': not a valid identifier\n", sh.err_prefix().c_str(),
-                   name.c_str());
+      sh.errorf("mapfile: `%s': not a valid identifier\n", name.c_str());
       return 1;
     }
   }
@@ -1971,8 +1945,7 @@ int bi_mapfile(Shell &sh, const std::vector<std::string> &argv) {
   {
     std::string resolved = sh.deref(name);
     if (resolved.find('[') != std::string::npos) {
-      std::fprintf(stderr, "%smapfile: `%s': not a valid identifier\n",
-                   sh.err_prefix().c_str(), resolved.c_str());
+      sh.errorf("mapfile: `%s': not a valid identifier\n", resolved.c_str());
       return 1;
     }
   }
@@ -2015,8 +1988,7 @@ int bi_mapfile(Shell &sh, const std::vector<std::string> &argv) {
   {
     auto mit = sh.vars.find(sh.deref(name));
     if (mit != sh.vars.end() && mit->second.kind == VarKind::Assoc) {
-      std::fprintf(stderr, "%smapfile: %s: not an indexed array\n",
-                   sh.err_prefix().c_str(), name.c_str());
+      sh.errorf("mapfile: %s: not an indexed array\n", name.c_str());
       return 1;
     }
   }
@@ -2055,7 +2027,7 @@ int bi_export(Shell &sh, const std::vector<std::string> &argv) {
       else if (a[k] == 'n') nflag = true;
       else if (a[k] == 'p') { /* listing handled by the caller */ }
       else {
-        std::fprintf(stderr, "%sexport: -%c: invalid option\n", sh.err_prefix().c_str(), a[k]);
+        sh.errorf("export: -%c: invalid option\n", a[k]);
         std::fprintf(stderr, "export: usage: export [-fn] [name[=value] ...] or export -p [-f]\n");
         return 2;
       }
@@ -2068,15 +2040,13 @@ int bi_export(Shell &sh, const std::vector<std::string> &argv) {
       // name that cannot encode as BASH_FUNC_<name>%% (it contains `=' or `/')
       // cannot be exported, even though it is a valid function name.
       if (a.find('=') != std::string::npos || a.find('/') != std::string::npos) {
-        std::fprintf(stderr, "%sexport: %s: cannot export\n", sh.err_prefix().c_str(),
-                     a.c_str());
+        sh.errorf("export: %s: cannot export\n", a.c_str());
         st = 1;
       } else if (sh.functions.count(a)) {
         sh.exported_functions.insert(a);
       } else {
         // Not a function: bash refuses to create an `invisible function'.
-        std::fprintf(stderr, "%sexport: %s: not a function\n", sh.err_prefix().c_str(),
-                     a.c_str());
+        sh.errorf("export: %s: not a function\n", a.c_str());
         st = 1;
       }
       continue;
@@ -2087,8 +2057,7 @@ int bi_export(Shell &sh, const std::vector<std::string> &argv) {
     size_t br = a.find('[');
     if (br != std::string::npos && (eq == std::string::npos || br < eq) && !sh.is_zsh()) {
       std::string tgt = (eq == std::string::npos) ? a : a.substr(0, eq);
-      std::fprintf(stderr, "%sexport: `%s': not a valid identifier\n",
-                   sh.err_prefix().c_str(), tgt.c_str());
+      sh.errorf("export: `%s': not a valid identifier\n", tgt.c_str());
       st = 1;
       continue;
     }
@@ -2134,8 +2103,7 @@ int bi_export(Shell &sh, const std::vector<std::string> &argv) {
       // A bare NAME must be a valid identifier: `export non-identifier' is an
       // error with status 1, each bad name reported (errors11.sub).  POSIX:
       // fatal at the first bad name (`command' shields).
-      std::fprintf(stderr, "%sexport: `%s': not a valid identifier\n",
-                   sh.err_prefix().c_str(), a.c_str());
+      sh.errorf("export: `%s': not a valid identifier\n", a.c_str());
       st = 1;
       sh.posix_special_builtin_error(1);
       if (sh.exiting) return 1;
@@ -2144,8 +2112,7 @@ int bi_export(Shell &sh, const std::vector<std::string> &argv) {
       // `export a[5]': the resolved `var[0]' is not a valid identifier (bash).
       std::string dn = sh.deref(a);
       if (dn.find('[') != std::string::npos && !sh.is_zsh()) {
-        std::fprintf(stderr, "%sexport: `%s': not a valid identifier\n",
-                     sh.err_prefix().c_str(), dn.c_str());
+        sh.errorf("export: `%s': not a valid identifier\n", dn.c_str());
         st = 1;
       } else if (nflag) {
         // `export -n NAME' clears the export attribute of the nameref's target
@@ -2176,7 +2143,7 @@ int bi_unset(Shell &sh, const std::vector<std::string> &argv) {
       else if (a[k] == 'v') vflag = true;
       else if (a[k] == 'n') noref = true;
       else {
-        std::fprintf(stderr, "%sunset: -%c: invalid option\n", sh.err_prefix().c_str(), a[k]);
+        sh.errorf("unset: -%c: invalid option\n", a[k]);
         std::fprintf(stderr, "unset: usage: unset [-f] [-v] [-n] [name ...]\n");
         sh.posix_special_builtin_error(2);
         return 2;
@@ -2184,8 +2151,7 @@ int bi_unset(Shell &sh, const std::vector<std::string> &argv) {
     }
   }
   if (fflag && vflag) {
-    std::fprintf(stderr, "%sunset: cannot simultaneously unset a function and a variable\n",
-                 sh.err_prefix().c_str());
+    sh.errorf("unset: cannot simultaneously unset a function and a variable\n");
     sh.posix_special_builtin_error(2);
     return 2;
   }
@@ -2196,8 +2162,7 @@ int bi_unset(Shell &sh, const std::vector<std::string> &argv) {
   for (; i < argv.size(); i++) {
     if (funcs) {
       if (sh.readonly_functions.count(argv[i])) {
-        std::fprintf(stderr, "%sunset: %s: cannot unset: readonly function\n",
-                     sh.err_prefix().c_str(), argv[i].c_str());
+        sh.errorf("unset: %s: cannot unset: readonly function\n", argv[i].c_str());
         ret = 1;
       } else {
         sh.functions.erase(argv[i]);
@@ -2205,8 +2170,7 @@ int bi_unset(Shell &sh, const std::vector<std::string> &argv) {
       continue;
     }
     if (kNoUnset.count(argv[i])) {
-      std::fprintf(stderr, "%sunset: %s: cannot unset\n", sh.err_prefix().c_str(),
-                   argv[i].c_str());
+      sh.errorf("unset: %s: cannot unset\n", argv[i].c_str());
       ret = 1;
       continue;
     }
@@ -2229,8 +2193,7 @@ int bi_unset(Shell &sh, const std::vector<std::string> &argv) {
       // through to its function-unset attempt and stays silent
       // (quotearray5.sub line 27 vs quotearray3.sub line 55).
       if (vflag && !expand_once_on(sh)) {
-        std::fprintf(stderr, "%sunset: `%s': not a valid identifier\n",
-                     sh.err_prefix().c_str(), argv[i].c_str());
+        sh.errorf("unset: `%s': not a valid identifier\n", argv[i].c_str());
         ret = 1;
       }
       continue;
@@ -2300,16 +2263,14 @@ int bi_unset(Shell &sh, const std::vector<std::string> &argv) {
         Expander uex(sh);
         std::string esub = uex.expand_no_split(sub);
         if (esub.empty() && sub.find('$') != std::string::npos) {
-          std::fprintf(stderr, "%sunset: [%s]: bad array subscript\n",
-                       sh.err_prefix().c_str(), sub.c_str());
+          sh.errorf("unset: [%s]: bad array subscript\n", sub.c_str());
           ret = 1;
           continue;
         }
         if (!esub.empty()) sub = esub;
       }
       if (bit != sh.vars.end() && bit->second.readonly) {
-        std::fprintf(stderr, "%sunset: %s: cannot unset: readonly variable\n",
-                     sh.err_prefix().c_str(), bd.c_str());
+        sh.errorf("unset: %s: cannot unset: readonly variable\n", bd.c_str());
         ret = 1;
         continue;
       }
@@ -2324,8 +2285,7 @@ int bi_unset(Shell &sh, const std::vector<std::string> &argv) {
           sh.unset(bd);
           continue;
         }
-        std::fprintf(stderr, "%sunset: %s: not an array variable\n",
-                     sh.err_prefix().c_str(), bd.c_str());
+        sh.errorf("unset: %s: not an array variable\n", bd.c_str());
         ret = 1;
         continue;
       }
@@ -2333,8 +2293,7 @@ int bi_unset(Shell &sh, const std::vector<std::string> &argv) {
       // (`unset a[-2]' on an empty or too-short indexed array); bash names just
       // the bracketed subscript, not the array.
       if (!sh.array_unset(base, sub)) {
-        std::fprintf(stderr, "%sunset: [%s]: bad array subscript\n",
-                     sh.err_prefix().c_str(), sub.c_str());
+        sh.errorf("unset: [%s]: bad array subscript\n", sub.c_str());
         ret = 1;
       }
       continue;
@@ -2346,8 +2305,7 @@ int bi_unset(Shell &sh, const std::vector<std::string> &argv) {
       // through to its function-unset attempt and stays silent with status 0
       // (`unset /bin/sh' -- errors.tests), like the malformed-element case.
       if (vflag) {
-        std::fprintf(stderr, "%sunset: `%s': not a valid identifier\n",
-                     sh.err_prefix().c_str(), argv[i].c_str());
+        sh.errorf("unset: `%s': not a valid identifier\n", argv[i].c_str());
         ret = 1;
       }
       continue;
@@ -2357,8 +2315,7 @@ int bi_unset(Shell &sh, const std::vector<std::string> &argv) {
     std::string tgt = noref ? argv[i] : sh.deref(argv[i]);
     auto it = sh.vars.find(tgt);
     if (it != sh.vars.end() && it->second.readonly) {
-      std::fprintf(stderr, "%sunset: %s: cannot unset: readonly variable\n",
-                   sh.err_prefix().c_str(), tgt.c_str());
+      sh.errorf("unset: %s: cannot unset: readonly variable\n", tgt.c_str());
       ret = 1;
       continue;
     }
@@ -2669,7 +2626,7 @@ int bi_set(Shell &sh, const std::vector<std::string> &argv) {
           case 'r':  // restricted: can be turned on, never off
             if (on) sh.opt_restricted = true;
             else {
-              std::fprintf(stderr, "%sset: +r: invalid option\n", sh.err_prefix().c_str());
+              sh.errorf("set: +r: invalid option\n");
               std::fprintf(stderr, "set: usage: set [-abefhkmnptuvxBCEHPT] [-o option-name] "
                                    "[--] [-] [arg ...]\n");
               return 2;
@@ -2689,8 +2646,7 @@ int bi_set(Shell &sh, const std::vector<std::string> &argv) {
             } else {
               std::string oname = argv[++i];
               if (!set_o_option(sh, oname, on)) {
-                std::fprintf(stderr, "%sset: %s: invalid option name\n",
-                             sh.err_prefix().c_str(), oname.c_str());
+                sh.errorf("set: %s: invalid option name\n", oname.c_str());
                 return 2;
               }
             }
@@ -2704,8 +2660,7 @@ int bi_set(Shell &sh, const std::vector<std::string> &argv) {
           case 'a': sh.opt_allexport = on; break;  // allexport: assignments export
           case 'b': case 't': break;
           default:
-            std::fprintf(stderr, "%sset: %c%c: invalid option\n", sh.err_prefix().c_str(),
-                         a[0], a[k]);
+            sh.errorf("set: %c%c: invalid option\n", a[0], a[k]);
             std::fprintf(stderr, "set: usage: set [-abefhkmnptuvxBCEHPT] [-o option-name] "
                                  "[--] [-] [arg ...]\n");
             return 2;
@@ -2760,8 +2715,7 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
             char *end = nullptr;
             long f = std::strtol(v.c_str(), &end, 10);
             if (v.empty() || *end != '\0') {
-              std::fprintf(stderr, "%sread: %s: invalid file descriptor specification\n",
-                           sh.err_prefix().c_str(), v.c_str());
+              sh.errorf("read: %s: invalid file descriptor specification\n", v.c_str());
               return 1;
             }
             fd = static_cast<int>(f);
@@ -2774,8 +2728,7 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
             char *end = nullptr;
             long nv = std::strtol(v.c_str(), &end, 10);
             if (v.empty() || (end && *end) || nv < 0) {
-              std::fprintf(stderr, "%sread: %s: invalid number\n", sh.err_prefix().c_str(),
-                           v.c_str());
+              sh.errorf("read: %s: invalid number\n", v.c_str());
               return 1;
             }
             have_n = true;
@@ -2788,8 +2741,7 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
             char *end = nullptr;
             double tv = std::strtod(v.c_str(), &end);
             if (v.empty() || (end && *end) || tv < 0) {
-              std::fprintf(stderr, "%sread: %s: invalid timeout specification\n",
-                           sh.err_prefix().c_str(), v.c_str());
+              sh.errorf("read: %s: invalid timeout specification\n", v.c_str());
               return 1;
             }
             have_t = true;
@@ -2800,7 +2752,7 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
           case 'e': edit = true; break;              // readline editing
           case 's': case 'E': break;                 // silent: accepted
           default:
-            std::fprintf(stderr, "%sread: -%c: invalid option\n", sh.err_prefix().c_str(), o);
+            sh.errorf("read: -%c: invalid option\n", o);
             std::fprintf(stderr, "read: usage: read [-Eers] [-a array] [-d delim] [-i text] "
                                  "[-n nchars] [-N nchars] [-p prompt] [-t timeout] [-u fd] "
                                  "[name ...]\n");
@@ -2816,8 +2768,7 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
   // Validate the -u descriptor and the target names before reading, as bash
   // does, so a bad fd or an invalid identifier is diagnosed even on EOF.
   if (have_u && fcntl(fd, F_GETFD) == -1) {
-    std::fprintf(stderr, "%sread: %d: invalid file descriptor: %s\n", sh.err_prefix().c_str(),
-                 fd, std::strerror(errno));
+    sh.errorf("read: %d: invalid file descriptor: %s\n", fd, std::strerror(errno));
     return 1;
   }
   auto valid_read_name = [](const std::string &s) {
@@ -2834,8 +2785,7 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
     return well_formed_element(s2);  // `A[]]' is not a valid identifier
   };
   if (!arrayname.empty() && !valid_read_target(arrayname)) {
-    std::fprintf(stderr, "%sread: `%s': not a valid identifier\n", sh.err_prefix().c_str(),
-                 arrayname.c_str());
+    sh.errorf("read: `%s': not a valid identifier\n", arrayname.c_str());
     return 1;
   }
   // `read -a' fills a whole array, so a nameref target must resolve to a plain
@@ -2844,15 +2794,13 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
   if (!arrayname.empty()) {
     std::string resolved = sh.deref(arrayname);
     if (resolved.find('[') != std::string::npos) {
-      std::fprintf(stderr, "%sread: `%s': not a valid identifier\n",
-                   sh.err_prefix().c_str(), resolved.c_str());
+      sh.errorf("read: `%s': not a valid identifier\n", resolved.c_str());
       return 1;
     }
     // `read -a' fills an indexed array; an existing associative array is rejected.
     auto av = sh.vars.find(resolved);
     if (av != sh.vars.end() && av->second.kind == VarKind::Assoc) {
-      std::fprintf(stderr, "%sread: %s: not an indexed array\n",
-                   sh.err_prefix().c_str(), arrayname.c_str());
+      sh.errorf("read: %s: not an indexed array\n", arrayname.c_str());
       return 1;
     }
   }
@@ -2860,8 +2808,7 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
     const std::string &nm = names[ni];
     if (lenient_element_target(sh, ni < name_idx.size() ? name_idx[ni] : SIZE_MAX)) continue;
     if (!valid_read_target(nm) || !subscript_reexpands(sh, nm)) {
-      std::fprintf(stderr, "%sread: `%s': not a valid identifier\n", sh.err_prefix().c_str(),
-                   nm.c_str());
+      sh.errorf("read: `%s': not a valid identifier\n", nm.c_str());
       return 1;
     }
   }
@@ -3022,8 +2969,7 @@ int bi_read(Shell &sh, const std::vector<std::string> &argv) {
   // (read.def returns through its unwind frame before the assignment).
   if (read_errno != 0) {
     std::fflush(stdout);
-    std::fprintf(stderr, "%sread: %d: read error: %s\n", sh.err_prefix().c_str(),
-                 fd, std::strerror(read_errno));
+    sh.errorf("read: %d: read error: %s\n", fd, std::strerror(read_errno));
     return 1;
   }
 
@@ -3200,8 +3146,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
       const char *allowed = force_ro ? kRoOpts : kDeclOpts;
       for (size_t k = 1; k < a.size(); k++) {
         if (!std::strchr(allowed, a[k])) {
-          std::fprintf(stderr, "%s%s: %c%c: invalid option\n", sh.err_prefix().c_str(),
-                       argv[0].c_str(), a[0], a[k]);
+          sh.errorf("%s: %c%c: invalid option\n", argv[0].c_str(), a[0], a[k]);
           if (force_ro)
             std::fprintf(stderr, "readonly: usage: readonly [-aAf] [name[=value] ...] "
                                  "or readonly -p\n");
@@ -3248,8 +3193,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
   // -n over -i over -A over -a.
   if ((funcs || funcnames) && (mk_array || mk_assoc || integer || nameref)) {
     const char *opt = nameref ? "-n" : integer ? "-i" : mk_assoc ? "-A" : "-a";
-    std::fprintf(stderr, "%s%s: %s: invalid option\n", sh.err_prefix().c_str(),
-                 argv[0].c_str(), opt);
+    sh.errorf("%s: %s: invalid option\n", argv[0].c_str(), opt);
     return 1;
   }
   // -p: display variables (named ones, or all) in reproducible form.
@@ -3322,8 +3266,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
           // under a pipe while stderr is not, so flush any already-printed
           // declarations first to keep the interleaving bash produces.
           std::fflush(stdout);
-          std::fprintf(stderr, "%s%s: %s: not found\n", sh.err_prefix().c_str(),
-                       argv[0].c_str(), argv[i].c_str());
+          sh.errorf("%s: %s: not found\n", argv[0].c_str(), argv[i].c_str());
           st = 1;
         } else {
           declare_print_var(argv[i], it->second, argv[0], sh.opt_posix);
@@ -3340,13 +3283,11 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     for (; i < argv.size(); i++) {
       const std::string &fn = argv[i];
       if (!sh.functions.count(fn)) {
-        std::fprintf(stderr, "%s%s: %s: not a function\n", sh.err_prefix().c_str(),
-                     argv[0].c_str(), fn.c_str());
+        sh.errorf("%s: %s: not a function\n", argv[0].c_str(), fn.c_str());
         st = 1;
       } else if (rm_readonly) {
         if (sh.readonly_functions.count(fn)) {
-          std::fprintf(stderr, "%s%s: %s: readonly function\n", sh.err_prefix().c_str(),
-                       argv[0].c_str(), fn.c_str());
+          sh.errorf("%s: %s: readonly function\n", argv[0].c_str(), fn.c_str());
           st = 1;
         }
       } else {
@@ -3398,8 +3339,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
       // (`declare -f name=value') is rejected outright and stops processing,
       // always naming `-f' in the diagnostic even under `-F' (declare.def).
       if (argv[i].find('=') != std::string::npos) {
-        std::fprintf(stderr, "%s%s: cannot use `-f' to make functions\n",
-                     sh.err_prefix().c_str(), argv[0].c_str());
+        sh.errorf("%s: cannot use `-f' to make functions\n", argv[0].c_str());
         return 1;
       }
       auto it = sh.functions.find(argv[i]);
@@ -3407,8 +3347,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
         // `declare -fp NAME' (the -p form) reports a missing function; the bare
         // `declare -f NAME' form fails silently.
         if (fp)
-          std::fprintf(stderr, "%s%s: %s: not found\n", sh.err_prefix().c_str(),
-                       argv[0].c_str(), argv[i].c_str());
+          sh.errorf("%s: %s: not found\n", argv[0].c_str(), argv[i].c_str());
         st = 1;
         continue;
       }
@@ -3547,8 +3486,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
             elb2 + 1 < elem.size() - 1) {
           std::string inner = elem.substr(elb2 + 1, elem.size() - elb2 - 2);
           if (inner.find(']') != std::string::npos) {
-            std::fprintf(stderr, "%s%s: `%s': not a valid identifier\n",
-                         sh.err_prefix().c_str(), argv[0].c_str(), a_display.c_str());
+            sh.errorf("%s: `%s': not a valid identifier\n", argv[0].c_str(), a_display.c_str());
             ret = 1;
             continue;
           }
@@ -3560,14 +3498,12 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
       if (!assoc_literal &&
           (!valid_identifier(elem.substr(0, elem.find('['))) ||
            !well_formed_element(elem, /*allow_empty=*/true))) {
-        std::fprintf(stderr, "%s%s: `%s': not a valid identifier\n", sh.err_prefix().c_str(),
-                     argv[0].c_str(), a_display.c_str());
+        sh.errorf("%s: `%s': not a valid identifier\n", argv[0].c_str(), a_display.c_str());
         ret = 1;
         continue;
       }
       if (!assoc_literal && !well_formed_element(elem)) {  // balanced but empty: a[]
-        std::fprintf(stderr, "%s%s: bad array subscript\n", sh.err_prefix().c_str(),
-                     elem.c_str());
+        sh.errorf("%s: bad array subscript\n", elem.c_str());
         ret = 1;
         continue;
       }
@@ -3577,8 +3513,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     // (zsh's array/readonly rules differ, so leave that personality alone.)
     if (subscript0 && !sh.is_zsh() && (argv[0] == "readonly" || argv[0] == "export")) {
       std::string tgt = (eq == std::string::npos) ? a : a.substr(0, eq);
-      std::fprintf(stderr, "%s%s: `%s': not a valid identifier\n", sh.err_prefix().c_str(),
-                   argv[0].c_str(), tgt.c_str());
+      sh.errorf("%s: `%s': not a valid identifier\n", argv[0].c_str(), tgt.c_str());
       ret = 1;
       // POSIX: fatal at the FIRST bad name -- later names are not reported
       // (errors11.sub); `command' shields via posix_builtin_shield.
@@ -3591,8 +3526,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     // `declare -n r=a[2]', has `=' before `[' so subscript0 is false.)
     if (subscript0 && nameref) {
       std::string tgt = (eq == std::string::npos) ? a : a.substr(0, eq);
-      std::fprintf(stderr, "%s%s: %s: reference variable cannot be an array\n",
-                   sh.err_prefix().c_str(), argv[0].c_str(), tgt.c_str());
+      sh.errorf("%s: %s: reference variable cannot be an array\n", argv[0].c_str(), tgt.c_str());
       ret = 1;
       continue;
     }
@@ -3604,8 +3538,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     // operand (bash), not an identifier, so it is not rejected here.
     if (!valid_identifier(name) && !(local && a == "-")) {
       // bash reports the whole offending word, including any `=value'.
-      std::fprintf(stderr, "%s%s: `%s': not a valid identifier\n",
-                   sh.err_prefix().c_str(), argv[0].c_str(), a.c_str());
+      sh.errorf("%s: `%s': not a valid identifier\n", argv[0].c_str(), a.c_str());
       ret = 1;
       // POSIX readonly/export: fatal at the FIRST bad name (errors11.sub).
       if (argv[0] == "readonly" || argv[0] == "export") {
@@ -3660,10 +3593,8 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
           // reports the readonly violation bare before make_local's prefixed
           // one, so `local a=(...)' on a readonly global emits both.
           if (arraylit0)
-            std::fprintf(stderr, "%s%s: readonly variable\n",
-                         sh.err_prefix().c_str(), name.c_str());
-          std::fprintf(stderr, "%s%s: %s: readonly variable\n",
-                       sh.err_prefix().c_str(), argv[0].c_str(), name.c_str());
+            sh.errorf("%s: readonly variable\n", name.c_str());
+          sh.errorf("%s: %s: readonly variable\n", argv[0].c_str(), name.c_str());
           ret = 1;
           continue;
         }
@@ -3726,10 +3657,8 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
                                   ? "associative to indexed"
                                   : nullptr;
         if (cvt_dir) {
-          const std::string &pfx = sh.err_prefix();
           if (funcname.empty()) {
-            std::fprintf(stderr, "%s%s: cannot convert %s array\n", pfx.c_str(),
-                         name.c_str(), cvt_dir);
+            sh.errorf("%s: cannot convert %s array\n", name.c_str(), cvt_dir);
           } else {
             // The function-name line also appears when a localvar_inherit'd
             // (or -I'd) local copied the mismatched enclosing array AND the
@@ -3737,10 +3666,9 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
             // failed make-local conversion first, a bare `declare -A var'
             // only the builtin's own line (varenv14.sub lines 31 vs 77).
             if (global || (inherited_local && eq != std::string::npos))
-              std::fprintf(stderr, "%s%s: %s: cannot convert %s array\n", pfx.c_str(),
-                           funcname.c_str(), name.c_str(), cvt_dir);
-            std::fprintf(stderr, "%s%s: %s: cannot convert %s array\n", pfx.c_str(),
-                         argv[0].c_str(), name.c_str(), cvt_dir);
+              sh.errorf("%s: %s: cannot convert %s array\n",
+                        funcname.c_str(), name.c_str(), cvt_dir);
+            sh.errorf("%s: %s: cannot convert %s array\n", argv[0].c_str(), name.c_str(), cvt_dir);
           }
           ret = 1;
           continue;
@@ -3755,8 +3683,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     if (subscript0 && (mk_array || mk_assoc) && !nameref && !rm_nameref) {
       auto nv = sh.vars.find(name);
       if (nv != sh.vars.end() && nv->second.nameref) {
-        std::fprintf(stderr, "%swarning: %s: removing nameref attribute\n",
-                     sh.err_prefix().c_str(), name.c_str());
+        sh.errorf("warning: %s: removing nameref attribute\n", name.c_str());
         nv->second.nameref = false;
         nv->second.value.clear();  // discard the old target; NAME becomes the array
       }
@@ -3841,9 +3768,8 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
         Expander wex(sh);
         std::string ev = wex.expand_assignment(val);
             if (ev.size() >= 2 && ev.front() == '(' && ev.back() == ')' && !preexisting_target)
-          std::fprintf(stderr, "%swarning: %s%s=%s: quoted compound array assignment deprecated\n",
-                       sh.err_prefix().c_str(), name.c_str(),
-                       a.substr(nend, (append ? eq - 1 : eq) - nend).c_str(), ev.c_str());
+          sh.errorf("warning: %s%s=%s: quoted compound array assignment deprecated\n", name.c_str(),
+                    a.substr(nend, (append ? eq - 1 : eq) - nend).c_str(), ev.c_str());
       }
       if (exval_compound) {
         // A QUOTED compound reaches here rather than the assignment-word path
@@ -3852,8 +3778,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
         // called it and must stay bare for the command machinery's own path.
         auto rok = sh.vars.find(sh.deref(name));
         if (rok != sh.vars.end() && rok->second.readonly) {
-          std::fprintf(stderr, "%s%s: %s: readonly variable\n", sh.err_prefix().c_str(),
-                       argv[0].c_str(), name.c_str());
+          sh.errorf("%s: %s: readonly variable\n", argv[0].c_str(), name.c_str());
           ret = 1;
           continue;
         }
@@ -3940,13 +3865,10 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
           // reference after `+=' concatenation slips past that check and is
           // caught later while binding the value, which prints it bare.
           if (append)
-            std::fprintf(stderr,
-                         "%s%s: nameref variable self references not allowed\n",
-                         sh.err_prefix().c_str(), name.c_str());
+            sh.errorf("%s: nameref variable self references not allowed\n", name.c_str());
           else
-            std::fprintf(stderr,
-                         "%s%s: %s: nameref variable self references not allowed\n",
-                         sh.err_prefix().c_str(), argv[0].c_str(), name.c_str());
+            sh.errorf("%s: %s: nameref variable self references not allowed\n", argv[0].c_str(),
+                      name.c_str());
           ret = 1;
           if (!preexist) sh.vars.erase(name);
           continue;
@@ -3954,18 +3876,15 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
         if (selfref) {
           // Warn once with the builtin prefix and once without, matching bash's
           // declare.def (builtin_warning) plus bind_variable_value.
-          std::fprintf(stderr, "%s%s: warning: %s: circular name reference\n",
-                       sh.err_prefix().c_str(), argv[0].c_str(), name.c_str());
-          std::fprintf(stderr, "%swarning: %s: circular name reference\n",
-                       sh.err_prefix().c_str(), name.c_str());
+          sh.errorf("%s: warning: %s: circular name reference\n", argv[0].c_str(), name.c_str());
+          sh.errorf("warning: %s: circular name reference\n", name.c_str());
         }
         // An explicit empty target (`declare -n r=') is rejected as an invalid
         // identifier and does not create the nameref (bash reports the empty
         // name); at global scope no variable survives, in a function the local
         // that was just made stays as a plain variable.
         if (tgt.empty()) {
-          std::fprintf(stderr, "%s%s: `': not a valid identifier\n",
-                       sh.err_prefix().c_str(), argv[0].c_str());
+          sh.errorf("%s: `': not a valid identifier\n", argv[0].c_str());
           ret = 1;
           if (!preexist) sh.vars.erase(name);
           continue;
@@ -3973,9 +3892,8 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
         // The target must be a valid nameref target (`foo' or `foo[2]').  bash
         // rejects anything else and does not create the variable.
         if (!tgt.empty() && !Shell::valid_nameref_target(tgt)) {
-          std::fprintf(stderr,
-                       "%s%s: `%s': invalid variable name for name reference\n",
-                       sh.err_prefix().c_str(), argv[0].c_str(), tgt.c_str());
+          sh.errorf("%s: `%s': invalid variable name for name reference\n", argv[0].c_str(),
+                    tgt.c_str());
           ret = 1;
           if (!preexist) sh.vars.erase(name);  // no half-created variable
           continue;
@@ -3993,8 +3911,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
         }
         Variable &rv = sh.vars[name];
         if (rv.readonly) {
-          std::fprintf(stderr, "%s%s: readonly variable\n", sh.err_prefix().c_str(),
-                       name.c_str());
+          sh.errorf("%s: readonly variable\n", name.c_str());
           return 1;
         }
         // A `declare -n' naming an existing array is rejected below ("reference
@@ -4064,12 +3981,10 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
           // ("invalid variable name for name reference"); at global scope it
           // reports it as a plain invalid identifier.
           if (sh.in_function())
-            std::fprintf(stderr,
-                         "%s%s: `%s': invalid variable name for name reference\n",
-                         sh.err_prefix().c_str(), argv[0].c_str(), val.c_str());
+            sh.errorf("%s: `%s': invalid variable name for name reference\n", argv[0].c_str(),
+                      val.c_str());
           else
-            std::fprintf(stderr, "%s%s: `%s': not a valid identifier\n",
-                         sh.err_prefix().c_str(), argv[0].c_str(), val.c_str());
+            sh.errorf("%s: `%s': not a valid identifier\n", argv[0].c_str(), val.c_str());
           ret = 1;
           // At global scope the still-invisible nameref is discarded (a later
           // `declare -p' reports it as not found); a function-local one made by
@@ -4086,8 +4001,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
         if (argv[0] == "declare" || argv[0] == "typeset" || argv[0] == "local") {
           auto rit = sh.vars.find(sh.deref(name));
           if (rit != sh.vars.end() && rit->second.readonly) {
-            std::fprintf(stderr, "%s%s: %s: readonly variable\n",
-                         sh.err_prefix().c_str(), argv[0].c_str(), name.c_str());
+            sh.errorf("%s: %s: readonly variable\n", argv[0].c_str(), name.c_str());
             ret = 1;
             continue;
           }
@@ -4105,8 +4019,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
           // builtin prefix (the declare/typeset/local prefix case was handled
           // above, so this bare form is reached only by readonly/export).
           if (ait->second.readonly) {
-            std::fprintf(stderr, "%s%s: readonly variable\n", sh.err_prefix().c_str(),
-                         name.c_str());
+            sh.errorf("%s: readonly variable\n", name.c_str());
             ret = 1;
           } else {
             sh.array_set(atgt, "0", val);
@@ -4144,8 +4057,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     // readonly/export (which reach bi_declare via force_ro / the -x path).
     if ((argv[0] == "readonly" || argv[0] == "export") && !sh.is_zsh() &&
         aname.find('[') != std::string::npos) {
-      std::fprintf(stderr, "%s%s: `%s': not a valid identifier\n",
-                   sh.err_prefix().c_str(), argv[0].c_str(), aname.c_str());
+      sh.errorf("%s: `%s': not a valid identifier\n", argv[0].c_str(), aname.c_str());
       ret = 1;
       continue;
     }
@@ -4195,30 +4107,25 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
       // Converting a pre-existing readonly plain variable to a nameref is
       // rejected (`declare -r RO=x; declare -n RO' -> `declare: RO: readonly
       // variable'); bash permits `-x' on a readonly var, but not `-n'.
-      std::fprintf(stderr, "%s%s: %s: readonly variable\n", sh.err_prefix().c_str(),
-                   argv[0].c_str(), name.c_str());
+      sh.errorf("%s: %s: readonly variable\n", argv[0].c_str(), name.c_str());
       ret = 1;
     } else if (nameref && (v.kind == VarKind::Indexed || v.kind == VarKind::Assoc)) {
       // An existing array/associative variable cannot be turned into a nameref;
       // bash rejects the `-n' and leaves the array (and any assignment made by
       // this same command) intact.
-      std::fprintf(stderr,
-                   "%s%s: %s: reference variable cannot be an array\n",
-                   sh.err_prefix().c_str(), argv[0].c_str(), name.c_str());
+      sh.errorf("%s: %s: reference variable cannot be an array\n", argv[0].c_str(), name.c_str());
       ret = 1;
     } else if (nameref && v.value == name && !sh.in_function()) {
-      std::fprintf(stderr,
-                   "%s%s: %s: nameref variable self references not allowed\n",
-                   sh.err_prefix().c_str(), argv[0].c_str(), name.c_str());
+      sh.errorf("%s: %s: nameref variable self references not allowed\n", argv[0].c_str(),
+                name.c_str());
       ret = 1;
     } else if (nameref && !v.invisible && v.value != name &&
                !Shell::valid_nameref_target(v.value)) {
       // An existing but EMPTY value is rejected too (`r=""; declare -n r'):
       // only a declared-but-unset variable becomes a targetless reference,
       // which is why this tests visibility rather than emptiness.
-      std::fprintf(stderr,
-                   "%s%s: `%s': invalid variable name for name reference\n",
-                   sh.err_prefix().c_str(), argv[0].c_str(), v.value.c_str());
+      sh.errorf("%s: `%s': invalid variable name for name reference\n", argv[0].c_str(),
+                v.value.c_str());
       ret = 1;
     } else if (nameref) {
       v.nameref = true;
@@ -4252,11 +4159,10 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
       // A READONLY array reports the readonly violation instead (bash checks
       // the attribute change first): `declare +a c' on readonly c.
       if (v.readonly)
-        std::fprintf(stderr, "%s%s: %s: readonly variable\n", sh.err_prefix().c_str(),
-                     argv[0].c_str(), aname.c_str());
+        sh.errorf("%s: %s: readonly variable\n", argv[0].c_str(), aname.c_str());
       else
-        std::fprintf(stderr, "%s%s: %s: cannot destroy array variables in this way\n",
-                     sh.err_prefix().c_str(), argv[0].c_str(), aname.c_str());
+        sh.errorf("%s: %s: cannot destroy array variables in this way\n", argv[0].c_str(),
+                  aname.c_str());
       ret = 1;
       continue;
     }
@@ -4265,8 +4171,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
       // follows the reference to nothing, so it is a silent no-op rather than a
       // readonly-variable error -- there is no target variable to report.
       if (v.readonly && !(v.nameref && v.value.empty())) {
-        std::fprintf(stderr, "%s%s: %s: readonly variable\n",
-                     sh.err_prefix().c_str(), argv[0].c_str(), aname.c_str());
+        sh.errorf("%s: %s: readonly variable\n", argv[0].c_str(), aname.c_str());
         ret = 1;
       }
     }
@@ -4283,8 +4188,7 @@ int bi_declare(Shell &sh, const std::vector<std::string> &argv, bool force_local
     // the command was redirected to the reference's target above.
     Variable &nself = sh.vars[name];
     if (rm_nameref && nself.readonly && nself.nameref && !nself.value.empty()) {
-      std::fprintf(stderr, "%s%s: %s: readonly variable\n",
-                   sh.err_prefix().c_str(), argv[0].c_str(), name.c_str());
+      sh.errorf("%s: %s: readonly variable\n", argv[0].c_str(), name.c_str());
       ret = 1;
     } else if (rm_nameref) {
       nself.nameref = false;
@@ -4309,7 +4213,7 @@ int bi_let(Shell &sh, const std::vector<std::string> &argv) {
   // `--' as an expression.  Only the first `--' is consumed.
   size_t start = (argv.size() > 1 && argv[1] == "--") ? 2 : 1;
   if (start >= argv.size()) {  // `let' / `let --' with no expression
-    std::fprintf(stderr, "%slet: expression expected\n", sh.err_prefix().c_str());
+    sh.errorf("let: expression expected\n");
     return 1;
   }
   long long last = 0;
@@ -4394,7 +4298,7 @@ int bi_type(Shell &sh, const std::vector<std::string> &argv) {
         case 'a': fa = true; break;
         case 'f': ff = true; break;
         default:
-          std::fprintf(stderr, "%stype: -%c: invalid option\n", sh.err_prefix().c_str(), a[k]);
+          sh.errorf("type: -%c: invalid option\n", a[k]);
           std::fprintf(stderr, "type: usage: type [-afptP] name [name ...]\n");
           return 2;
       }
@@ -4458,8 +4362,7 @@ int bi_type(Shell &sh, const std::vector<std::string> &argv) {
         std::fflush(stdout);  // keep interleaving with prior stdout lines
         // `command -V NAME' invokes this with argv[0] == "command", so the
         // diagnostic names the invoking builtin (bash: `command: NAME: not found').
-        std::fprintf(stderr, "%s%s: %s: not found\n", sh.err_prefix().c_str(),
-                     argv[0].c_str(), n.c_str());
+        sh.errorf("%s: %s: not found\n", argv[0].c_str(), n.c_str());
       }
       st = 1;
       continue;
@@ -4620,7 +4523,7 @@ int bi_trap(Shell &sh, const std::vector<std::string> &argv) {
       else if (a[k] == 'P') opt_P = true;
       else if (a[k] == 'l') opt_l = true;
       else {
-        std::fprintf(stderr, "%strap: -%c: invalid option\n", sh.err_prefix().c_str(), a[k]);
+        sh.errorf("trap: -%c: invalid option\n", a[k]);
         std::fprintf(stderr, "%s\n", kUsage);
         bad = true;
         break;
@@ -4630,7 +4533,7 @@ int bi_trap(Shell &sh, const std::vector<std::string> &argv) {
   }
 
   if (opt_p && opt_P) {
-    std::fprintf(stderr, "%strap: cannot specify both -p and -P\n", sh.err_prefix().c_str());
+    sh.errorf("trap: cannot specify both -p and -P\n");
     return 1;
   }
 
@@ -4640,15 +4543,13 @@ int bi_trap(Shell &sh, const std::vector<std::string> &argv) {
   // -P: print just the action(s) of the named signal(s); at least one required.
   if (opt_P) {
     if (i >= argv.size()) {
-      std::fprintf(stderr, "%strap: -P requires at least one signal name\n",
-                   sh.err_prefix().c_str());
+      sh.errorf("trap: -P requires at least one signal name\n");
       return 1;
     }
     int st = 0;
     for (; i < argv.size(); i++) {
       if (trap_pseudo(argv[i]).empty() && !valid_signal_spec(argv[i])) {
-        std::fprintf(stderr, "%strap: %s: invalid signal specification\n",
-                     sh.err_prefix().c_str(), argv[i].c_str());
+        sh.errorf("trap: %s: invalid signal specification\n", argv[i].c_str());
         st = 1;
         continue;
       }
@@ -4667,8 +4568,7 @@ int bi_trap(Shell &sh, const std::vector<std::string> &argv) {
     } else {
       for (; i < argv.size(); i++) {
         if (trap_pseudo(argv[i]).empty() && !valid_signal_spec(argv[i])) {
-          std::fprintf(stderr, "%strap: %s: invalid signal specification\n",
-                       sh.err_prefix().c_str(), argv[i].c_str());
+          sh.errorf("trap: %s: invalid signal specification\n", argv[i].c_str());
           st = 1;
           continue;
         }
@@ -4725,8 +4625,7 @@ int bi_trap(Shell &sh, const std::vector<std::string> &argv) {
     }
     // A spec that names no real signal is an error, and that signal is skipped.
     if (!valid_signal_spec(spec)) {
-      std::fprintf(stderr, "%strap: %s: invalid signal specification\n",
-                   sh.err_prefix().c_str(), spec.c_str());
+      sh.errorf("trap: %s: invalid signal specification\n", spec.c_str());
       st = 1;
       continue;
     }
@@ -4823,8 +4722,7 @@ int bi_umask(Shell &sh, const std::vector<std::string> &argv) {
       if (argv[i][k] == 'S') sym = true;
       else if (argv[i][k] == 'p') print = true;
       else {
-        std::fprintf(stderr, "%sumask: -%c: invalid option\n", sh.err_prefix().c_str(),
-                     argv[i][k]);
+        sh.errorf("umask: -%c: invalid option\n", argv[i][k]);
         std::fprintf(stderr, "umask: usage: umask [-p] [-S] [mode]\n");
         return 2;
       }
@@ -4839,8 +4737,7 @@ int bi_umask(Shell &sh, const std::vector<std::string> &argv) {
       // A numeric mode must be all octal digits (bash reports a stray 8/9 as
       // out of range, but accepts values wider than 0777, e.g. setuid bits).
       if (mode.find_first_not_of("01234567") != std::string::npos) {
-        std::fprintf(stderr, "%sumask: %s: octal number out of range\n",
-                     sh.err_prefix().c_str(), mode.c_str());
+        sh.errorf("umask: %s: octal number out of range\n", mode.c_str());
         return 1;
       }
       cur = static_cast<mode_t>(std::strtol(mode.c_str(), nullptr, 8)) & 0777;
@@ -4849,8 +4746,8 @@ int bi_umask(Shell &sh, const std::vector<std::string> &argv) {
       char errch = 0;
       bool erropr = false;
       if (!umask_symbolic(mode, allowed, errch, erropr)) {
-        std::fprintf(stderr, "%sumask: `%c': invalid symbolic mode %s\n",
-                     sh.err_prefix().c_str(), errch, erropr ? "operator" : "character");
+        sh.errorf("umask: `%c': invalid symbolic mode %s\n", errch,
+                  erropr ? "operator" : "character");
         return 1;
       }
       cur = ~allowed & 0777;
@@ -4879,8 +4776,7 @@ int bi_getopts(Shell &sh, const std::vector<std::string> &argv) {
   std::string &s_curarg = sh.getopt_curarg;
 
   if (argv.size() >= 2 && argv[1].size() >= 2 && argv[1][0] == '-' && argv[1] != "--") {
-    std::fprintf(stderr, "%sgetopts: -%c: invalid option\n", sh.err_prefix().c_str(),
-                 argv[1][1]);
+    sh.errorf("getopts: -%c: invalid option\n", argv[1][1]);
     std::fprintf(stderr, "%s\n", kUsage);
     return 2;
   }
@@ -4896,8 +4792,7 @@ int bi_getopts(Shell &sh, const std::vector<std::string> &argv) {
     for (char c : name)
       if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '_')) ok = false;
     if (!ok) {
-      std::fprintf(stderr, "%sgetopts: `%s': not a valid identifier\n",
-                   sh.err_prefix().c_str(), name.c_str());
+      sh.errorf("getopts: `%s': not a valid identifier\n", name.c_str());
       // bash has already consumed the current option-argument at this point,
       // so advance OPTIND past a leading option so `shift $((OPTIND-1))' works.
       int oi = 1;
@@ -5068,15 +4963,13 @@ int bi_kill(Shell &sh, const std::vector<std::string> &argv) {
         if (n > 128) n -= 128;  // a 128+signum exit status names the signal
         if (const char *nm = trapname_from_num(n)) std::printf("%s\n", nm);
         else {
-          std::fprintf(stderr, "%skill: %s: invalid signal specification\n",
-                       sh.err_prefix().c_str(), a.c_str());
+          sh.errorf("kill: %s: invalid signal specification\n", a.c_str());
           st = 1;
         }
       } else if (int n = resolve_sig(a); n > 0) {
         std::printf("%d\n", n);  // name -> number
       } else {
-        std::fprintf(stderr, "%skill: %s: invalid signal specification\n",
-                     sh.err_prefix().c_str(), a.c_str());
+        sh.errorf("kill: %s: invalid signal specification\n", a.c_str());
         st = 1;
       }
     }
@@ -5099,22 +4992,19 @@ int bi_kill(Shell &sh, const std::vector<std::string> &argv) {
         arg = argv[2];
         i = 3;
       } else {
-        std::fprintf(stderr, "%skill: %s: option requires an argument\n",
-                     sh.err_prefix().c_str(), opt.c_str());
+        sh.errorf("kill: %s: option requires an argument\n", opt.c_str());
         return 1;
       }
       sig = resolve_sig(arg);
       if (sig < 0) {
-        std::fprintf(stderr, "%skill: %s: invalid signal specification\n",
-                     sh.err_prefix().c_str(), arg.c_str());
+        sh.errorf("kill: %s: invalid signal specification\n", arg.c_str());
         return 1;
       }
     } else {
       // `-INT' / `-9' / `-SIGHUP': the spec is the option itself.
       sig = resolve_sig(opt.substr(1));
       if (sig < 0) {
-        std::fprintf(stderr, "%skill: %s: invalid signal specification\n",
-                     sh.err_prefix().c_str(), opt.substr(1).c_str());
+        sh.errorf("kill: %s: invalid signal specification\n", opt.substr(1).c_str());
         return 1;
       }
       i = 2;
@@ -5132,7 +5022,7 @@ int bi_kill(Shell &sh, const std::vector<std::string> &argv) {
     if (!t.empty() && t[0] == '%') {
       Shell::Job *j = sh.job_by_spec(t);
       if (!j) {
-        std::fprintf(stderr, "%skill: %s: no such job\n", sh.err_prefix().c_str(), t.c_str());
+        sh.errorf("kill: %s: no such job\n", t.c_str());
         st = 1;
         continue;
       }
@@ -5142,15 +5032,13 @@ int bi_kill(Shell &sh, const std::vector<std::string> &argv) {
       // signal, so signal each member pid directly.
       if (sh.job_control && j->pgid > 0) {
         if (kill(static_cast<pid_t>(-j->pgid), sig) != 0) {
-          std::fprintf(stderr, "%skill: (%ld) - %s\n", sh.err_prefix().c_str(),
-                       static_cast<long>(-j->pgid), std::strerror(errno));
+          sh.errorf("kill: (%ld) - %s\n", static_cast<long>(-j->pgid), std::strerror(errno));
           st = 1;
         }
       } else {
         for (long p : j->pids)
           if (kill(static_cast<pid_t>(p), sig) != 0) {
-            std::fprintf(stderr, "%skill: (%ld) - %s\n", sh.err_prefix().c_str(), p,
-                         std::strerror(errno));
+            sh.errorf("kill: (%ld) - %s\n", p, std::strerror(errno));
             st = 1;
           }
       }
@@ -5164,16 +5052,14 @@ int bi_kill(Shell &sh, const std::vector<std::string> &argv) {
       for (; p < t.size(); p++)
         if (!std::isdigit(static_cast<unsigned char>(t[p]))) numeric = false;
       if (!numeric) {
-        std::fprintf(stderr, "%skill: `%s': not a pid or valid job spec\n",
-                     sh.err_prefix().c_str(), t.c_str());
+        sh.errorf("kill: `%s': not a pid or valid job spec\n", t.c_str());
         st = 1;
         continue;
       }
       target = static_cast<pid_t>(std::atol(t.c_str()));
     }
     if (kill(target, sig) != 0) {
-      std::fprintf(stderr, "%skill: (%ld) - %s\n", sh.err_prefix().c_str(),
-                   static_cast<long>(target), std::strerror(errno));
+      sh.errorf("kill: (%ld) - %s\n", static_cast<long>(target), std::strerror(errno));
       st = 1;
     }
   }
@@ -5504,7 +5390,7 @@ int bi_help(Shell &sh, const std::vector<std::string> &argv) {
       else if (a[k] == 'm') mflag = true;
       else {
         std::fflush(stdout);
-        std::fprintf(stderr, "%shelp: -%c: invalid option\n", sh.err_prefix().c_str(), a[k]);
+        sh.errorf("help: -%c: invalid option\n", a[k]);
         std::fprintf(stderr, "help: usage: help [-dms] [pattern ...]\n");
         return 2;
       }
@@ -5611,9 +5497,8 @@ int bi_help(Shell &sh, const std::vector<std::string> &argv) {
     });
     if (hits.empty()) {
       std::fflush(stdout);
-      std::fprintf(stderr,
-                   "%shelp: no help topics match `%s'.  Try `help help' or `man -k %s' or `info %s'.\n",
-                   sh.err_prefix().c_str(), pat.c_str(), pat.c_str(), pat.c_str());
+      sh.errorf("help: no help topics match `%s'.  Try `help help' or `man -k %s' or `info %s'.\n",
+                pat.c_str(), pat.c_str(), pat.c_str());
       st = 1;
       continue;
     }
@@ -5649,8 +5534,7 @@ int bi_builtin(Shell &sh, const std::vector<std::string> &argv) {
   size_t i = 1;
   if (argv[i] == "--") i++;  // `builtin' takes no options besides `--'
   else if (argv[i].size() >= 2 && argv[i][0] == '-') {
-    std::fprintf(stderr, "%sbuiltin: %s: invalid option\n", sh.err_prefix().c_str(),
-                 argv[i].c_str());
+    sh.errorf("builtin: %s: invalid option\n", argv[i].c_str());
     std::fprintf(stderr, "builtin: usage: builtin [shell-builtin [arg ...]]\n");
     return 2;
   }
@@ -5658,8 +5542,7 @@ int bi_builtin(Shell &sh, const std::vector<std::string> &argv) {
   std::vector<std::string> sub(argv.begin() + i, argv.end());
   if (!is_builtin_name(sub[0])) {
     std::fflush(stdout);
-    std::fprintf(stderr, "%sbuiltin: %s: not a shell builtin\n", sh.err_prefix().c_str(),
-                 sub[0].c_str());
+    sh.errorf("builtin: %s: not a shell builtin\n", sub[0].c_str());
     return 1;
   }
   int st = 0;
@@ -5670,7 +5553,7 @@ int bi_builtin(Shell &sh, const std::vector<std::string> &argv) {
 int bi_logout(Shell &sh, const std::vector<std::string> &argv) {
   if (!sh.login_shell) {
     std::fflush(stdout);
-    std::fprintf(stderr, "%slogout: not login shell: use `exit'\n", sh.err_prefix().c_str());
+    sh.errorf("logout: not login shell: use `exit'\n");
     return 1;
   }
   sh.exiting = true;
@@ -5683,7 +5566,7 @@ int bi_hash(Shell &sh, const std::vector<std::string> &argv) {
   // of `hash' -- listing, adding, `-r', or an invalid option -- fails before
   // any processing (hash.def checks hashing_enabled first).
   if (!sh.opt_hashall) {
-    std::fprintf(stderr, "%shash: hashing disabled\n", sh.err_prefix().c_str());
+    sh.errorf("hash: hashing disabled\n");
     return 1;
   }
   bool list_l = false, del_d = false, print_t = false, expunge = false;
@@ -5706,7 +5589,7 @@ int bi_hash(Shell &sh, const std::vector<std::string> &argv) {
         break;
       }
       else {
-        std::fprintf(stderr, "%shash: -%c: invalid option\n", sh.err_prefix().c_str(), o);
+        sh.errorf("hash: -%c: invalid option\n", o);
         std::fprintf(stderr, "hash: usage: hash [-lr] [-p pathname] [-dt] [name ...]\n");
         return 2;
       }
@@ -5715,8 +5598,7 @@ int bi_hash(Shell &sh, const std::vector<std::string> &argv) {
   }
   // `-d'/`-t' each require at least one name operand (bash sh_needarg).
   if (i >= argv.size() && (del_d || print_t)) {
-    std::fprintf(stderr, "%shash: %s: option requires an argument\n", sh.err_prefix().c_str(),
-                 del_d ? "-d" : "-t");
+    sh.errorf("hash: %s: option requires an argument\n", del_d ? "-d" : "-t");
     return 1;
   }
   if (!ppath.empty() && i < argv.size()) {
@@ -5724,19 +5606,16 @@ int bi_hash(Shell &sh, const std::vector<std::string> &argv) {
     // relative one cannot be resolved, so neither can be hashed.
     if (sh.opt_restricted) {
       if (ppath.find('/') != std::string::npos)
-        std::fprintf(stderr, "%shash: %s: restricted\n", sh.err_prefix().c_str(),
-                     ppath.c_str());
+        sh.errorf("hash: %s: restricted\n", ppath.c_str());
       else
-        std::fprintf(stderr, "%shash: %s: not found\n", sh.err_prefix().c_str(),
-                     ppath.c_str());
+        sh.errorf("hash: %s: not found\n", ppath.c_str());
       return 1;
     }
     // A pathname naming a directory is rejected; a nonexistent file is NOT --
     // `hash -p /nosuchfile cat' stores the bogus path silently (bash).
     struct stat pst;
     if (stat(ppath.c_str(), &pst) == 0 && S_ISDIR(pst.st_mode)) {
-      std::fprintf(stderr, "%shash: %s: Is a directory\n", sh.err_prefix().c_str(),
-                   ppath.c_str());
+      sh.errorf("hash: %s: Is a directory\n", ppath.c_str());
       return 1;
     }
     sh.hash_remember(argv[i], ppath);
@@ -5769,7 +5648,7 @@ int bi_hash(Shell &sh, const std::vector<std::string> &argv) {
       sh.hashed_hits.erase(n);
       if (sh.hashed.erase(n) == 0) {
         std::fflush(stdout);
-        std::fprintf(stderr, "%shash: %s: not found\n", sh.err_prefix().c_str(), n.c_str());
+        sh.errorf("hash: %s: not found\n", n.c_str());
         st = 1;
       }
       continue;
@@ -5778,13 +5657,13 @@ int bi_hash(Shell &sh, const std::vector<std::string> &argv) {
       const std::string *hp = sh.hash_lookup(n);  // a -t lookup counts as a hit
       // With -l too, -t prints the reusable form (`hash -lt cat' ->
       // `builtin hash -p /path cat'), as bash does.
-      if (hp == nullptr) { std::fflush(stdout); std::fprintf(stderr, "%shash: %s: not found\n", sh.err_prefix().c_str(), n.c_str()); st = 1; }
+      if (hp == nullptr) { std::fflush(stdout); sh.errorf("hash: %s: not found\n", n.c_str()); st = 1; }
       else if (list_l) std::printf("builtin hash -p %s %s\n", hp->c_str(), n.c_str());
       else std::printf("%s\n", hp->c_str());
       continue;
     }
     std::string p = find_in_path(sh, n);
-    if (p.empty()) { std::fflush(stdout); std::fprintf(stderr, "%shash: %s: not found\n", sh.err_prefix().c_str(), n.c_str()); st = 1; }
+    if (p.empty()) { std::fflush(stdout); sh.errorf("hash: %s: not found\n", n.c_str()); st = 1; }
     else sh.hash_remember(n, p);
   }
   return st;
@@ -5836,16 +5715,14 @@ int bi_shopt(Shell &sh, const std::vector<std::string> &argv) {
         case 'p': print_p = true; break;
         case 'o': o_names = true; break;
         default:
-          std::fprintf(stderr, "%sshopt: -%c: invalid option\n",
-                       sh.err_prefix().c_str(), a[k]);
+          sh.errorf("shopt: -%c: invalid option\n", a[k]);
           std::fprintf(stderr, "shopt: usage: shopt [-pqsu] [-o] [optname ...]\n");
           return 2;
       }
     }
   }
   if (set_s && unset_u) {
-    std::fprintf(stderr, "%sshopt: cannot set and unset shell options simultaneously\n",
-                 sh.err_prefix().c_str());
+    sh.errorf("shopt: cannot set and unset shell options simultaneously\n");
     return 1;
   }
 
@@ -5873,8 +5750,7 @@ int bi_shopt(Shell &sh, const std::vector<std::string> &argv) {
         if (o.first == n) { found = true; cur = o.second; }
       if (!found) {
         if (!quiet_q)
-          std::fprintf(stderr, "%sshopt: %s: invalid option name\n",
-                       sh.err_prefix().c_str(), n.c_str());
+          sh.errorf("shopt: %s: invalid option name\n", n.c_str());
         st = 1;
         continue;
       }
@@ -5910,7 +5786,7 @@ int bi_shopt(Shell &sh, const std::vector<std::string> &argv) {
     if (it == sh.shopt_opts.end()) {
       if (!quiet_q) {
         std::fflush(stdout);
-        std::fprintf(stderr, "%sshopt: %s: invalid shell option name\n", sh.err_prefix().c_str(), n.c_str());
+        sh.errorf("shopt: %s: invalid shell option name\n", n.c_str());
       }
       st = 1;
       continue;
@@ -6000,7 +5876,7 @@ int bi_ulimit(Shell &sh, const std::vector<std::string> &argv) {
     const UlimitRes *r = nullptr;
     for (const auto &e : kUlimits) if (e.opt == o) { r = &e; break; }
     if (!r) {
-      std::fprintf(stderr, "%sulimit: -%c: invalid option\n", sh.err_prefix().c_str(), o);
+      sh.errorf("ulimit: -%c: invalid option\n", o);
       std::fprintf(stderr, "ulimit: usage: ulimit [-SHabcdefiklmnpqrstuvxPRT] [limit]\n");
       return 2;
     }
@@ -6018,8 +5894,7 @@ int bi_ulimit(Shell &sh, const std::vector<std::string> &argv) {
   if (value != "unlimited" && value != "hard" && value != "soft") {
     for (char c : value)
       if (c < '0' || c > '9') {
-        std::fprintf(stderr, "%sulimit: %s: invalid number\n", sh.err_prefix().c_str(),
-                     value.c_str());
+        sh.errorf("ulimit: %s: invalid number\n", value.c_str());
         return 1;
       }
   }
@@ -6038,8 +5913,7 @@ int bi_ulimit(Shell &sh, const std::vector<std::string> &argv) {
     if (setrlimit(r->res, &rl) != 0) {
       // bash names the resource: `ulimit: max user processes: cannot modify
       // limit: Operation not permitted'.
-      std::fprintf(stderr, "%sulimit: %s: cannot modify limit: %s\n",
-                   sh.err_prefix().c_str(), r->desc, std::strerror(errno));
+      sh.errorf("ulimit: %s: cannot modify limit: %s\n", r->desc, std::strerror(errno));
       return 1;
     }
   }
@@ -6081,7 +5955,7 @@ int bi_enable(Shell &sh, const std::vector<std::string> &argv) {
   for (; i < argv.size(); i++) {
     const std::string &n = argv[i];
     if (!is_builtin_name(n)) {
-      std::fprintf(stderr, "%senable: %s: not a shell builtin\n", sh.err_prefix().c_str(), n.c_str());
+      sh.errorf("enable: %s: not a shell builtin\n", n.c_str());
       st = 1;
       continue;
     }
@@ -6089,8 +5963,7 @@ int bi_enable(Shell &sh, const std::vector<std::string> &argv) {
     // builtin is static, so the request always fails as bash's does for a
     // compiled-in builtin.
     if (del) {
-      std::fprintf(stderr, "%senable: %s: not dynamically loaded\n", sh.err_prefix().c_str(),
-                   n.c_str());
+      sh.errorf("enable: %s: not dynamically loaded\n", n.c_str());
       st = 1;
       continue;
     }
@@ -6110,8 +5983,7 @@ int bi_caller(Shell &sh, const std::vector<std::string> &argv) {
   // no_options: a leading `-X' (anything but a bare `--') is an invalid option.
   if (ai < argv.size() && argv[ai].size() >= 1 && argv[ai][0] == '-' &&
       argv[ai] != "--") {
-    std::fprintf(stderr, "%scaller: %s: invalid option\n",
-                 sh.err_prefix().c_str(), argv[ai].c_str());
+    sh.errorf("caller: %s: invalid option\n", argv[ai].c_str());
     std::fprintf(stderr, "%s", kUsage);
     return 2;
   }
@@ -6140,8 +6012,7 @@ int bi_caller(Shell &sh, const std::vector<std::string> &argv) {
   for (size_t k = d; k < e; k++)
     if (!std::isdigit(static_cast<unsigned char>(w[k]))) { valid = false; break; }
   if (!valid) {
-    std::fprintf(stderr, "%scaller: %s: invalid number\n",
-                 sh.err_prefix().c_str(), w.c_str());
+    sh.errorf("caller: %s: invalid number\n", w.c_str());
     std::fprintf(stderr, "%s", kUsage);
     return 2;
   }
@@ -6171,8 +6042,7 @@ int bi_alias(Shell &sh, const std::vector<std::string> &argv) {
     if (argv[i] == "-p") { i++; continue; }
     if (sh.is_zsh() && argv[i] == "-g") { kind = 'g'; i++; continue; }
     if (sh.is_zsh() && argv[i] == "-s") { kind = 's'; i++; continue; }
-    std::fprintf(stderr, "%salias: %s: invalid option\n", sh.err_prefix().c_str(),
-                 argv[i].c_str());
+    sh.errorf("alias: %s: invalid option\n", argv[i].c_str());
     std::fprintf(stderr, "alias: usage: alias [-p] [name[=value] ... ]\n");
     return 2;
   }
@@ -6200,7 +6070,7 @@ int bi_alias(Shell &sh, const std::vector<std::string> &argv) {
         show(it->first, it->second);
       else {
         std::fflush(stdout);
-        std::fprintf(stderr, "%salias: %s: not found\n", sh.err_prefix().c_str(), a.c_str());
+        sh.errorf("alias: %s: not found\n", a.c_str());
         st = 1;
       }
     } else {
@@ -6208,8 +6078,7 @@ int bi_alias(Shell &sh, const std::vector<std::string> &argv) {
       // bash refuses names containing metacharacters, blanks, quoting
       // characters, `$', or `/' (valid_alias_name); zsh has no such check.
       if (!sh.is_zsh() && !Shell::valid_alias_name(name)) {
-        std::fprintf(stderr, "%salias: `%s': invalid alias name\n", sh.err_prefix().c_str(),
-                     name.c_str());
+        sh.errorf("alias: `%s': invalid alias name\n", name.c_str());
         st = 1;
         continue;
       }
@@ -6229,8 +6098,7 @@ int bi_unalias(Shell &sh, const std::vector<std::string> &argv) {
   while (i < argv.size() && argv[i].size() >= 2 && argv[i][0] == '-' && argv[i] != "--") {
     if (argv[i] == "-a") { all = true; i++; continue; }
     if (sh.is_zsh() && argv[i] == "-s") { suffix = true; i++; continue; }
-    std::fprintf(stderr, "%sunalias: %s: invalid option\n", sh.err_prefix().c_str(),
-                 argv[i].c_str());
+    sh.errorf("unalias: %s: invalid option\n", argv[i].c_str());
     std::fprintf(stderr, "unalias: usage: unalias [-a] name [name ...]\n");
     return 2;
   }
@@ -6256,7 +6124,7 @@ int bi_unalias(Shell &sh, const std::vector<std::string> &argv) {
       removed = r || g;
     }
     if (!removed) {
-      std::fprintf(stderr, "%sunalias: %s: not found\n", sh.err_prefix().c_str(), argv[i].c_str());
+      sh.errorf("unalias: %s: not found\n", argv[i].c_str());
       st = 1;
     }
   }
@@ -6329,8 +6197,7 @@ int bi_history(Shell &sh, const std::vector<std::string> &argv) {
           case 's': stash = true; break;
           case 'p': expand = true; break;
           default:
-            std::fprintf(stderr, "%shistory: -%c: invalid option\n",
-                         sh.err_prefix().c_str(), a[k]);
+            sh.errorf("history: -%c: invalid option\n", a[k]);
             std::fprintf(stderr, "%s\n", kUsage);
             return 2;
         }
@@ -6342,8 +6209,7 @@ int bi_history(Shell &sh, const std::vector<std::string> &argv) {
   for (; i < argv.size(); i++) rest.push_back(argv[i]);
 
   if (app + wr + rd + nw > 1) {
-    std::fprintf(stderr, "%shistory: cannot use more than one of -anrw\n",
-                 sh.err_prefix().c_str());
+    sh.errorf("history: cannot use more than one of -anrw\n");
     return 2;
   }
 
@@ -6362,8 +6228,7 @@ int bi_history(Shell &sh, const std::vector<std::string> &argv) {
     int lo, hi;
     if (e1 != d.c_str() && *e1 == '\0') {           // single offset
       if (!resolve(v1, lo)) {
-        std::fprintf(stderr, "%shistory: %s: history position out of range\n",
-                     sh.err_prefix().c_str(), d.c_str());
+        sh.errorf("history: %s: history position out of range\n", d.c_str());
         return 2;
       }
       HIST_ENTRY *old = remove_history(lo);
@@ -6376,13 +6241,11 @@ int bi_history(Shell &sh, const std::vector<std::string> &argv) {
       long v2 = std::strtol(p2, &e2, 10);
       if (e2 != p2 && *e2 == '\0') {
         if (!resolve(v1, lo)) {
-          std::fprintf(stderr, "%shistory: %ld: history position out of range\n",
-                       sh.err_prefix().c_str(), v1);
+          sh.errorf("history: %ld: history position out of range\n", v1);
           return 2;
         }
         if (!resolve(v2, hi)) {
-          std::fprintf(stderr, "%shistory: %ld: history position out of range\n",
-                       sh.err_prefix().c_str(), v2);
+          sh.errorf("history: %ld: history position out of range\n", v2);
           return 2;
         }
         if (hi < lo) { int t = lo; lo = hi; hi = t; }
@@ -6393,12 +6256,10 @@ int bi_history(Shell &sh, const std::vector<std::string> &argv) {
         return 0;
       }
       // Range-shaped but the end does not parse: report the whole token.
-      std::fprintf(stderr, "%shistory: %s: history position out of range\n",
-                   sh.err_prefix().c_str(), d.c_str());
+      sh.errorf("history: %s: history position out of range\n", d.c_str());
       return 2;
     }
-    std::fprintf(stderr, "%shistory: %s: invalid number\n", sh.err_prefix().c_str(),
-                 d.c_str());
+    sh.errorf("history: %s: invalid number\n", d.c_str());
     return 2;
   }
   if (stash) {
@@ -6413,8 +6274,7 @@ int bi_history(Shell &sh, const std::vector<std::string> &argv) {
       char *e = nullptr;
       int hr = history_expand(const_cast<char *>(a.c_str()), &e);
       if (hr < 0) {
-        std::fprintf(stderr, "%shistory: %s: history expansion failed\n",
-                     sh.err_prefix().c_str(), a.c_str());
+        sh.errorf("history: %s: history expansion failed\n", a.c_str());
         st = 1;
       } else if (e) {
         std::printf("%s\n", e);
@@ -6435,15 +6295,14 @@ int bi_history(Shell &sh, const std::vector<std::string> &argv) {
 
   if (rest.size() > 1) {
     // The listing form takes at most one count (`history 10 42' errors).
-    std::fprintf(stderr, "%shistory: too many arguments\n", sh.err_prefix().c_str());
+    sh.errorf("history: too many arguments\n");
     return 2;
   }
   if (!rest.empty()) {
     char *e = nullptr;
     long v = std::strtol(rest[0].c_str(), &e, 10);
     if (e == rest[0].c_str() || *e != '\0' || v < 0) {
-      std::fprintf(stderr, "%shistory: %s: numeric argument required\n",
-                   sh.err_prefix().c_str(), rest[0].c_str());
+      sh.errorf("history: %s: numeric argument required\n", rest[0].c_str());
       return 2;
     }
     limit = static_cast<int>(v);
@@ -6487,8 +6346,7 @@ int bi_fc(Shell &sh, const std::vector<std::string> &argv) {
           else if (i + 1 < argv.size()) { ename = argv[i + 1]; consumed_next = true; }
           break;
         default:
-          std::fprintf(stderr, "%sfc: -%c: invalid option\n", sh.err_prefix().c_str(),
-                       a[k]);
+          sh.errorf("fc: -%c: invalid option\n", a[k]);
           std::fprintf(stderr, "%s\n", kUsage);
           return 2;
       }
@@ -6511,12 +6369,11 @@ int bi_fc(Shell &sh, const std::vector<std::string> &argv) {
   if (last_hist < 0) last_hist = 0;
 
   auto no_command = [&]() {
-    std::fprintf(stderr, "%sfc: no command found\n", sh.err_prefix().c_str());
+    sh.errorf("fc: no command found\n");
     return 1;
   };
   auto out_of_range = [&]() {
-    std::fprintf(stderr, "%sfc: history specification out of range\n",
-                 sh.err_prefix().c_str());
+    sh.errorf("fc: history specification out of range\n");
     return 1;
   };
 
@@ -6822,7 +6679,7 @@ int bi_compgen(Shell &sh, const std::vector<std::string> &argv) {
       std::string act = optarg(a);
       if (!compgen_valid_action(act)) {
         std::fflush(stdout);
-        std::fprintf(stderr, "%scompgen: %s: invalid action name\n", sh.err_prefix().c_str(), act.c_str());
+        sh.errorf("compgen: %s: invalid action name\n", act.c_str());
         return 1;
       }
       actions.push_back(act);
@@ -6830,7 +6687,7 @@ int bi_compgen(Shell &sh, const std::vector<std::string> &argv) {
       std::string opt = optarg(a);
       if (!compgen_valid_option(opt)) {
         std::fflush(stdout);
-        std::fprintf(stderr, "%scompgen: %s: invalid option name\n", sh.err_prefix().c_str(), opt.c_str());
+        sh.errorf("compgen: %s: invalid option name\n", opt.c_str());
         return 1;
       }
     } else if (o == 'G' || o == 'F' || o == 'C') {
@@ -6840,14 +6697,14 @@ int bi_compgen(Shell &sh, const std::vector<std::string> &argv) {
         if (const char *ac = compgen_short_action(a[j])) actions.push_back(ac);
     } else {
       std::fflush(stdout);
-      std::fprintf(stderr, "%scompgen: -%c: invalid option\n", sh.err_prefix().c_str(), o);
+      sh.errorf("compgen: -%c: invalid option\n", o);
       std::fprintf(stderr, "%s", kUsage);
       return 2;
     }
   }
   if (has_var && !valid_identifier(varname)) {
     std::fflush(stdout);
-    std::fprintf(stderr, "%scompgen: `%s': not a valid identifier\n", sh.err_prefix().c_str(), varname.c_str());
+    sh.errorf("compgen: `%s': not a valid identifier\n", varname.c_str());
     return 1;
   }
   if (i < argv.size()) word = argv[i];
@@ -6924,8 +6781,7 @@ int bi_complete(Shell &sh, const std::vector<std::string> &argv) {
           if (const char *act = short_action(o)) act_set.insert(act);
           else {
             std::fflush(stdout);
-            std::fprintf(stderr, "%scomplete: -%c: invalid option\n",
-                         sh.err_prefix().c_str(), o);
+            sh.errorf("complete: -%c: invalid option\n", o);
             std::fprintf(stderr, "%s", kUsage);
             return 2;
           }
@@ -6945,8 +6801,7 @@ int bi_complete(Shell &sh, const std::vector<std::string> &argv) {
           ord.erase(std::remove(ord.begin(), ord.end(), n), ord.end());
         } else {
           std::fflush(stdout);
-          std::fprintf(stderr, "%scomplete: %s: no completion specification\n",
-                       sh.err_prefix().c_str(), n.c_str());
+          sh.errorf("complete: %s: no completion specification\n", n.c_str());
           return 1;
         }
       }
@@ -7010,8 +6865,7 @@ int bi_complete(Shell &sh, const std::vector<std::string> &argv) {
       if (it != sh.completions.end()) emit(n, it->second);
       else {
         std::fflush(stdout);
-        std::fprintf(stderr, "%scomplete: %s: no completion specification\n",
-                     sh.err_prefix().c_str(), n.c_str());
+        sh.errorf("complete: %s: no completion specification\n", n.c_str());
         st = 1;
       }
     }
@@ -7032,27 +6886,24 @@ int bi_compopt(Shell &sh, const std::vector<std::string> &argv) {
     if ((a == "-o" || a == "+o") && i + 1 < argv.size()) {
       const std::string &opt = argv[++i];
       if (!compgen_valid_option(opt)) {
-        std::fprintf(stderr, "%scompopt: %s: invalid option name\n",
-                     sh.err_prefix().c_str(), opt.c_str());
+        sh.errorf("compopt: %s: invalid option name\n", opt.c_str());
         return 1;
       }
     } else if (a == "-D" || a == "-E" || a == "-I") {
       continue;
     } else if (!a.empty() && (a[0] == '-' || a[0] == '+') && a != "--") {
-      std::fprintf(stderr, "%scompopt: %c%c: invalid option\n",
-                   sh.err_prefix().c_str(), a[0], a.size() > 1 ? a[1] : ' ');
+      sh.errorf("compopt: %c%c: invalid option\n", a[0], a.size() > 1 ? a[1] : ' ');
       return 2;
     }
   }
-  std::fprintf(stderr, "%scompopt: not currently executing completion function\n",
-               sh.err_prefix().c_str());
+  sh.errorf("compopt: not currently executing completion function\n");
   return 1;  // gnash never runs a completion function, so this always applies
 }
 
 // ---- bind ----------------------------------------------------------------
 int bi_bind(Shell &sh, const std::vector<std::string> &argv) {
   if (!sh.interactive)
-    std::fprintf(stderr, "%sbind: warning: line editing not enabled\n", sh.err_prefix().c_str());
+    sh.errorf("bind: warning: line editing not enabled\n");
   for (size_t i = 1; i < argv.size(); i++) {
     const std::string &a = argv[i];
     if (a == "-l") {
@@ -7307,7 +7158,7 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
     } else if (argv.size() - ai > 1) {
       // Extra arguments: status 2, and bash DISCARDS the rest of the command
       // list (the reader continues at the next line) in both modes.
-      std::fprintf(stderr, "%sshift: too many arguments\n", sh.err_prefix().c_str());
+      sh.errorf("shift: too many arguments\n");
       st = 2;
       sh.arith_abort = true;
     } else {
@@ -7321,8 +7172,7 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
         numeric = !a.empty() && end != a.c_str() && *end == '\0';
       }
       if (!numeric) {
-        std::fprintf(stderr, "%sshift: %s: numeric argument required\n",
-                     sh.err_prefix().c_str(), a.c_str());
+        sh.errorf("shift: %s: numeric argument required\n", a.c_str());
         st = 2;
         sh.posix_special_builtin_error(st);  // posix: fatal (errors10.sub)
       } else if (n == 0) {
@@ -7330,15 +7180,13 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
       } else if (n < 0) {
         // A negative count is always out of range (reported regardless of the
         // shift_verbose option), status 1.
-        std::fprintf(stderr, "%sshift: %s: shift count out of range\n",
-                     sh.err_prefix().c_str(), a.c_str());
+        sh.errorf("shift: %s: shift count out of range\n", a.c_str());
         st = 1;
       } else if (n > static_cast<long>(sh.positional.size())) {
         // Too large: silent failure unless `shopt -s shift_verbose' -- which
         // POSIX mode implies (`command shift 12' reports in errors8.sub).
         if (sh.shopt_opts["shift_verbose"] || sh.opt_posix)
-          std::fprintf(stderr, "%sshift: %s: shift count out of range\n",
-                       sh.err_prefix().c_str(), a.c_str());
+          sh.errorf("shift: %s: shift count out of range\n", a.c_str());
         st = 1;
       } else {
         for (long k = 0; k < n; k++) sh.positional.erase(sh.positional.begin());
@@ -7354,15 +7202,14 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
     if (argv.size() - ci > 1) {
       // Extra arguments: the shell does NOT exit; status 2 and the rest of
       // the command list is discarded (both modes -- errors.tests).
-      std::fprintf(stderr, "%sexit: too many arguments\n", sh.err_prefix().c_str());
+      sh.errorf("exit: too many arguments\n");
       st = 2;
       sh.arith_abort = true;
     } else if (!a.empty() && (end == a.c_str() || *end != '\0')) {
       // A non-numeric argument is no longer a fatal error: bash reports it
       // and the shell CONTINUES with status 2 (posix mode still treats the
       // special-builtin error as fatal).
-      std::fprintf(stderr, "%sexit: %s: numeric argument required\n",
-                   sh.err_prefix().c_str(), a.c_str());
+      sh.errorf("exit: %s: numeric argument required\n", a.c_str());
       st = 2;
       sh.posix_special_builtin_error(st);
     } else {
@@ -7389,30 +7236,26 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
     if (argv.size() - ri > 1) {
       // Extra arguments: status 2, rest of the command list discarded (the
       // function is NOT returned from -- errors.tests, both modes).
-      std::fprintf(stderr, "%sreturn: too many arguments\n", sh.err_prefix().c_str());
+      sh.errorf("return: too many arguments\n");
       st = 2;
       sh.arith_abort = true;
     } else if (badnum) {
       // Non-numeric: report, then RETURN with status 2 in default mode (the
       // function body after it never runs); at top level the can-only-return
       // report still follows.  POSIX: fatal (errors10.sub).
-      std::fprintf(stderr, "%sreturn: %s: numeric argument required\n",
-                   sh.err_prefix().c_str(), argv[ri].c_str());
+      sh.errorf("return: %s: numeric argument required\n", argv[ri].c_str());
       st = 2;
       sh.posix_special_builtin_error(st);
       if (sh.in_function() || sh.source_depth > 0) {
         sh.returning = true;
         sh.exit_status = 2;
       } else if (!sh.exiting) {
-        std::fprintf(stderr,
-                     "%sreturn: can only `return' from a function or sourced script\n",
-                     sh.err_prefix().c_str());
+        sh.errorf("return: can only `return' from a function or sourced script\n");
       }
     } else if (!sh.in_function() && sh.source_depth == 0) {
       // `return' is only meaningful in a function or a sourced script;
       // elsewhere it is an error and must not unwind the current input (bash).
-      std::fprintf(stderr, "%sreturn: can only `return' from a function or sourced script\n",
-                   sh.err_prefix().c_str());
+      sh.errorf("return: can only `return' from a function or sourced script\n");
       st = 1;
       sh.posix_special_builtin_error(st);  // special builtin: fatal in posix
     } else {
@@ -7441,13 +7284,11 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
       bbad = argv[bi].empty() || bend == argv[bi].c_str() || *bend != '\0';
     }
     if (argv.size() - bi > 1) {
-      std::fprintf(stderr, "%s%s: too many arguments\n", sh.err_prefix().c_str(),
-                   cmd.c_str());
+      sh.errorf("%s: too many arguments\n", cmd.c_str());
       st = 2;
       sh.arith_abort = true;
     } else if (bbad) {
-      std::fprintf(stderr, "%s%s: %s: numeric argument required\n",
-                   sh.err_prefix().c_str(), cmd.c_str(), argv[bi].c_str());
+      sh.errorf("%s: %s: numeric argument required\n", cmd.c_str(), argv[bi].c_str());
       st = 2;
       if (!sh.interactive) {
         sh.exiting = true;
@@ -7459,8 +7300,7 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
     // the rest of the input.  Mirrors builtins/break.def check_loop_level().
     else if (sh.loop_depth == 0) {
       if (!sh.opt_posix)
-        std::fprintf(stderr, "%s%s: only meaningful in a `for', `while', or `until' loop\n",
-                     sh.err_prefix().c_str(), cmd.c_str());
+        sh.errorf("%s: only meaningful in a `for', `while', or `until' loop\n", cmd.c_str());
       st = 0;
     } else {
       int n = 1;
@@ -7474,15 +7314,13 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
         // A non-numeric count: bash aborts the command (get_numeric_arg); we
         // report and terminate every enclosing loop, the closest observable
         // approximation without the top-level throw.
-        std::fprintf(stderr, "%s%s: %s: numeric argument required\n",
-                     sh.err_prefix().c_str(), cmd.c_str(), a.c_str());
+        sh.errorf("%s: %s: numeric argument required\n", cmd.c_str(), a.c_str());
         sh.break_count = sh.loop_depth;
         st = 1;
       } else if (v <= 0) {
         // A non-positive count breaks out of every enclosing loop (bash sets
         // `breaking = loop_level' for both break and continue), status 1.
-        std::fprintf(stderr, "%s%s: %s: loop count out of range\n",
-                     sh.err_prefix().c_str(), cmd.c_str(), a.c_str());
+        sh.errorf("%s: %s: loop count out of range\n", cmd.c_str(), a.c_str());
         sh.break_count = sh.loop_depth;
         st = 1;
       } else {
@@ -7499,8 +7337,7 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
     // `eval' takes no options besides `--'; a leading `-X' is an error.
     size_t ai = 1;
     if (ai < argv.size() && argv[ai] != "--" && argv[ai].size() >= 2 && argv[ai][0] == '-') {
-      std::fprintf(stderr, "%seval: %s: invalid option\n", sh.err_prefix().c_str(),
-                   argv[ai].c_str());
+      sh.errorf("eval: %s: invalid option\n", argv[ai].c_str());
       std::fprintf(stderr, "eval: usage: eval [arg ...]\n");
       st = 2;
     } else {
@@ -7524,8 +7361,7 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
       if (argv[ai] == "--") { ai++; break; }
       if (argv[ai] == "-p") { pflag = true; if (ai + 1 < argv.size()) ppath = argv[++ai]; continue; }
       if (argv[ai].size() >= 2 && argv[ai][0] == '-') {  // `. -i': unknown option
-        std::fprintf(stderr, "%s%s: %s: invalid option\n", sh.err_prefix().c_str(),
-                     cmd.c_str(), argv[ai].c_str());
+        sh.errorf("%s: %s: invalid option\n", cmd.c_str(), argv[ai].c_str());
         std::fprintf(stderr, "%s: usage: %s [-p path] filename [arguments]\n",
                      cmd.c_str(), cmd.c_str());
         if (status) *status = 2;
@@ -7534,8 +7370,7 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
       break;
     }
     if (ai >= argv.size()) {
-      std::fprintf(stderr, "%s%s: filename argument required\n", sh.err_prefix().c_str(),
-                   cmd.c_str());
+      sh.errorf("%s: filename argument required\n", cmd.c_str());
       std::fprintf(stderr, "%s: usage: %s [-p path] filename [arguments]\n",
                    cmd.c_str(), cmd.c_str());
       if (status) *status = 2;
@@ -7543,8 +7378,7 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
     }
     const std::string &fname = argv[ai];
     if (sh.opt_restricted && fname.find('/') != std::string::npos) {
-      std::fprintf(stderr, "%s%s: %s: restricted\n", sh.err_prefix().c_str(),
-                   cmd.c_str(), fname.c_str());
+      sh.errorf("%s: %s: restricted\n", cmd.c_str(), fname.c_str());
       if (status) *status = 1;
       return true;
     }
@@ -7571,8 +7405,7 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
     } else if (pflag) {
       // `-p' searches only the given path; a miss is a hard failure.
       if (!search(ppath)) {
-        std::fprintf(stderr, "%s%s: %s: file not found\n", sh.err_prefix().c_str(),
-                     cmd.c_str(), fname.c_str());
+        sh.errorf("%s: %s: file not found\n", cmd.c_str(), fname.c_str());
         st = 1;
         giveup = true;
         sh.posix_special_builtin_error(st);  // `.'/source: fatal in posix
@@ -7583,8 +7416,7 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
       // and (unshielded) fatal for a non-interactive posix shell.
       const char *penv = std::getenv("PATH");
       if (!search(penv ? penv : "")) {
-        std::fprintf(stderr, "%s%s: %s: file not found\n", sh.err_prefix().c_str(),
-                     cmd.c_str(), fname.c_str());
+        sh.errorf("%s: %s: file not found\n", cmd.c_str(), fname.c_str());
         st = 1;
         giveup = true;
         sh.posix_special_builtin_error(st);
@@ -7669,15 +7501,14 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
           sh.params_set_builtin = saved_params_flag;
         }
       } else {
-        std::fprintf(stderr, "%s%s: %s\n", sh.err_prefix().c_str(),
-                     fname.c_str(), std::strerror(errno));
+        sh.errorf("%s: %s\n", fname.c_str(), std::strerror(errno));
         st = 1;
         sh.posix_special_builtin_error(st);  // `.'/source: fatal in posix
       }
     }
   } else if (cmd == "local") {
     if (!sh.in_function()) {
-      std::fprintf(stderr, "%slocal: can only be used in a function\n", sh.err_prefix().c_str());
+      sh.errorf("local: can only be used in a function\n");
       st = 1;
     } else {
       st = bi_declare(sh, argv, true, false);
@@ -7762,8 +7593,7 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
       if (opt_err || consumed_p) { if (opt_err) break; else continue; }
     }
     if (opt_err) {
-      std::fprintf(stderr, "%swait: %s: invalid option\n", sh.err_prefix().c_str(),
-                   badopt.c_str());
+      sh.errorf("wait: %s: invalid option\n", badopt.c_str());
       std::fprintf(stderr, "wait: usage: wait [-fn] [-p var] [id ...]\n");
       st = 2;
     } else {
@@ -7778,8 +7608,7 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
           Shell::Job *j = sh.job_by_spec(argv[k]);
           if (j) ids.push_back(j->id);
           else {
-            std::fprintf(stderr, "%swait: %s: no such job\n", sh.err_prefix().c_str(),
-                         argv[k].c_str());
+            sh.errorf("wait: %s: no such job\n", argv[k].c_str());
             st = 127;
           }
         }
@@ -7795,8 +7624,7 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
             // A `%jobspec' that names no job: bash reports it and returns 127.
             Shell::Job *j = sh.job_by_spec(spec);
             if (!j) {
-              std::fprintf(stderr, "%swait: %s: no such job\n",
-                           sh.err_prefix().c_str(), spec.c_str());
+              sh.errorf("wait: %s: no such job\n", spec.c_str());
               st = 127;
               continue;
             }
@@ -7812,8 +7640,7 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
             for (char c : spec)
               if (!std::isdigit(static_cast<unsigned char>(c))) { numeric = false; break; }
             if (!numeric) {
-              std::fprintf(stderr, "%swait: `%s': not a pid or valid job spec\n",
-                           sh.err_prefix().c_str(), spec.c_str());
+              sh.errorf("wait: `%s': not a pid or valid job spec\n", spec.c_str());
               st = 1;
               continue;
             }
@@ -7839,8 +7666,7 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
                 sh.reaped_procsub_status.erase(rps);
                 continue;
               }
-              std::fprintf(stderr, "%swait: pid %ld is not a child of this shell\n",
-                           sh.err_prefix().c_str(), pp);
+              sh.errorf("wait: pid %ld is not a child of this shell\n", pp);
               st = 127;
               continue;
             }
@@ -7874,8 +7700,7 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
           psub = pvar.substr(lb + 1, pvar.size() - lb - 2);
         }
         if (!valid_identifier(base)) {
-          std::fprintf(stderr, "%swait: `%s': not a valid identifier\n",
-                       sh.err_prefix().c_str(), pvar.c_str());
+          sh.errorf("wait: `%s': not a valid identifier\n", pvar.c_str());
           st = 1;
         } else if (found && finished_pid >= 0) {
           if (subscripted) {
@@ -7889,8 +7714,7 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
           // cannot be unset and is reported as such.
           auto it = sh.vars.find(sh.deref(base));
           if (it != sh.vars.end() && it->second.readonly) {
-            std::fprintf(stderr, "%swait: %s: cannot unset: readonly variable\n",
-                         sh.err_prefix().c_str(), base.c_str());
+            sh.errorf("wait: %s: cannot unset: readonly variable\n", base.c_str());
             st = 1;
           } else {
             sh.unset(pvar);
@@ -7933,19 +7757,18 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
     std::string spec = argv.size() > 1 ? argv[1] : "";
     bool cur_spec = spec.empty() || spec == "%" || spec == "%%" || spec == "%+" || spec == "%-";
     if (!sh.job_control && !sh.opt_monitor) {
-      std::fprintf(stderr, "%sfg: no job control\n", sh.err_prefix().c_str());
+      sh.errorf("fg: no job control\n");
       st = 1;
     } else if (sh.no_current_job && cur_spec) {
       // A command-substitution subshell has no current job to bring forward.
-      std::fprintf(stderr, "%sfg: no current jobs\n", sh.err_prefix().c_str());
+      sh.errorf("fg: no current jobs\n");
       st = 1;
     } else if (Shell::Job *j = sh.job_by_spec(spec)) {
       if (!j->monitored) {
         // The job was started when job control was inactive (bash's
         // IS_JOBCONTROL(job) == 0), so it cannot be brought to the foreground
         // even though monitor mode is on now.
-        std::fprintf(stderr, "%sfg: job %d started without job control\n",
-                     sh.err_prefix().c_str(), j->id);
+        sh.errorf("fg: job %d started without job control\n", j->id);
         st = 1;
       } else {
         std::printf("%s\n", j->command.c_str());  // bash echoes the command
@@ -7953,14 +7776,13 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
         st = sh.foreground_job(*j, true);
       }
     } else {
-      std::fprintf(stderr, "%sfg: %s: no such job\n", sh.err_prefix().c_str(),
-                   spec.empty() ? "current" : spec.c_str());
+      sh.errorf("fg: %s: no such job\n", spec.empty() ? "current" : spec.c_str());
       st = 1;
     }
   } else if (cmd == "bg") {
     std::string spec = argv.size() > 1 ? argv[1] : "";
     if (!sh.job_control) {
-      std::fprintf(stderr, "%sbg: no job control\n", sh.err_prefix().c_str());
+      sh.errorf("bg: no job control\n");
       st = 1;
     } else if (Shell::Job *j = sh.job_by_spec(spec)) {
       sh.background_job(*j, true);
@@ -7968,8 +7790,7 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
       std::fflush(stdout);
       st = 0;
     } else {
-      std::fprintf(stderr, "%sbg: %s: no such job\n", sh.err_prefix().c_str(),
-                   spec.empty() ? "current" : spec.c_str());
+      sh.errorf("bg: %s: no such job\n", spec.empty() ? "current" : spec.c_str());
       st = 1;
     }
   } else if (cmd == "disown") {
@@ -8033,7 +7854,7 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
         else if (o[k] == 'V') desc_V = true;
         else if (o[k] == 'p') {  // default PATH; disallowed under restricted
           if (sh.opt_restricted) {
-            std::fprintf(stderr, "%scommand: -p: restricted\n", sh.err_prefix().c_str());
+            sh.errorf("command: -p: restricted\n");
             if (status) *status = 2;
             return true;
           }
@@ -8043,8 +7864,7 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
       if (bad) break;
     }
     if (bad) {
-      std::fprintf(stderr, "%scommand: %s: invalid option\n", sh.err_prefix().c_str(),
-                   badopt.c_str());
+      sh.errorf("command: %s: invalid option\n", badopt.c_str());
       std::fprintf(stderr, "command: usage: command [-pVv] command [arg ...]\n");
       st = 2;
     } else if (desc_V) {
@@ -8086,7 +7906,7 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
     }
   } else if (cmd == "exec") {
     if (sh.opt_restricted) {
-      std::fprintf(stderr, "%sexec: restricted\n", sh.err_prefix().c_str());
+      sh.errorf("exec: restricted\n");
       if (status) *status = 2;
       return true;
     }
@@ -8114,8 +7934,7 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
       if (consumed_next) i++;
     }
     if (bad_opt) {
-      std::fprintf(stderr, "%sexec: %s: invalid option\n", sh.err_prefix().c_str(),
-                   argv[i].c_str());
+      sh.errorf("exec: %s: invalid option\n", argv[i].c_str());
       std::fprintf(stderr, "exec: usage: exec [-cl] [-a name] [command "
                            "[argument ...]] [redirection ...]\n");
       st = 2;
@@ -8178,10 +7997,9 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
         // execve returned: it failed.  bash reports this as "<path>: <error>"
         // (no "exec:" prefix), using the resolved path.
         code = (errno == EACCES) ? 126 : 127;
-        std::fprintf(stderr, "%s%s: %s\n", sh.err_prefix().c_str(), full.c_str(),
-                     std::strerror(errno));
+        sh.errorf("%s: %s\n", full.c_str(), std::strerror(errno));
       } else {
-        std::fprintf(stderr, "%sexec: %s: not found\n", sh.err_prefix().c_str(), target.c_str());
+        sh.errorf("exec: %s: not found\n", target.c_str());
       }
       // bash: an interactive shell (or `shopt -s execfail') stays alive and
       // returns failure; a non-interactive shell exits.
@@ -8373,8 +8191,7 @@ struct CondEval {
         char *endp = nullptr;
         long fd = std::strtol(arg.c_str(), &endp, 10);
         if (arg.empty() || *endp != '\0') {
-          std::fprintf(stderr, "%s[[: %s: integer expected\n", sh.err_prefix().c_str(),
-                       arg.c_str());
+          sh.errorf("[[: %s: integer expected\n", arg.c_str());
           synerr = 2;
           return false;
         }
@@ -8435,8 +8252,7 @@ struct CondEval {
           std::string why;
           regex_t *rx = cached_regex(re, &why);
           if (!rx) {
-            std::fprintf(stderr, "%s[[: invalid regular expression `%s': %s\n",
-                         sh.err_prefix().c_str(), re.c_str(), why.c_str());
+            sh.errorf("[[: invalid regular expression `%s': %s\n", re.c_str(), why.c_str());
             synerr = 2;
             return false;
           }

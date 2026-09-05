@@ -246,8 +246,7 @@ void Shell::reap_coproc() {
   unset(nm + "_PID", /*force=*/true, /*noref=*/false);
   auto it = vars.find(tgt);
   if (it != vars.end() && it->second.readonly)
-    std::fprintf(stderr, "%s%s: cannot unset: readonly variable\n", err_prefix().c_str(),
-                 nm.c_str());
+    errorf("%s: cannot unset: readonly variable\n", nm.c_str());
   else
     unset(nm, false, false);
 }
@@ -484,7 +483,7 @@ void Shell::print_jobs(const std::string &spec, bool lflag, bool pflag, bool rfl
   if (!spec.empty()) {
     Job *j = job_by_spec(spec);
     if (!j) {
-      std::fprintf(stderr, "%sjobs: %s: no such job\n", err_prefix().c_str(), spec.c_str());
+      errorf("jobs: %s: no such job\n", spec.c_str());
       return;
     }
     only = j->id;

@@ -460,16 +460,14 @@ bool Shell::apply_xtracefd(const char *value) {
   // bash requires the whole value to be the number AND the fd to be open.
   if (end == v.c_str() || *end != '\0' || fd < 0 || fd > INT_MAX ||
       fcntl(static_cast<int>(fd), F_GETFD) == -1) {
-    std::fprintf(stderr, "%sBASH_XTRACEFD: %s: invalid value for trace file descriptor\n",
-                 err_prefix().c_str(), v.c_str());
+    errorf("BASH_XTRACEFD: %s: invalid value for trace file descriptor\n", v.c_str());
     return false;
   }
   if (xtrace_fd == static_cast<int>(fd)) return true;  // already there
   reset();
   std::FILE *fp = fdopen(static_cast<int>(fd), "w");
   if (!fp) {
-    std::fprintf(stderr, "%sBASH_XTRACEFD: %s: cannot open as FILE\n",
-                 err_prefix().c_str(), v.c_str());
+    errorf("BASH_XTRACEFD: %s: cannot open as FILE\n", v.c_str());
     return false;
   }
   // Unbuffered: a script commonly writes the trace to a file and reads it back
@@ -733,15 +731,13 @@ std::string Shell::get(const std::string &n_in) const {
   // A chain longer than nameref_max() resolves to nothing, with bash's warning
   // naming the limit actually in force.
   if (too_deep) {
-    std::fprintf(stderr, "%swarning: %s: maximum nameref depth (%d) exceeded\n",
-                 err_prefix().c_str(), n_in.c_str(), nameref_max());
+    errorf("warning: %s: maximum nameref depth (%d) exceeded\n", n_in.c_str(), nameref_max());
     return std::string();
   }
   if (circular) {
     // bash warns and, at function scope, resolves the reference at global
     // scope (find_variable_nameref); at global scope it resolves to nothing.
-    std::fprintf(stderr, "%swarning: %s: circular name reference\n",
-                 err_prefix().c_str(), n_in.c_str());
+    errorf("warning: %s: circular name reference\n", n_in.c_str());
     const Variable *g = in_function() ? global_var_ptr(n_in) : nullptr;
     return g ? scalar_of(*g) : std::string();
   }
@@ -961,7 +957,7 @@ void Shell::array_set(const std::string &n_in, const std::string &sub, const std
   // alias, after the same name validation the alias builtin performs.
   if (n == "BASH_ALIASES" && !is_zsh()) {
     if (!valid_alias_name(sub)) {
-      std::fprintf(stderr, "%s`%s': invalid alias name\n", err_prefix().c_str(), sub.c_str());
+      errorf("`%s': invalid alias name\n", sub.c_str());
       return;
     }
     alias_remember(sub, val);
@@ -973,7 +969,7 @@ void Shell::array_set(const std::string &n_in, const std::string &sub, const std
   if (n == "BASH_CMDS") {
     if (val.find('/') != std::string::npos) {
       if (opt_restricted) {
-        std::fprintf(stderr, "%s%s: restricted\n", err_prefix().c_str(), val.c_str());
+        errorf("%s: restricted\n", val.c_str());
         return;
       }
       hash_remember(sub, val);
@@ -991,7 +987,7 @@ void Shell::array_set(const std::string &n_in, const std::string &sub, const std
       p = q + 1;
     }
     if (full.empty()) {
-      std::fprintf(stderr, "%s%s: not found\n", err_prefix().c_str(), val.c_str());
+      errorf("%s: not found\n", val.c_str());
       return;
     }
     hash_remember(sub, full);
@@ -1013,7 +1009,7 @@ void Shell::array_set(const std::string &n_in, const std::string &sub, const std
   std::string fv = fold_case(val, v.ucase, v.lcase, v.capcase);
   if (v.kind == VarKind::Assoc) {
     if (v.readonly) {
-      std::fprintf(stderr, "%s%s: readonly variable\n", err_prefix().c_str(), n.c_str());
+      errorf("%s: readonly variable\n", n.c_str());
       last_status = 1;
       return;
     }
@@ -1046,15 +1042,14 @@ void Shell::array_set(const std::string &n_in, const std::string &sub, const std
                                                                       : -1;
     k += maxi + 1;
     if (k < 0) {
-      std::fprintf(stderr, "%s%s[%s]: bad array subscript\n", err_prefix().c_str(),
-                   n.c_str(), sub.c_str());
+      errorf("%s[%s]: bad array subscript\n", n.c_str(), sub.c_str());
       arith_abort = true;
       last_status = 1;
       return;
     }
   }
   if (v.readonly) {
-    std::fprintf(stderr, "%s%s: readonly variable\n", err_prefix().c_str(), n.c_str());
+    errorf("%s: readonly variable\n", n.c_str());
     last_status = 1;
     return;
   }
@@ -1207,8 +1202,7 @@ void Shell::array_assign(
   // (`declare -n ref=XXX[0]; ref+=(...)') has no valid whole-array target: bash
   // rejects the resolved `XXX[0]' as not a valid identifier and assigns nothing.
   if (n.find('[') != std::string::npos) {
-    std::fprintf(stderr, "%s`%s': not a valid identifier\n", err_prefix().c_str(),
-                 n.c_str());
+    errorf("`%s': not a valid identifier\n", n.c_str());
     return;
   }
   bool existed = vars.count(n) != 0;
@@ -1216,7 +1210,7 @@ void Shell::array_assign(
   if (v.readonly) {
     // A compound assignment to a readonly variable reports and assigns
     // nothing (`readonly a=7; a=(1 2 3)' -- varenv11.sub).
-    std::fprintf(stderr, "%s%s: readonly variable\n", err_prefix().c_str(), n.c_str());
+    errorf("%s: readonly variable\n", n.c_str());
     last_status = 1;
     return;
   }
@@ -1226,8 +1220,7 @@ void Shell::array_assign(
   // with a valid target resolves to that target above, so this never fires for
   // it.
   if (v.nameref) {
-    std::fprintf(stderr, "%swarning: %s: removing nameref attribute\n",
-                 err_prefix().c_str(), n.c_str());
+    errorf("warning: %s: removing nameref attribute\n", n.c_str());
     v.nameref = false;
   }
   v.invisible = false;  // even `b=()' makes a declared-but-unset array visible
@@ -1261,7 +1254,7 @@ void Shell::array_assign(
       // An empty key in the flat list is a bad subscript; bash reports it as
       // `"": bad array subscript' and stops the assignment (assoc11.sub).
       if (key.empty()) {
-        std::fprintf(stderr, "%s\"\": bad array subscript\n", err_prefix().c_str());
+        errorf("\"\": bad array subscript\n");
         last_status = 1;
         return;
       }
@@ -1487,15 +1480,13 @@ bool Shell::get_if_set(const std::string &n_in, std::string &out) const {
   // A chain longer than nameref_max() resolves to nothing, with bash's warning
   // naming the limit actually in force.
   if (too_deep) {
-    std::fprintf(stderr, "%swarning: %s: maximum nameref depth (%d) exceeded\n",
-                 err_prefix().c_str(), n_in.c_str(), nameref_max());
+    errorf("warning: %s: maximum nameref depth (%d) exceeded\n", n_in.c_str(), nameref_max());
     return false;
   }
   if (circular) {
     // Same resolution as get(): warn, and at function scope fall through to the
     // global binding; a global-scope cycle resolves to nothing (unset).
-    std::fprintf(stderr, "%swarning: %s: circular name reference\n",
-                 err_prefix().c_str(), n_in.c_str());
+    errorf("warning: %s: circular name reference\n", n_in.c_str());
     const Variable *g = in_function() ? global_var_ptr(n_in) : nullptr;
     if (!g) return false;
     if (g->kind == VarKind::Indexed) {
@@ -1585,8 +1576,7 @@ bool Shell::set(const std::string &n_in, const std::string &v,
       std::string sub = n_in.substr(lb + 1, n_in.size() - lb - 2);
       auto bit = vars.find(deref(base));
       if (bit != vars.end() && bit->second.readonly) {
-        std::fprintf(stderr, "%s%s: readonly variable\n", err_prefix().c_str(),
-                     base.c_str());
+        errorf("%s: readonly variable\n", base.c_str());
         return false;
       }
       array_set(base, sub, v);
@@ -1611,8 +1601,7 @@ bool Shell::set(const std::string &n_in, const std::string &v,
           size_t lb = ov.find('[');
           if (lb != std::string::npos && lb > 0 && ov.back() == ']' &&
               ov.compare(0, lb, n_in) == 0) {
-            std::fprintf(stderr, "%s`%s[%s]': not a valid identifier\n",
-                         err_prefix().c_str(), base.c_str(), sub.c_str());
+            errorf("`%s[%s]': not a valid identifier\n", base.c_str(), sub.c_str());
             return false;
           }
         }
@@ -1621,8 +1610,7 @@ bool Shell::set(const std::string &n_in, const std::string &v,
       // (`declare -n r=a[@]; r=5') has no single element to target: bash rejects
       // the `@'/`*' subscript as a bad array subscript and assigns nothing.
       if (sub == "@" || sub == "*") {
-        std::fprintf(stderr, "%s%s[%s]: bad array subscript\n", err_prefix().c_str(),
-                     base.c_str(), sub.c_str());
+        errorf("%s[%s]: bad array subscript\n", base.c_str(), sub.c_str());
         return false;
       }
       // The chain looped back to an ELEMENT of a variable that is itself a
@@ -1632,8 +1620,7 @@ bool Shell::set(const std::string &n_in, const std::string &v,
       {
         auto bv = vars.find(base);
         if (bv != vars.end() && bv->second.nameref) {
-          std::fprintf(stderr, "%swarning: %s: removing nameref attribute\n",
-                       err_prefix().c_str(), base.c_str());
+          errorf("warning: %s: removing nameref attribute\n", base.c_str());
           bv->second.nameref = false;
           bv->second.value.clear();
           bv->second.invisible = false;
@@ -1641,8 +1628,7 @@ bool Shell::set(const std::string &n_in, const std::string &v,
       }
       auto it = vars.find(base);
       if (it != vars.end() && it->second.readonly) {
-        std::fprintf(stderr, "%s%s: readonly variable\n", err_prefix().c_str(),
-                     base.c_str());
+        errorf("%s: readonly variable\n", base.c_str());
         return false;
       }
       array_set(base, sub, v);
@@ -1655,8 +1641,7 @@ bool Shell::set(const std::string &n_in, const std::string &v,
   // Too long a chain has no variable at the end to assign to: bash warns and
   // fails the assignment, which (with no command word) abandons the list.
   if (too_deep) {
-    std::fprintf(stderr, "%swarning: %s: maximum nameref depth (%d) exceeded\n",
-                 err_prefix().c_str(), n_in.c_str(), nameref_max());
+    errorf("warning: %s: maximum nameref depth (%d) exceeded\n", n_in.c_str(), nameref_max());
     return false;
   }
   // A circular nameref (self reference `v->v' or a longer loop).  At function
@@ -1665,20 +1650,17 @@ bool Shell::set(const std::string &n_in, const std::string &v,
   // no persistent effect.
   if (circular) {
     if (!in_function()) {
-      std::fprintf(stderr, "%swarning: %s: circular name reference\n",
-                   err_prefix().c_str(), n_in.c_str());
+      errorf("warning: %s: circular name reference\n", n_in.c_str());
       // A cycle has nothing to assign to, so this is an assignment ERROR:
       // `x=4; echo A' warns and abandons the rest of the list.  Inside a
       // function the reference binds at global scope instead and execution
       // carries on, which is why only the global-scope branch fails.
       return false;
     }
-    std::fprintf(stderr, "%swarning: %s: maximum nameref depth (8) exceeded\n",
-                 err_prefix().c_str(), n_in.c_str());
+    errorf("warning: %s: maximum nameref depth (8) exceeded\n", n_in.c_str());
     Variable &g = global_var_ref(n_in);
     if (g.readonly) {
-      std::fprintf(stderr, "%s%s: readonly variable\n", err_prefix().c_str(),
-                   n_in.c_str());
+      errorf("%s: readonly variable\n", n_in.c_str());
       return false;
     }
     if (g.kind == VarKind::Indexed) {
@@ -1702,8 +1684,8 @@ bool Shell::set(const std::string &n_in, const std::string &v,
     if (it != vars.end() && it->second.nameref && it->second.value.empty() &&
         !valid_nameref_target(v)) {
       bool has_ctx = nameref_ctx && nameref_ctx[0];
-      std::fprintf(stderr, "%s%s%s`%s': not a valid identifier\n", err_prefix().c_str(),
-                   has_ctx ? nameref_ctx : "", has_ctx ? ": " : "", v.c_str());
+      errorf("%s%s`%s': not a valid identifier\n", has_ctx ? nameref_ctx : "", has_ctx ? ": " : "",
+             v.c_str());
       return false;
     }
   }
@@ -1728,7 +1710,7 @@ bool Shell::set(const std::string &n_in, const std::string &v,
   }
   if (opt_restricted &&
       (n == "PATH" || n == "SHELL" || n == "ENV" || n == "BASH_ENV")) {
-    std::fprintf(stderr, "%s%s: readonly variable\n", err_prefix().c_str(), n.c_str());
+    errorf("%s: readonly variable\n", n.c_str());
     return false;
   }
   // A computed variable carries bash's att_noassign: a scalar assignment is
@@ -1738,12 +1720,12 @@ bool Shell::set(const std::string &n_in, const std::string &v,
   // $SHELLOPTS and $BASHOPTS are readonly instead: assigning to one is an
   // error, which (having no command word) also abandons the command list.
   if (!is_zsh() && (n == "SHELLOPTS" || n == "BASHOPTS")) {
-    std::fprintf(stderr, "%s%s: readonly variable\n", err_prefix().c_str(), n.c_str());
+    errorf("%s: readonly variable\n", n.c_str());
     return false;
   }
   Variable &var = vars[n];
   if (var.readonly) {
-    std::fprintf(stderr, "%s%s: readonly variable\n", err_prefix().c_str(), n.c_str());
+    errorf("%s: readonly variable\n", n.c_str());
     return false;
   }
   var.value = v;
@@ -2437,7 +2419,7 @@ int Shell::run_script_lines(const std::string &text) {
           using_history();
         }
         if (hr < 0) {
-          std::fprintf(stderr, "%s%s\n", err_prefix().c_str(), hv ? hv : "history expansion failed");
+          errorf("%s\n", hv ? hv : "history expansion failed");
           std::free(hv);
           st = last_status = 1;
           continue;  // the failed line is neither run nor recorded
@@ -2595,10 +2577,8 @@ int Shell::run_string(const std::string &script, const std::vector<int> *cont_li
       int nlines = static_cast<int>(std::count(script.begin(), script.end(), '\n'));
       cur_lineno = lineno_base + nlines +
                    ((!script.empty() && script.back() == '\n') ? 0 : 1);
-      std::fprintf(stderr,
-                   "%swarning: here-document at line %d delimited by end-of-file (wanted `%s')\n",
-                   err_prefix().c_str(), lineno_base + r.heredoc_eof_line,
-                   r.heredoc_eof_delim.c_str());
+      errorf("warning: here-document at line %d delimited by end-of-file (wanted `%s')\n",
+             lineno_base + r.heredoc_eof_line, r.heredoc_eof_delim.c_str());
       cur_lineno = save_ln;
     }
     size_t p0 = 0;
@@ -2666,8 +2646,8 @@ int Shell::run_string(const std::string &script, const std::vector<int> *cont_li
   if (r.comsub_unterm) {
     int save_ln = cur_lineno;
     cur_lineno = lineno_base + r.comsub_unterm_line;
-    std::fprintf(stderr, "%swarning: command substitution: %d unterminated here-document%s\n",
-                 err_prefix().c_str(), r.comsub_unterm, r.comsub_unterm > 1 ? "s" : "");
+    errorf("warning: command substitution: %d unterminated here-document%s\n", r.comsub_unterm,
+           r.comsub_unterm > 1 ? "s" : "");
     cur_lineno = save_ln;
   }
   if (r.heredoc_eof) {  // run anyway, with bash's warning
@@ -2680,10 +2660,8 @@ int Shell::run_string(const std::string &script, const std::vector<int> *cont_li
     // a new one (a file's last line is the EOF line).
     cur_lineno = lineno_base + nlines +
                  ((!script.empty() && script.back() == '\n') ? 0 : 1);
-    std::fprintf(stderr,
-                 "%swarning: here-document at line %d delimited by end-of-file (wanted `%s')\n",
-                 err_prefix().c_str(), lineno_base + r.heredoc_eof_line,
-                 r.heredoc_eof_delim.c_str());
+    errorf("warning: here-document at line %d delimited by end-of-file (wanted `%s')\n",
+           lineno_base + r.heredoc_eof_line, r.heredoc_eof_delim.c_str());
     cur_lineno = save_ln;
   }
   if (!r.command) { subshell_leaf = false; return last_status; }
@@ -2832,8 +2810,7 @@ std::string Shell::run_and_capture(const std::string &script, int *status) {
         std::string path = ex.expand_no_split(raw, /*do_glob=*/!opt_posix);
         FILE *f = std::fopen(path.c_str(), "r");
         if (!f) {
-          std::fprintf(stderr, "%s%s: %s\n", err_prefix().c_str(), path.c_str(),
-                       std::strerror(errno));
+          errorf("%s: %s\n", path.c_str(), std::strerror(errno));
           if (status) *status = 1;
           return std::string();
         }

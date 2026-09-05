@@ -746,7 +746,7 @@ std::string Expander::param_value(const std::string &name, bool &set, bool defau
     if (sh_.last_bg_pid == 0) {
       set = false;
       if (sh_.opt_nounset && !defaulting_op) {
-        std::fprintf(stderr, "%s!: unbound variable\n", sh_.err_prefix().c_str());
+        sh_.errorf("!: unbound variable\n");
         sh_.exiting = true;
         sh_.exit_status = 127;
       }
@@ -801,8 +801,7 @@ std::string Expander::param_value(const std::string &name, bool &set, bool defau
     if (sh_.opt_nounset && !defaulting_op) {
       // bash names an unbound positional `$N' for the bare `$N' form but `N'
       // for the braced `${N}' form.
-      std::fprintf(stderr, "%s%s%s: unbound variable\n", sh_.err_prefix().c_str(),
-                   braced ? "" : "$", name.c_str());
+      sh_.errorf("%s%s: unbound variable\n", braced ? "" : "$", name.c_str());
       sh_.exiting = true;
       sh_.exit_status = 127;
     }
@@ -835,7 +834,7 @@ std::string Expander::param_value(const std::string &name, bool &set, bool defau
   // blame the nameref for it as well.
   if (sh_.exiting) return std::string();
   if (sh_.opt_nounset && !defaulting_op) {
-    std::fprintf(stderr, "%s%s: unbound variable\n", sh_.err_prefix().c_str(), name.c_str());
+    sh_.errorf("%s: unbound variable\n", name.c_str());
     sh_.exiting = true;
     sh_.exit_status = 127;  // bash exits a non-interactive shell with 127 here
   }
@@ -972,8 +971,7 @@ static void slice_len_error(Shell &sh, const std::string &lenx) {
   // bash quotes the length expression as WRITTEN (`$(($# - 2))'), not its
   // evaluated value, so an array slice with a negative length reproduces the
   // source text in the diagnostic.
-  std::fprintf(stderr, "%s%s: substring expression < 0\n", sh.err_prefix().c_str(),
-               lenx.c_str());
+  sh.errorf("%s: substring expression < 0\n", lenx.c_str());
   sh.arith_error = true;
   sh.arith_abort = true;  // bash unwinds the whole command list, not just this word
 }
@@ -1444,7 +1442,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
       // it a function substitution with an empty body, which is valid and
       // expands to nothing.  Only the empty body is an error.
       if (body.empty()) {
-        std::fprintf(stderr, "%s${}: bad substitution\n", sh_.err_prefix().c_str());
+        sh_.errorf("${}: bad substitution\n");
         // arith_error alone, as every other bad substitution here does: bash
         // abandons the command list for some of these and not others (not in a
         // here-document body, for one), and gnash does not model that split
@@ -1647,8 +1645,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
           // parse as `${bad-var}').  An EMPTY value keeps the scalar path's
           // `invalid indirect expansion' / defaulting-operator handling.
           if (!okname && !target.empty()) {
-            std::fprintf(stderr, "%s%s: invalid variable name\n", sh_.err_prefix().c_str(),
-                         target.c_str());
+            sh_.errorf("%s: invalid variable name\n", target.c_str());
             sh_.arith_error = true;
             i = end + 1;
             return;
@@ -1683,8 +1680,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
               tset = sh_.get_if_set(target, tmpv);
             }
             if (sh_.opt_nounset && !dfl && !tset) {
-              std::fprintf(stderr, "%s!%s: unbound variable\n", sh_.err_prefix().c_str(),
-                           iname2.c_str());
+              sh_.errorf("!%s: unbound variable\n", iname2.c_str());
               sh_.exiting = true;
               sh_.exit_status = 127;
               i = end + 1;
@@ -2262,8 +2258,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
             }
             emit_values();
           } else {
-            std::fprintf(stderr, "%s%s: bad array subscript\n", sh_.err_prefix().c_str(),
-                         dispname.c_str());
+            sh_.errorf("%s: bad array subscript\n", dispname.c_str());
             sh_.exiting = true;
             sh_.exit_status = 1;
           }
@@ -2275,8 +2270,7 @@ void Expander::expand_dollar(const std::string &t, size_t &i, bool dq, std::stri
           if (empty_test) {
             std::string msg = expand_no_split(word);
             if (msg.empty()) msg = colon ? "parameter null or not set" : "parameter not set";
-            std::fprintf(stderr, "%s%s: %s\n", sh_.err_prefix().c_str(), dispname.c_str(),
-                         msg.c_str());
+            sh_.errorf("%s: %s\n", dispname.c_str(), msg.c_str());
             sh_.exiting = true;
             sh_.exit_status = 127;
           } else {
@@ -2717,8 +2711,7 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
     else if (std::isdigit(static_cast<unsigned char>(r[0]))) {
       // `${#1xyz}': a positional reference that is not a digit run is not a
       // parameter at all, and `#' takes no such operator (more-exp.tests).
-      std::fprintf(stderr, "%s${%s}: bad substitution\n", sh.err_prefix().c_str(),
-                   body.c_str());
+      sh.errorf("${%s}: bad substitution\n", body.c_str());
       sh.arith_error = true;
       return std::string();
     }
@@ -2733,8 +2726,7 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
   if (!sh.is_zsh() && !length && b.size() == 2 &&
       !(std::isalnum(static_cast<unsigned char>(b[0])) || b[0] == '_') &&
       (b[1] == ':' || (b[0] == '#' && std::strchr("/%=^,+", b[1]) != nullptr))) {
-    std::fprintf(stderr, "%s${%s}: bad substitution\n", sh.err_prefix().c_str(),
-                 body.c_str());
+    sh.errorf("${%s}: bad substitution\n", body.c_str());
     sh.arith_error = true;
     return std::string();
   }
@@ -2764,7 +2756,7 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
       bool op_follows = b[sp] == '@' && sp + 1 < b.size() && !pre.empty();
       bool ok = op_follows || ((pre.empty() || ident) && sp + 1 == b.size());
       if (!ok) {
-        std::fprintf(stderr, "%s${%s}: bad substitution\n", sh.err_prefix().c_str(), b.c_str());
+        sh.errorf("${%s}: bad substitution\n", b.c_str());
         sh.arith_error = true;
         return std::string();
       }
@@ -2805,8 +2797,7 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
         std::string sub = b.substr(q + 1, b.size() - q - 2);
         std::string elem = sh.array_get(sh.deref(iname), sub);
         if (elem.empty()) {
-          std::fprintf(stderr, "%s%s%s: invalid indirect expansion\n", sh.err_prefix().c_str(),
-                       iname.c_str(), b.substr(q).c_str());
+          sh.errorf("%s%s: invalid indirect expansion\n", iname.c_str(), b.substr(q).c_str());
           sh.arith_error = true;
           return std::string();
         }
@@ -2834,8 +2825,7 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
         // An empty subscript on the indirection target (`${!arr[]}') is a
         // bad substitution naming the whole body, as bash (issue #653).
         if (sub.empty() && !sh.is_zsh()) {
-          std::fprintf(stderr, "%s${%s}: bad substitution\n", sh.err_prefix().c_str(),
-                       body.c_str());
+          sh.errorf("${%s}: bad substitution\n", body.c_str());
           sh.arith_error = true;
           return std::string();
         }
@@ -2865,8 +2855,7 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
             ni++;
           if (ni < tval.size() && !(tval[ni] == '[' && tval.back() == ']')) okname = false;
           if (!okname) {
-            std::fprintf(stderr, "%s%s: invalid variable name\n", sh.err_prefix().c_str(),
-                         tval.c_str());
+            sh.errorf("%s: invalid variable name\n", tval.c_str());
             sh.arith_error = true;
             return std::string();
           }
@@ -2924,8 +2913,7 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
           if (irest[ro] == '-') return ex.expand_no_split(irest.substr(ro + 1));
           if (irest[ro] == '+') return std::string();
         }
-        std::fprintf(stderr, "%s%s: invalid indirect expansion\n", sh.err_prefix().c_str(),
-                     iname.c_str());
+        sh.errorf("%s: invalid indirect expansion\n", iname.c_str());
         sh.arith_error = true;
         return std::string();
       }
@@ -2939,7 +2927,7 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
   // bad substitution rather than treating the leading `$' as the PID.  (`${$}'
   // alone is still the PID.)
   if (b.size() >= 2 && b[0] == '$' && b[1] == '(') {
-    std::fprintf(stderr, "%s${%s}: bad substitution\n", sh.err_prefix().c_str(), b.c_str());
+    sh.errorf("${%s}: bad substitution\n", b.c_str());
     sh.arith_error = true;
     return std::string();
   }
@@ -2965,7 +2953,7 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
       if (b[k] == '$' && k + 1 < b.size() && b[k + 1] == '\'') continue;
       mb += b[k];
     }
-    std::fprintf(stderr, "%s${%s}: bad substitution\n", sh.err_prefix().c_str(), mb.c_str());
+    sh.errorf("${%s}: bad substitution\n", mb.c_str());
     sh.arith_error = true;
     return std::string();
   }
@@ -3006,8 +2994,7 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
   // for associative arrays too, rather than reading index 0 (issue #653).
   // The assignment form (`arr[]=x') has its own check in the executor.
   if (have_sub && sub.empty() && !sh.is_zsh()) {
-    std::fprintf(stderr, "%s${%s}: bad substitution\n", sh.err_prefix().c_str(),
-                 body.c_str());
+    sh.errorf("${%s}: bad substitution\n", body.c_str());
     sh.arith_error = true;
     return std::string();
   }
@@ -3023,8 +3010,7 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
   // any malformed `!' form was already rejected by the listing validation.)
   if (!name.empty() && name != "!" && p < b.size() && !sh.is_zsh() &&
       !std::strchr(":-+=?#%/^,@~", b[p])) {
-    std::fprintf(stderr, "%s${%s}: bad substitution\n", sh.err_prefix().c_str(),
-                 have_sub ? b.c_str() : body.c_str());
+    sh.errorf("${%s}: bad substitution\n", have_sub ? b.c_str() : body.c_str());
     sh.arith_error = true;
     return std::string();
   }
@@ -3069,8 +3055,7 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
     // text: `${#wheat[$unset]}' -> `[$unset]: bad array subscript', and the
     // command aborts (bash).
     if (assoc_sub && esub.empty() && sub != "@" && sub != "*") {
-      std::fprintf(stderr, "%s[%s]: bad array subscript\n", sh.err_prefix().c_str(),
-                   sub.c_str());
+      sh.errorf("[%s]: bad array subscript\n", sub.c_str());
       sh.arith_error = true;
       return std::string();
     }
@@ -3106,12 +3091,10 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
           // command; the VALUE form names the base and expands to empty with
           // the command still running (`echo ${c[-4]}' prints a blank line).
           if (length) {
-            std::fprintf(stderr, "%s[%s]: bad array subscript\n", sh.err_prefix().c_str(),
-                         sub.c_str());
+            sh.errorf("[%s]: bad array subscript\n", sub.c_str());
             sh.arith_error = true;
           } else {
-            std::fprintf(stderr, "%s%s: bad array subscript\n", sh.err_prefix().c_str(),
-                         name.c_str());
+            sh.errorf("%s: bad array subscript\n", name.c_str());
           }
           return std::string();
         }
@@ -3127,8 +3110,7 @@ static std::string expand_brace_body(Expander &ex, Shell &sh, const std::string 
     if (!set && sh.opt_nounset && !defaulting_op && tsub != "@" && tsub != "*") {
       // bash names the subscript as WRITTEN, not the index it evaluated to:
       // `a=() k=; "${a[k]}"' reports `a[k]', not `a[0]'.
-      std::fprintf(stderr, "%s%s[%s]: unbound variable\n", sh.err_prefix().c_str(),
-                   name.c_str(), sub.c_str());
+      sh.errorf("%s[%s]: unbound variable\n", name.c_str(), sub.c_str());
       sh.exiting = true;
       sh.exit_status = 127;
       return std::string();
@@ -3189,8 +3171,7 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
             (std::isdigit(static_cast<unsigned char>(name[0])) || name == "@" ||
              name == "*" || name == "#" || name == "?" || name == "$" ||
              name == "!" || name == "-")) {
-          std::fprintf(stderr, "%s$%s: cannot assign in this way\n", sh.err_prefix().c_str(),
-                       name.c_str());
+          sh.errorf("$%s: cannot assign in this way\n", name.c_str());
           sh.arith_error = true;
           return std::string();
         }
@@ -3242,7 +3223,7 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
       if (empty) {
         std::string msg = expand_word(word);
         if (msg.empty()) msg = colon ? "parameter null or not set" : "parameter not set";
-        std::fprintf(stderr, "%s%s: %s\n", sh.err_prefix().c_str(), name.c_str(), msg.c_str());
+        sh.errorf("%s: %s\n", name.c_str(), msg.c_str());
         sh.exiting = true;
         sh.exit_status = 127;  // bash: a fatal ${x?} / set -u error exits with 127
         return std::string();
@@ -3524,8 +3505,7 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
     if (!set && sh.vars.find(name) == sh.vars.end()) return std::string();
     if (!valid) {
       std::string bodytxt = name + (have_sub ? "[" + sub + "]" : "") + rest;
-      std::fprintf(stderr, "%s${%s}: bad substitution\n", sh.err_prefix().c_str(),
-                   bodytxt.c_str());
+      sh.errorf("${%s}: bad substitution\n", bodytxt.c_str());
       // Unlike the other bad substitutions (DISCARD, status 1), an invalid
       // transform operator is fatal like `${x?}': bash exits a
       // non-interactive shell with 127 (issue #655).
@@ -3607,8 +3587,7 @@ static std::string apply_param_op(Expander &ex, Shell &sh, const std::string &na
     if (haslen) {
       end = (len < 0) ? n + len : (off > n - len ? n : off + len);
       if (end < off) {
-        std::fprintf(stderr, "%s%lld: substring expression < 0\n", sh.err_prefix().c_str(),
-                     len);
+        sh.errorf("%lld: substring expression < 0\n", len);
         sh.arith_error = true;
         sh.arith_abort = true;  // bash unwinds the whole command list
         return std::string();
@@ -4203,7 +4182,7 @@ std::vector<std::string> Expander::glob_field(const std::string &field, const st
     auto fg = sh_.shopt_opts.find("failglob");
     if (fg != sh_.shopt_opts.end() && fg->second) {
       if (!sh_.arith_error) {
-        std::fprintf(stderr, "%sno match: %s\n", sh_.err_prefix().c_str(), field.c_str());
+        sh_.errorf("no match: %s\n", field.c_str());
         sh_.arith_error = true;
       }
       return {};
