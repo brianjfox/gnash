@@ -7035,6 +7035,915 @@ int bi_personality(Shell &sh, const std::vector<std::string> &argv) {
   return 0;
 }
 
+namespace {  // builtins formerly inlined in run_builtin's dispatch
+
+int bi_shift(Shell &sh, const std::vector<std::string> &argv) {
+  int st = 0;
+  size_t ai = 1;
+  if (ai < argv.size() && argv[ai] == "--") ai++;  // end-of-options marker
+  if (ai < argv.size() && argv[ai] == "--help") {
+    // Help form: the full per-builtin help text is not yet implemented, so
+    // treat it as a no-op success rather than a numeric-argument error.
+    st = 0;
+  } else if (argv.size() - ai > 1) {
+    // Extra arguments: status 2, and bash DISCARDS the rest of the command
+    // list (the reader continues at the next line) in both modes.
+    sh.errorf("shift: too many arguments\n");
+    st = 2;
+    sh.arith_abort = true;
+  } else {
+    long n = 1;
+    std::string a;
+    bool numeric = true;
+    if (ai < argv.size()) {
+      a = argv[ai];
+      char *end = nullptr;
+      n = std::strtol(a.c_str(), &end, 10);
+      numeric = !a.empty() && end != a.c_str() && *end == '\0';
+    }
+    if (!numeric) {
+      sh.errorf("shift: %s: numeric argument required\n", a.c_str());
+      st = 2;
+      sh.posix_special_builtin_error(st);  // posix: fatal (errors10.sub)
+    } else if (n == 0) {
+      st = 0;
+    } else if (n < 0) {
+      // A negative count is always out of range (reported regardless of the
+      // shift_verbose option), status 1.
+      sh.errorf("shift: %s: shift count out of range\n", a.c_str());
+      st = 1;
+    } else if (n > static_cast<long>(sh.positional.size())) {
+      // Too large: silent failure unless `shopt -s shift_verbose' -- which
+      // POSIX mode implies (`command shift 12' reports in errors8.sub).
+      if (sh.shopt_opts["shift_verbose"] || sh.opt_posix)
+        sh.errorf("shift: %s: shift count out of range\n", a.c_str());
+      st = 1;
+    } else {
+      for (long k = 0; k < n; k++) sh.positional.erase(sh.positional.begin());
+      st = 0;
+    }
+  }
+  return st;
+}
+
+int bi_exit(Shell &sh, const std::vector<std::string> &argv) {
+  int st = 0;
+  size_t ci = 1;
+  if (ci < argv.size() && argv[ci] == "--") ci++;
+  const std::string a = ci < argv.size() ? argv[ci] : std::string();
+  char *end = nullptr;
+  long v = a.empty() ? sh.last_status : std::strtol(a.c_str(), &end, 10);
+  if (argv.size() - ci > 1) {
+    // Extra arguments: the shell does NOT exit; status 2 and the rest of
+    // the command list is discarded (both modes -- errors.tests).
+    sh.errorf("exit: too many arguments\n");
+    st = 2;
+    sh.arith_abort = true;
+  } else if (!a.empty() && (end == a.c_str() || *end != '\0')) {
+    // A non-numeric argument is no longer a fatal error: bash reports it
+    // and the shell CONTINUES with status 2 (posix mode still treats the
+    // special-builtin error as fatal).
+    sh.errorf("exit: %s: numeric argument required\n", a.c_str());
+    st = 2;
+    sh.posix_special_builtin_error(st);
+  } else {
+    sh.exiting = true;
+    sh.exit_status = static_cast<int>(v) & 0xff;
+    st = sh.exit_status;
+    // `exit' inside a function runs the EXIT trap with that function's frame
+    // still active ($FUNCNAME), so snapshot the call stack before it unwinds.
+    if (sh.in_function()) { sh.exit_src_frames = sh.src_frames; sh.have_exit_frames = true; }
+  }
+  return st;
+}
+
+int bi_return(Shell &sh, const std::vector<std::string> &argv) {
+  int st = 0;
+  // Argument validation runs FIRST (bash's get_exitstat): extra arguments
+  // and a non-numeric status are reported even at top level, before the
+  // can-only-return check.
+  size_t ri = 1;
+  if (ri < argv.size() && argv[ri] == "--") ri++;
+  char *rend = nullptr;
+  long rv = 0;
+  bool badnum = false;
+  if (ri < argv.size()) {
+    rv = std::strtol(argv[ri].c_str(), &rend, 10);
+    badnum = argv[ri].empty() || rend == argv[ri].c_str() || *rend != '\0';
+  }
+  if (argv.size() - ri > 1) {
+    // Extra arguments: status 2, rest of the command list discarded (the
+    // function is NOT returned from -- errors.tests, both modes).
+    sh.errorf("return: too many arguments\n");
+    st = 2;
+    sh.arith_abort = true;
+  } else if (badnum) {
+    // Non-numeric: report, then RETURN with status 2 in default mode (the
+    // function body after it never runs); at top level the can-only-return
+    // report still follows.  POSIX: fatal (errors10.sub).
+    sh.errorf("return: %s: numeric argument required\n", argv[ri].c_str());
+    st = 2;
+    sh.posix_special_builtin_error(st);
+    if (sh.in_function() || sh.source_depth > 0) {
+      sh.returning = true;
+      sh.exit_status = 2;
+    } else if (!sh.exiting) {
+      sh.errorf("return: can only `return' from a function or sourced script\n");
+    }
+  } else if (!sh.in_function() && sh.source_depth == 0) {
+    // `return' is only meaningful in a function or a sourced script;
+    // elsewhere it is an error and must not unwind the current input (bash).
+    sh.errorf("return: can only `return' from a function or sourced script\n");
+    st = 1;
+    sh.posix_special_builtin_error(st);  // special builtin: fatal in posix
+  } else {
+    sh.returning = true;
+    // A BARE `return' inside a signal trap action reports $? from before the
+    // trap ran -- the action cannot change it (posix interp 1602) -- unless
+    // the action called a function we are still inside.  An explicit
+    // argument always wins.
+    int bare = (sh.trap_ret_depth >= 0 && sh.nest_depth() == sh.trap_ret_depth)
+                   ? sh.trap_saved_status
+                   : sh.last_status;
+    sh.exit_status = ri < argv.size() ? (static_cast<int>(rv) & 0xff) : bare;
+    st = sh.exit_status;
+  }
+  return st;
+}
+
+int bi_break_continue(Shell &sh, const std::vector<std::string> &argv) {
+  const std::string &cmd = argv[0];
+  int st = 0;
+  // Argument validation runs before the loop-level check (bash): extra
+  // arguments discard the rest of the list with status 2, and a
+  // non-numeric count is FATAL to any non-interactive shell in BOTH modes
+  // (`break x' ends the script -- errors4.sub, errors10.sub).
+  size_t bi = 1;
+  if (bi < argv.size() && argv[bi] == "--") bi++;
+  char *bend = nullptr;
+  bool bbad = false;
+  if (bi < argv.size()) {
+    std::strtol(argv[bi].c_str(), &bend, 10);
+    bbad = argv[bi].empty() || bend == argv[bi].c_str() || *bend != '\0';
+  }
+  if (argv.size() - bi > 1) {
+    sh.errorf("%s: too many arguments\n", cmd.c_str());
+    st = 2;
+    sh.arith_abort = true;
+  } else if (bbad) {
+    sh.errorf("%s: %s: numeric argument required\n", cmd.c_str(), argv[bi].c_str());
+    st = 2;
+    if (!sh.interactive) {
+      sh.exiting = true;
+      sh.exit_status = 2;
+    }
+  }
+  // Outside any loop bash prints a diagnostic (suppressed under `set -o
+  // posix') and succeeds without unwinding, rather than silently swallowing
+  // the rest of the input.  Mirrors builtins/break.def check_loop_level().
+  else if (sh.loop_depth == 0) {
+    if (!sh.opt_posix)
+      sh.errorf("%s: only meaningful in a `for', `while', or `until' loop\n", cmd.c_str());
+    st = 0;
+  } else {
+    int n = 1;
+    // Skip a leading `--' end-of-options marker (`break -- 5').
+    size_t ci = 1;
+    if (ci < argv.size() && argv[ci] == "--") ci++;
+    const std::string a = ci < argv.size() ? argv[ci] : std::string();
+    char *end = nullptr;
+    long v = a.empty() ? 1 : std::strtol(a.c_str(), &end, 10);
+    if (!a.empty() && (end == a.c_str() || *end != '\0')) {
+      // A non-numeric count: bash aborts the command (get_numeric_arg); we
+      // report and terminate every enclosing loop, the closest observable
+      // approximation without the top-level throw.
+      sh.errorf("%s: %s: numeric argument required\n", cmd.c_str(), a.c_str());
+      sh.break_count = sh.loop_depth;
+      st = 1;
+    } else if (v <= 0) {
+      // A non-positive count breaks out of every enclosing loop (bash sets
+      // `breaking = loop_level' for both break and continue), status 1.
+      sh.errorf("%s: %s: loop count out of range\n", cmd.c_str(), a.c_str());
+      sh.break_count = sh.loop_depth;
+      st = 1;
+    } else {
+      // Requesting more levels than are active caps at the outermost loop, so
+      // the remaining count never unwinds past the loop nest.
+      n = static_cast<int>(v);
+      if (n > sh.loop_depth) n = sh.loop_depth;
+      if (cmd == "break") sh.break_count = n;
+      else sh.continue_count = n;
+      st = 0;
+    }
+  }
+  return st;
+}
+
+int bi_eval(Shell &sh, const std::vector<std::string> &argv) {
+  int st = 0;
+  // `eval' takes no options besides `--'; a leading `-X' is an error.
+  size_t ai = 1;
+  if (ai < argv.size() && argv[ai] != "--" && argv[ai].size() >= 2 && argv[ai][0] == '-') {
+    sh.errorf("eval: %s: invalid option\n", argv[ai].c_str());
+    std::fprintf(stderr, "eval: usage: eval [arg ...]\n");
+    st = 2;
+  } else {
+    if (ai < argv.size() && argv[ai] == "--") ai++;
+    std::string saved_ctx = sh.error_context;
+    sh.error_context = "eval";  // parse errors report `NAME: eval: line N: ...'
+    // $LINENO inside eval continues from the eval command's line (bash), so an
+    // eval on line 42 whose body is `echo $LINENO' prints 42.
+    int saved_base = sh.lineno_base;
+    if (sh.cur_lineno > 0) sh.lineno_base = sh.cur_lineno - 1;
+    st = sh.run_string(join(argv, ai));
+    sh.lineno_base = saved_base;
+    sh.error_context = saved_ctx;
+  }
+  return st;
+}
+
+int bi_source(Shell &sh, const std::vector<std::string> &argv) {
+  const std::string &cmd = argv[0];
+  int st = 0;
+  // `-p PATH' gives an explicit colon-separated search path (bash 5.2+).
+  size_t ai = 1;
+  bool pflag = false;
+  std::string ppath;
+  for (; ai < argv.size(); ai++) {
+    if (argv[ai] == "--") { ai++; break; }
+    if (argv[ai] == "-p") { pflag = true; if (ai + 1 < argv.size()) ppath = argv[++ai]; continue; }
+    if (argv[ai].size() >= 2 && argv[ai][0] == '-') {  // `. -i': unknown option
+      sh.errorf("%s: %s: invalid option\n", cmd.c_str(), argv[ai].c_str());
+      std::fprintf(stderr, "%s: usage: %s [-p path] filename [arguments]\n",
+                   cmd.c_str(), cmd.c_str());
+      return 2;
+    }
+    break;
+  }
+  if (ai >= argv.size()) {
+    sh.errorf("%s: filename argument required\n", cmd.c_str());
+    std::fprintf(stderr, "%s: usage: %s [-p path] filename [arguments]\n",
+                 cmd.c_str(), cmd.c_str());
+    return 2;
+  }
+  const std::string &fname = argv[ai];
+  if (sh.opt_restricted && fname.find('/') != std::string::npos) {
+    sh.errorf("%s: %s: restricted\n", cmd.c_str(), fname.c_str());
+    return 1;
+  }
+  // Resolve the file: a name with a slash is used as-is; otherwise search the
+  // `-p' path, or $PATH when the `sourcepath' shopt is on, falling back to the
+  // current directory.
+  std::string path = fname;
+  auto search = [&](const std::string &plist) -> bool {
+    size_t start = 0;
+    while (start <= plist.size()) {
+      size_t e = plist.find(':', start);
+      std::string dir = plist.substr(start, e == std::string::npos ? std::string::npos : e - start);
+      if (dir.empty()) dir = ".";
+      std::string cand = dir + "/" + fname;
+      if (access(cand.c_str(), R_OK) == 0) { path = cand; return true; }
+      if (e == std::string::npos) break;
+      start = e + 1;
+    }
+    return false;
+  };
+  bool giveup = false;
+  if (fname.find('/') != std::string::npos) {
+    // used directly
+  } else if (pflag) {
+    // `-p' searches only the given path; a miss is a hard failure.
+    if (!search(ppath)) {
+      sh.errorf("%s: %s: file not found\n", cmd.c_str(), fname.c_str());
+      st = 1;
+      giveup = true;
+      sh.posix_special_builtin_error(st);  // `.'/source: fatal in posix
+    }
+  } else if (sh.opt_posix) {
+    // POSIX `.'/source: search $PATH only -- NO current-directory fallback
+    // even when the file exists there.  A miss is `.: NAME: file not found'
+    // and (unshielded) fatal for a non-interactive posix shell.
+    const char *penv = std::getenv("PATH");
+    if (!search(penv ? penv : "")) {
+      sh.errorf("%s: %s: file not found\n", cmd.c_str(), fname.c_str());
+      st = 1;
+      giveup = true;
+      sh.posix_special_builtin_error(st);
+    }
+  } else if (sh.shopt_opts["sourcepath"] && access(fname.c_str(), R_OK) != 0) {
+    const char *penv = std::getenv("PATH");
+    search(penv ? penv : "");  // on a miss, path stays fname (current directory)
+  }
+  if (!giveup) {
+    std::ifstream f(path);
+    if (f) {
+      std::ostringstream ss; ss << f.rdbuf();
+      // Extra arguments become the sourced file's positional parameters
+      // (`. file a b'); with none, it inherits the caller's positionals.
+      std::vector<std::string> saved_pos;
+      bool set_pos = argv.size() > ai + 1;
+      bool saved_params_flag = sh.params_set_builtin;
+      if (set_pos) {
+        saved_pos = sh.positional;
+        sh.positional.assign(argv.begin() + ai + 1, argv.end());
+        sh.params_set_builtin = false;
+      }
+      // A sourced file becomes the innermost BASH_SOURCE frame; use the
+      // resolved path (bash records the PATH-found path, not the bare name),
+      // so ${BASH_SOURCE[0]} lets a script locate itself.  The call line is
+      // where `source' appears in the current file.
+      int src_call_line = sh.cur_lineno;  // where `source' appears; see below
+      sh.push_src_frame("source", path, sh.cur_lineno, false);
+      // A sourced file has its own line numbering starting at 1 ($LINENO, the
+      // DEBUG trap, and functions it defines all use the file's own lines).
+      int saved_src_base = sh.lineno_base;
+      sh.lineno_base = 0;
+      // A sourced file does not inherit the DEBUG trap unless functrace is
+      // set (source.def restores the default for the duration).  bash lifts
+      // the suppression in an unwind frame that runs AFTER `source_file',
+      // and `source_file' is what fires the RETURN trap -- so the RETURN
+      // trap's own body produces no DEBUG line either.  Hence the window
+      // below closes past the RETURN trap, not at the end of the file.
+      std::string hidden_debug;
+      bool hid_debug = false;
+      if (!sh.opt_functrace) {
+        auto dit = sh.traps.find("DEBUG");
+        if (dit != sh.traps.end()) {
+          hidden_debug = dit->second;
+          hid_debug = true;
+          sh.traps.erase(dit);
+        }
+      }
+      sh.source_depth++;  // `return' is legal while sourcing
+      st = sh.run_string(ss.str());
+      sh.source_depth--;
+      sh.lineno_base = saved_src_base;
+      // `return' inside a sourced file ends the file (and sets its status),
+      // like reaching EOF -- it must not unwind past `source' or exit the
+      // shell (bash semantics; e.g. /etc/bashrc does `[ -z "$PS1" ] && return').
+      if (sh.returning) { sh.returning = false; st = sh.exit_status; }
+      sh.pop_src_frame();
+      // A sourced file is a FUNCTION FRAME to bash: leaving it fires the
+      // DEBUG and RETURN traps, reporting the line `source' was called on --
+      // exactly as leaving a function body re-reports its definition line.
+      // The frame is already popped, so $FUNCNAME names the caller.
+      {
+        sh.cur_lineno = src_call_line;
+        // Only the RETURN trap is fired here: the DEBUG line that precedes it
+        // is the one its own body produces under functrace, exactly as when a
+        // function body returns.
+        //
+        // Unlike a function, a sourced file does NOT gate this on functrace:
+        // `source_file' runs the trap unconditionally, so a `source' at top
+        // level fires it either way.  Inside a function it follows the
+        // function's own rule, because that is where bash restored the
+        // default trap.  See Shell::return_trap_fires().
+        if (sh.return_trap_fires()) sh.run_return_trap(st);
+      }
+      // Restore the DEBUG trap -- but only if the sourced file did not set
+      // one of its own, which is what bash's trap_if_untrapped() amounts to.
+      if (hid_debug && !sh.traps.count("DEBUG")) sh.traps["DEBUG"] = hidden_debug;
+      // Restore the caller's parameters UNLESS the sourced script ran the
+      // `set' builtin at top level -- then its parameters stick (bash).
+      if (set_pos) {
+        if (!(!sh.in_function() && sh.params_set_builtin)) sh.positional = saved_pos;
+        sh.params_set_builtin = saved_params_flag;
+      }
+    } else {
+      sh.errorf("%s: %s\n", fname.c_str(), std::strerror(errno));
+      st = 1;
+      sh.posix_special_builtin_error(st);  // `.'/source: fatal in posix
+    }
+  }
+  return st;
+}
+
+int bi_wait(Shell &sh, const std::vector<std::string> &argv) {
+  int st = 0;
+  // Options: -f (wait for termination, not just a status change), -n (return
+  // after the next job finishes) and -p VAR (store the finished job's pid in
+  // VAR).  A leading `-<digit>' is a (negative) id, not an option.
+  bool nflag = false, have_p = false, opt_err = false;
+  std::string pvar, badopt;
+  size_t ai = 1;
+  for (; ai < argv.size(); ai++) {
+    const std::string &o = argv[ai];
+    if (o == "--") { ai++; break; }
+    if (o.size() < 2 || o[0] != '-' ||
+        std::isdigit(static_cast<unsigned char>(o[1])))
+      break;
+    bool consumed_p = false;
+    for (size_t k = 1; k < o.size() && !opt_err; k++) {
+      char c = o[k];
+      if (c == 'n') nflag = true;
+      else if (c == 'f') { /* no async status tracking: -f is a no-op here */ }
+      else if (c == 'p') {
+        have_p = true;
+        if (k + 1 < o.size()) pvar = o.substr(k + 1);
+        else if (ai + 1 < argv.size()) pvar = argv[++ai];
+        consumed_p = true;
+        break;
+      } else { opt_err = true; badopt = std::string("-") + c; }
+    }
+    if (opt_err || consumed_p) { if (opt_err) break; else continue; }
+  }
+  if (opt_err) {
+    sh.errorf("wait: %s: invalid option\n", badopt.c_str());
+    std::fprintf(stderr, "wait: usage: wait [-fn] [-p var] [id ...]\n");
+    st = 2;
+  } else {
+    long finished_pid = -1;
+    bool found = false;
+    if (nflag) {
+      // `-n': return after the NEXT of the named jobs finishes (or any job
+      // when none are named).  Resolve each id to a job; an unknown `%spec'
+      // reports "no such job" but the wait proceeds with the rest.
+      std::vector<int> ids;
+      for (size_t k = ai; k < argv.size(); k++) {
+        Shell::Job *j = sh.job_by_spec(argv[k]);
+        if (j) ids.push_back(j->id);
+        else {
+          sh.errorf("wait: %s: no such job\n", argv[k].c_str());
+          st = 127;
+        }
+      }
+      // With ids named but none resolvable, there is nothing to wait for.
+      if (ai < argv.size() && ids.empty()) st = 127;
+      else st = sh.wait_next(ids, &finished_pid, &found);
+    } else if (ai < argv.size()) {
+      // Wait for every named id (bash waits for all of them).  The last one's
+      // pid is the -p result.
+      for (size_t k = ai; k < argv.size(); k++) {
+        const std::string &spec = argv[k];
+        if (!spec.empty() && spec[0] == '%') {
+          // A `%jobspec' that names no job: bash reports it and returns 127.
+          Shell::Job *j = sh.job_by_spec(spec);
+          if (!j) {
+            sh.errorf("wait: %s: no such job\n", spec.c_str());
+            st = 127;
+            continue;
+          }
+          int wid = j->id;
+          if (!j->pids.empty()) { finished_pid = j->pids.front(); found = true; }
+          for (long p : j->pids) st = sh.wait_for_pid(p);
+          // A waited-for job is consumed: bash removes it so its number frees
+          // up for reuse by the next async job.
+          sh.remove_jobs_if([wid](const Shell::Job &x) { return x.id == wid; });
+        } else {
+          // Anything not a `%jobspec' must be a decimal pid.
+          bool numeric = !spec.empty();
+          for (char c : spec)
+            if (!std::isdigit(static_cast<unsigned char>(c))) { numeric = false; break; }
+          if (!numeric) {
+            sh.errorf("wait: `%s': not a pid or valid job spec\n", spec.c_str());
+            st = 1;
+            continue;
+          }
+          long pp = std::atol(spec.c_str());
+          Shell::Job *pj = sh.job_by_spec(spec);
+          if (!pj) {
+            // A process-substitution child is waitable too, though it is not
+            // a job: `cat <(exit 123); wait "$!"' reports 123 (procsub1.sub).
+            bool is_procsub = false;
+            for (const auto &ps : sh.procsubs)
+              if (ps.pid == pp) { is_procsub = true; break; }
+            if (is_procsub) {
+              st = sh.wait_for_pid(pp);
+              finished_pid = pp;
+              found = true;
+              continue;
+            }
+            auto rps = sh.reaped_procsub_status.find(pp);
+            if (rps != sh.reaped_procsub_status.end()) {
+              st = rps->second;
+              finished_pid = pp;
+              found = true;
+              sh.reaped_procsub_status.erase(rps);
+              continue;
+            }
+            sh.errorf("wait: pid %ld is not a child of this shell\n", pp);
+            st = 127;
+            continue;
+          }
+          int wid = pj->id;
+          st = sh.wait_for_pid(pp);
+          finished_pid = pp;
+          found = true;
+          // The waited-for job is consumed once it is fully done, so its
+          // number frees up for reuse (bash removes it after `wait pid').
+          sh.remove_jobs_if(
+              [wid](const Shell::Job &x) { return x.id == wid && x.done; });
+        }
+      }
+    } else if (!have_p) {
+      st = sh.wait_all();
+    } else {
+      // `-p var' with no ids and no `-n': reap without blocking; the var is
+      // left unset (bash) when no job supplied a pid.
+      sh.reap_jobs(false);
+      st = 0;
+    }
+    // -p VAR: store the finished pid, or unset VAR when no job was waited for.
+    // The name is validated like other builtins, and an array-element
+    // subscript is arithmetic (a bad one raises bash's arithmetic diagnostic).
+    if (have_p) {
+      auto lb = pvar.find('[');
+      std::string base = pvar, psub;
+      bool subscripted = lb != std::string::npos && !pvar.empty() && pvar.back() == ']';
+      if (subscripted) {
+        base = pvar.substr(0, lb);
+        psub = pvar.substr(lb + 1, pvar.size() - lb - 2);
+      }
+      if (!valid_identifier(base)) {
+        sh.errorf("wait: `%s': not a valid identifier\n", pvar.c_str());
+        st = 1;
+      } else if (found && finished_pid >= 0) {
+        if (subscripted) {
+          if (!sh.array_expand_once_ok(base, psub)) st = 1;  // arith error printed
+          else sh.array_set(base, psub, std::to_string(finished_pid));
+        } else {
+          sh.set(pvar, std::to_string(finished_pid));
+        }
+      } else if (!subscripted) {
+        // No job finished: bash unsets the -p variable.  A readonly target
+        // cannot be unset and is reported as such.
+        auto it = sh.vars.find(sh.deref(base));
+        if (it != sh.vars.end() && it->second.readonly) {
+          sh.errorf("wait: %s: cannot unset: readonly variable\n", base.c_str());
+          st = 1;
+        } else {
+          sh.unset(pvar);
+        }
+      }
+    }
+  }
+  return st;
+}
+
+int bi_jobs(Shell &sh, const std::vector<std::string> &argv) {
+  int st = 0;
+  // jobs [-lnprs] [jobspec]: -l long (with pgid), -p pids only, -r running
+  // only, -s stopped only, -n changed-only (we have no async change tracking).
+  bool jl = false, jp = false, jr = false, js = false;
+  std::string jspec;
+  bool jbad = false;
+  for (size_t k = 1; k < argv.size(); k++) {
+    const std::string &o = argv[k];
+    if (o == "--") continue;
+    if (o.size() >= 2 && o[0] == '-' && o[1] != '%') {
+      for (size_t c = 1; c < o.size(); c++) {
+        switch (o[c]) {
+          case 'l': jl = true; break;
+          case 'p': jp = true; break;
+          case 'r': jr = true; break;
+          case 's': js = true; break;
+          case 'n': break;  // no async change tracking: nothing extra to show
+          default: jbad = true; break;
+        }
+      }
+    } else {
+      jspec = o;
+    }
+  }
+  if (jbad) {
+    std::fprintf(stderr, "jobs: usage: jobs [-lnprs] [jobspec ...] or jobs -x command [args]\n");
+    st = 1;
+  } else {
+    sh.print_jobs(jspec, jl, jp, jr, js);
+    st = 0;
+  }
+  return st;
+}
+
+int bi_fg(Shell &sh, const std::vector<std::string> &argv) {
+  int st = 0;
+  std::string spec = argv.size() > 1 ? argv[1] : "";
+  bool cur_spec = spec.empty() || spec == "%" || spec == "%%" || spec == "%+" || spec == "%-";
+  if (!sh.job_control && !sh.opt_monitor) {
+    sh.errorf("fg: no job control\n");
+    st = 1;
+  } else if (sh.no_current_job && cur_spec) {
+    // A command-substitution subshell has no current job to bring forward.
+    sh.errorf("fg: no current jobs\n");
+    st = 1;
+  } else if (Shell::Job *j = sh.job_by_spec(spec)) {
+    if (!j->monitored) {
+      // The job was started when job control was inactive (bash's
+      // IS_JOBCONTROL(job) == 0), so it cannot be brought to the foreground
+      // even though monitor mode is on now.
+      sh.errorf("fg: job %d started without job control\n", j->id);
+      st = 1;
+    } else {
+      std::printf("%s\n", j->command.c_str());  // bash echoes the command
+      std::fflush(stdout);
+      st = sh.foreground_job(*j, true);
+    }
+  } else {
+    sh.errorf("fg: %s: no such job\n", spec.empty() ? "current" : spec.c_str());
+    st = 1;
+  }
+  return st;
+}
+
+int bi_bg(Shell &sh, const std::vector<std::string> &argv) {
+  int st = 0;
+  std::string spec = argv.size() > 1 ? argv[1] : "";
+  if (!sh.job_control) {
+    sh.errorf("bg: no job control\n");
+    st = 1;
+  } else if (Shell::Job *j = sh.job_by_spec(spec)) {
+    sh.background_job(*j, true);
+    std::printf("[%d]+ %s &\n", j->id, j->command.c_str());  // bash echoes it
+    std::fflush(stdout);
+    st = 0;
+  } else {
+    sh.errorf("bg: %s: no such job\n", spec.empty() ? "current" : spec.c_str());
+    st = 1;
+  }
+  return st;
+}
+
+int bi_disown(Shell &sh, const std::vector<std::string> &argv) {
+  int st = 0;
+  // disown [-h] [-ar] [jobspec ... | pid ...]: -a all jobs, -r running jobs
+  // only, -h keep the job but mark it to skip SIGHUP.  With no jobspec (and no
+  // -a/-r) it acts on the current job.  We drop disowned jobs from the table
+  // (the -h "keep but no HUP" nuance is not modelled -- we have no HUP-on-exit).
+  bool all = false, running_only = false, hold = false;
+  std::vector<std::string> specs;
+  for (size_t k = 1; k < argv.size(); k++) {
+    const std::string &o = argv[k];
+    if (o.size() >= 2 && o[0] == '-' && o != "--") {
+      for (size_t c = 1; c < o.size(); c++) {
+        if (o[c] == 'a') all = true;
+        else if (o[c] == 'r') running_only = true;
+        else if (o[c] == 'h') hold = true;
+      }
+    } else if (o == "--") {
+      continue;
+    } else {
+      specs.push_back(o);
+    }
+  }
+  std::vector<int> drop;
+  if (all || running_only) {
+    for (const auto &x : sh.jobs)
+      if (!running_only || (x.running && !x.done)) drop.push_back(x.id);
+  } else if (!specs.empty()) {
+    for (const auto &s : specs)
+      if (Shell::Job *j = sh.job_by_spec(s)) drop.push_back(j->id);
+  } else if (Shell::Job *j = sh.job_by_spec("")) {
+    drop.push_back(j->id);
+  }
+  if (!hold) {
+    sh.jobs.erase(std::remove_if(sh.jobs.begin(), sh.jobs.end(),
+                                 [&](const Shell::Job &x) {
+                                   return std::find(drop.begin(), drop.end(), x.id) !=
+                                          drop.end();
+                                 }),
+                  sh.jobs.end());
+  }
+  st = 0;
+  return st;
+}
+
+int bi_command(Shell &sh, const std::vector<std::string> &argv) {
+  int st = 0;
+  // Execution of `command NAME args' is handled in the executor (run_simple),
+  // which runs NAME through the normal builtin/external path with shell
+  // functions bypassed.  Only the describe forms (-v/-V) and option errors
+  // reach here; the name-lookup helpers this needs live in this file.
+  size_t i = 1;
+  bool desc_v = false, desc_V = false, bad = false;
+  std::string badopt;
+  for (; i < argv.size(); i++) {
+    const std::string &o = argv[i];
+    if (o == "--") { i++; break; }
+    if (o.size() < 2 || o[0] != '-') break;
+    for (size_t k = 1; k < o.size(); k++) {
+      if (o[k] == 'v') desc_v = true;
+      else if (o[k] == 'V') desc_V = true;
+      else if (o[k] == 'p') {  // default PATH; disallowed under restricted
+        if (sh.opt_restricted) {
+          sh.errorf("command: -p: restricted\n");
+          return 2;
+        }
+      }
+      else { bad = true; badopt = std::string("-") + o[k]; break; }
+    }
+    if (bad) break;
+  }
+  if (bad) {
+    sh.errorf("command: %s: invalid option\n", badopt.c_str());
+    std::fprintf(stderr, "command: usage: command [-pVv] command [arg ...]\n");
+    st = 2;
+  } else if (desc_V) {
+    // `command -V NAME...' == `type NAME...', but a not-found name is reported
+    // against `command' (bi_type uses argv[0] for that diagnostic).
+    std::vector<std::string> t = {"command"};
+    t.insert(t.end(), argv.begin() + i, argv.end());
+    st = bi_type(sh, t);
+  } else if (desc_v) {
+    // For each name print the alias definition (reusable form), the name
+    // (function/builtin/keyword), or the full path (hashed, then $PATH);
+    // 0 if all resolved, 1 otherwise.  Like `type', an alias is reported
+    // only when aliases would actually expand, and a hashed path is
+    // reported (and counted as a hit) before any $PATH search.
+    bool aliases_on = sh.interactive;
+    auto eit = sh.shopt_opts.find("expand_aliases");
+    if (eit != sh.shopt_opts.end() && eit->second) aliases_on = true;
+    st = (i < argv.size()) ? 0 : 1;
+    for (size_t j = i; j < argv.size(); j++) {
+      const std::string &n = argv[j];
+      if (aliases_on && sh.aliases.count(n)) {
+        std::printf("alias %s=%s\n", n.c_str(), single_quote(sh.aliases.at(n)).c_str());
+      } else if (sh.functions.count(n) || is_builtin_name(n) || is_reserved_word(n)) {
+        std::printf("%s\n", n.c_str());
+      } else if (const std::string *hp = sh.hash_lookup(n)) {
+        std::printf("%s\n", hp->c_str());
+      } else {
+        std::string p = find_in_path(sh, n);
+        if (!p.empty()) std::printf("%s\n", p.c_str());
+        else st = 1;
+      }
+    }
+  } else {
+    // No -v/-V: execution is handled in run_simple; reached only defensively
+    // (e.g. run_builtin called directly).  Run the target if it is a builtin.
+    std::vector<std::string> rest(argv.begin() + i, argv.end());
+    if (!rest.empty()) run_builtin(sh, rest, &st);
+    else st = 0;
+  }
+  return st;
+}
+
+int bi_exec(Shell &sh, const std::vector<std::string> &argv) {
+  int st = 0;
+  if (sh.opt_restricted) {
+    sh.errorf("exec: restricted\n");
+    return 2;
+  }
+  // Options: -a NAME (argv[0] for the command), -c (empty environment),
+  // -l (login: prefix argv[0] with '-').
+  size_t i = 1;
+  std::string a_name;
+  bool have_a = false, clear_env = false, login = false, bad_opt = false;
+  for (; i < argv.size(); i++) {
+    const std::string &o = argv[i];
+    if (o == "--") { i++; break; }
+    if (o.size() < 2 || o[0] != '-') break;
+    bool consumed_next = false;
+    for (size_t k = 1; k < o.size(); k++) {
+      if (o[k] == 'c') clear_env = true;
+      else if (o[k] == 'l') login = true;
+      else if (o[k] == 'a') {
+        have_a = true;
+        if (k + 1 < o.size()) { a_name = o.substr(k + 1); }
+        else if (i + 1 < argv.size()) { a_name = argv[i + 1]; consumed_next = true; }
+        k = o.size();
+      } else { bad_opt = true; break; }
+    }
+    if (bad_opt) break;
+    if (consumed_next) i++;
+  }
+  if (bad_opt) {
+    sh.errorf("exec: %s: invalid option\n", argv[i].c_str());
+    std::fprintf(stderr, "exec: usage: exec [-cl] [-a name] [command "
+                         "[argument ...]] [redirection ...]\n");
+    st = 2;
+  } else if (i >= argv.size()) {
+    // No command word: `exec' with only options/redirections is a no-op here
+    // (redirections are applied by the caller and made permanent).
+    st = 0;
+  } else {
+    const std::string &target = argv[i];
+    // Resolve through the shell's $PATH (what `type'/normal execution use), so
+    // exec finds exactly what the rest of the shell would run.
+    std::string full;
+    bool found = false;
+    if (target.find('/') != std::string::npos) {
+      full = target;
+      found = true;  // let execve report ENOENT/EACCES for an explicit path
+    } else {
+      std::vector<std::string> m = find_all_in_path(sh, target);
+      if (!m.empty()) { full = m[0]; found = true; }
+      else {
+        // No executable match: if a file by that name merely exists on $PATH,
+        // use it so execve reports the real error (e.g. EACCES), as bash does.
+        std::string path = sh.get("PATH");
+        size_t p = 0;
+        while (p <= path.size()) {
+          size_t q = path.find(':', p);
+          std::string dir = path.substr(p, q == std::string::npos ? std::string::npos : q - p);
+          if (dir.empty()) dir = ".";
+          std::string cand = dir + "/" + target;
+          if (access(cand.c_str(), F_OK) == 0) { full = cand; found = true; break; }
+          if (q == std::string::npos) break;
+          p = q + 1;
+        }
+      }
+    }
+    // argv[0] for the command: -a NAME, else the name as typed; -l adds '-'.
+    std::string a0 = have_a ? a_name : target;
+    if (login) a0 = "-" + a0;
+    std::vector<char *> cargv;
+    cargv.push_back(const_cast<char *>(a0.c_str()));
+    for (size_t j = i + 1; j < argv.size(); j++)
+      cargv.push_back(const_cast<char *>(argv[j].c_str()));
+    cargv.push_back(nullptr);
+    // Pass the shell's current environment (empty under -c) explicitly via
+    // execve, so the live shell's `environ' is never disturbed on failure.
+    std::vector<std::string> envs;
+    if (!clear_env) envs = sh.environ_block();
+    std::vector<char *> envp;
+    for (auto &e : envs) envp.push_back(const_cast<char *>(e.c_str()));
+    envp.push_back(nullptr);
+
+    int code = 127;
+    if (found) {
+      // The process image is about to be replaced, so an interactive
+      // session's history has to reach $HISTFILE now or be lost.  Not from a
+      // subshell: that history belongs to the parent, which will write it.
+      if (sh.interactive && sh.subshell_level == 0) save_shell_history(sh);
+      std::fflush(nullptr);
+      execve(full.c_str(), cargv.data(), envp.data());
+      // execve returned: it failed.  bash reports this as "<path>: <error>"
+      // (no "exec:" prefix), using the resolved path.
+      code = (errno == EACCES) ? 126 : 127;
+      sh.errorf("%s: %s\n", full.c_str(), std::strerror(errno));
+    } else {
+      sh.errorf("exec: %s: not found\n", target.c_str());
+    }
+    // bash: an interactive shell (or `shopt -s execfail') stays alive and
+    // returns failure; a non-interactive shell exits.
+    auto ef = sh.shopt_opts.find("execfail");
+    bool execfail = ef != sh.shopt_opts.end() && ef->second;
+    if (sh.interactive || execfail)
+      st = code;
+    else
+      _exit(code);
+  }
+  return st;
+}
+
+// The builtin table: name -> handler, for every builtin whose whole dispatch
+// is the plain `st = fn(sh, argv)' call.  The builtins that do not fit that
+// shape -- the no-ops, the multiple-name aliases, and the declare family with
+// its extra parameters -- are handled in run_builtin itself; this table is
+// the one place to look when adding a builtin.
+using BiFn = int (*)(Shell &, const std::vector<std::string> &);
+struct BuiltinEntry {
+  const char *name;
+  BiFn fn;
+};
+static const BuiltinEntry kBuiltinTable[] = {
+    {"echo", bi_echo},
+    {"printf", bi_printf},
+    {"pwd", bi_pwd},
+    {"cd", bi_cd},
+    {"dirs", bi_dirs},
+    {"pushd", bi_pushd},
+    {"popd", bi_popd},
+    {"unset", bi_unset},
+    {"set", bi_set},
+    {"read", bi_read},
+    {"shift", bi_shift},
+    {"exit", bi_exit},
+    {"return", bi_return},
+    {"eval", bi_eval},
+    {"let", bi_let},
+    {"type", bi_type},
+    {"help", bi_help},
+    {"builtin", bi_builtin},
+    {"logout", bi_logout},
+    {"hash", bi_hash},
+    {"shopt", bi_shopt},
+    {"ulimit", bi_ulimit},
+    {"enable", bi_enable},
+    {"caller", bi_caller},
+    {"alias", bi_alias},
+    {"unalias", bi_unalias},
+    {"history", bi_history},
+    {"fc", bi_fc},
+    {"compgen", bi_compgen},
+    {"complete", bi_complete},
+    {"compopt", bi_compopt},
+    {"bind", bi_bind},
+    {"trap", bi_trap},
+    {"umask", bi_umask},
+    {"getopts", bi_getopts},
+    {"wait", bi_wait},
+    {"jobs", bi_jobs},
+    {"fg", bi_fg},
+    {"bg", bi_bg},
+    {"disown", bi_disown},
+    {"kill", bi_kill},
+    {"command", bi_command},
+    {"exec", bi_exec},
+};
+
+}  // namespace
+
 bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
   if (argv.empty()) return false;
   const std::string &cmd = argv[0];
@@ -7065,390 +7974,27 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
     if (kZshNoops.count(cmd)) { if (status) *status = 0; return true; }
   }
 
-  if (cmd == ":" || cmd == "true") st = 0;
-  else if (cmd == "false") st = 1;
-  else if (cmd == "echo") st = bi_echo(sh, argv);
-  else if (cmd == "printf") st = bi_printf(sh, argv);
-  else if (cmd == "pwd") st = bi_pwd(sh, argv);
-  else if (cmd == "cd") st = bi_cd(sh, argv);
-  else if (cmd == "dirs") st = bi_dirs(sh, argv);
-  else if (cmd == "pushd") st = bi_pushd(sh, argv);
-  else if (cmd == "popd") st = bi_popd(sh, argv);
-  else if (cmd == "mapfile" || cmd == "readarray") st = bi_mapfile(sh, argv);
-  else if (cmd == "export") {
-    st = bi_export(sh, argv);
-    // POSIX: a failing export (invalid identifier, assignment error) is a
-    // special-builtin error, fatal to a non-interactive shell unless run via
-    // `command' (errors11.sub).
-    if (st != 0) sh.posix_special_builtin_error(st);
-  }
-  else if (cmd == "unset") st = bi_unset(sh, argv);
-  else if (cmd == "set") st = bi_set(sh, argv);
-  // `personality' is always available; `emulate' is its zsh-mode alias.
-  else if (cmd == "personality" || (cmd == "emulate" && sh.is_zsh()))
+  // The builtins that do not fit the plain table below: the no-ops, the
+  // multiple-name aliases, and the declare family with its extra parameters.
+  if (cmd == ":" || cmd == "true" || cmd == "times" || cmd == "suspend")
+    st = 0;
+  else if (cmd == "false")
+    st = 1;
+  else if (cmd == "mapfile" || cmd == "readarray")
+    st = bi_mapfile(sh, argv);
+  else if (cmd == "test")
+    st = bi_test(sh, argv, false);
+  else if (cmd == "[")
+    st = bi_test(sh, argv, true);
+  else if (cmd == "break" || cmd == "continue")
+    st = bi_break_continue(sh, argv);
+  else if (cmd == "source" || cmd == ".")
+    st = bi_source(sh, argv);
+  else if (cmd == "personality" || (cmd == "emulate" && sh.is_zsh())) {
+    // `personality' is always available; `emulate' is its zsh-mode alias.
     st = bi_personality(sh, argv);
-  else if (cmd == "read") st = bi_read(sh, argv);
-  else if (cmd == "test") st = bi_test(sh, argv, false);
-  else if (cmd == "[") st = bi_test(sh, argv, true);
-  else if (cmd == "shift") {
-    size_t ai = 1;
-    if (ai < argv.size() && argv[ai] == "--") ai++;  // end-of-options marker
-    if (ai < argv.size() && argv[ai] == "--help") {
-      // Help form: the full per-builtin help text is not yet implemented, so
-      // treat it as a no-op success rather than a numeric-argument error.
-      st = 0;
-    } else if (argv.size() - ai > 1) {
-      // Extra arguments: status 2, and bash DISCARDS the rest of the command
-      // list (the reader continues at the next line) in both modes.
-      sh.errorf("shift: too many arguments\n");
-      st = 2;
-      sh.arith_abort = true;
-    } else {
-      long n = 1;
-      std::string a;
-      bool numeric = true;
-      if (ai < argv.size()) {
-        a = argv[ai];
-        char *end = nullptr;
-        n = std::strtol(a.c_str(), &end, 10);
-        numeric = !a.empty() && end != a.c_str() && *end == '\0';
-      }
-      if (!numeric) {
-        sh.errorf("shift: %s: numeric argument required\n", a.c_str());
-        st = 2;
-        sh.posix_special_builtin_error(st);  // posix: fatal (errors10.sub)
-      } else if (n == 0) {
-        st = 0;
-      } else if (n < 0) {
-        // A negative count is always out of range (reported regardless of the
-        // shift_verbose option), status 1.
-        sh.errorf("shift: %s: shift count out of range\n", a.c_str());
-        st = 1;
-      } else if (n > static_cast<long>(sh.positional.size())) {
-        // Too large: silent failure unless `shopt -s shift_verbose' -- which
-        // POSIX mode implies (`command shift 12' reports in errors8.sub).
-        if (sh.shopt_opts["shift_verbose"] || sh.opt_posix)
-          sh.errorf("shift: %s: shift count out of range\n", a.c_str());
-        st = 1;
-      } else {
-        for (long k = 0; k < n; k++) sh.positional.erase(sh.positional.begin());
-        st = 0;
-      }
-    }
-  } else if (cmd == "exit") {
-    size_t ci = 1;
-    if (ci < argv.size() && argv[ci] == "--") ci++;
-    const std::string a = ci < argv.size() ? argv[ci] : std::string();
-    char *end = nullptr;
-    long v = a.empty() ? sh.last_status : std::strtol(a.c_str(), &end, 10);
-    if (argv.size() - ci > 1) {
-      // Extra arguments: the shell does NOT exit; status 2 and the rest of
-      // the command list is discarded (both modes -- errors.tests).
-      sh.errorf("exit: too many arguments\n");
-      st = 2;
-      sh.arith_abort = true;
-    } else if (!a.empty() && (end == a.c_str() || *end != '\0')) {
-      // A non-numeric argument is no longer a fatal error: bash reports it
-      // and the shell CONTINUES with status 2 (posix mode still treats the
-      // special-builtin error as fatal).
-      sh.errorf("exit: %s: numeric argument required\n", a.c_str());
-      st = 2;
-      sh.posix_special_builtin_error(st);
-    } else {
-      sh.exiting = true;
-      sh.exit_status = static_cast<int>(v) & 0xff;
-      st = sh.exit_status;
-      // `exit' inside a function runs the EXIT trap with that function's frame
-      // still active ($FUNCNAME), so snapshot the call stack before it unwinds.
-      if (sh.in_function()) { sh.exit_src_frames = sh.src_frames; sh.have_exit_frames = true; }
-    }
-  } else if (cmd == "return") {
-    // Argument validation runs FIRST (bash's get_exitstat): extra arguments
-    // and a non-numeric status are reported even at top level, before the
-    // can-only-return check.
-    size_t ri = 1;
-    if (ri < argv.size() && argv[ri] == "--") ri++;
-    char *rend = nullptr;
-    long rv = 0;
-    bool badnum = false;
-    if (ri < argv.size()) {
-      rv = std::strtol(argv[ri].c_str(), &rend, 10);
-      badnum = argv[ri].empty() || rend == argv[ri].c_str() || *rend != '\0';
-    }
-    if (argv.size() - ri > 1) {
-      // Extra arguments: status 2, rest of the command list discarded (the
-      // function is NOT returned from -- errors.tests, both modes).
-      sh.errorf("return: too many arguments\n");
-      st = 2;
-      sh.arith_abort = true;
-    } else if (badnum) {
-      // Non-numeric: report, then RETURN with status 2 in default mode (the
-      // function body after it never runs); at top level the can-only-return
-      // report still follows.  POSIX: fatal (errors10.sub).
-      sh.errorf("return: %s: numeric argument required\n", argv[ri].c_str());
-      st = 2;
-      sh.posix_special_builtin_error(st);
-      if (sh.in_function() || sh.source_depth > 0) {
-        sh.returning = true;
-        sh.exit_status = 2;
-      } else if (!sh.exiting) {
-        sh.errorf("return: can only `return' from a function or sourced script\n");
-      }
-    } else if (!sh.in_function() && sh.source_depth == 0) {
-      // `return' is only meaningful in a function or a sourced script;
-      // elsewhere it is an error and must not unwind the current input (bash).
-      sh.errorf("return: can only `return' from a function or sourced script\n");
-      st = 1;
-      sh.posix_special_builtin_error(st);  // special builtin: fatal in posix
-    } else {
-      sh.returning = true;
-      // A BARE `return' inside a signal trap action reports $? from before the
-      // trap ran -- the action cannot change it (posix interp 1602) -- unless
-      // the action called a function we are still inside.  An explicit
-      // argument always wins.
-      int bare = (sh.trap_ret_depth >= 0 && sh.nest_depth() == sh.trap_ret_depth)
-                     ? sh.trap_saved_status
-                     : sh.last_status;
-      sh.exit_status = ri < argv.size() ? (static_cast<int>(rv) & 0xff) : bare;
-      st = sh.exit_status;
-    }
-  } else if (cmd == "break" || cmd == "continue") {
-    // Argument validation runs before the loop-level check (bash): extra
-    // arguments discard the rest of the list with status 2, and a
-    // non-numeric count is FATAL to any non-interactive shell in BOTH modes
-    // (`break x' ends the script -- errors4.sub, errors10.sub).
-    size_t bi = 1;
-    if (bi < argv.size() && argv[bi] == "--") bi++;
-    char *bend = nullptr;
-    bool bbad = false;
-    if (bi < argv.size()) {
-      std::strtol(argv[bi].c_str(), &bend, 10);
-      bbad = argv[bi].empty() || bend == argv[bi].c_str() || *bend != '\0';
-    }
-    if (argv.size() - bi > 1) {
-      sh.errorf("%s: too many arguments\n", cmd.c_str());
-      st = 2;
-      sh.arith_abort = true;
-    } else if (bbad) {
-      sh.errorf("%s: %s: numeric argument required\n", cmd.c_str(), argv[bi].c_str());
-      st = 2;
-      if (!sh.interactive) {
-        sh.exiting = true;
-        sh.exit_status = 2;
-      }
-    }
-    // Outside any loop bash prints a diagnostic (suppressed under `set -o
-    // posix') and succeeds without unwinding, rather than silently swallowing
-    // the rest of the input.  Mirrors builtins/break.def check_loop_level().
-    else if (sh.loop_depth == 0) {
-      if (!sh.opt_posix)
-        sh.errorf("%s: only meaningful in a `for', `while', or `until' loop\n", cmd.c_str());
-      st = 0;
-    } else {
-      int n = 1;
-      // Skip a leading `--' end-of-options marker (`break -- 5').
-      size_t ci = 1;
-      if (ci < argv.size() && argv[ci] == "--") ci++;
-      const std::string a = ci < argv.size() ? argv[ci] : std::string();
-      char *end = nullptr;
-      long v = a.empty() ? 1 : std::strtol(a.c_str(), &end, 10);
-      if (!a.empty() && (end == a.c_str() || *end != '\0')) {
-        // A non-numeric count: bash aborts the command (get_numeric_arg); we
-        // report and terminate every enclosing loop, the closest observable
-        // approximation without the top-level throw.
-        sh.errorf("%s: %s: numeric argument required\n", cmd.c_str(), a.c_str());
-        sh.break_count = sh.loop_depth;
-        st = 1;
-      } else if (v <= 0) {
-        // A non-positive count breaks out of every enclosing loop (bash sets
-        // `breaking = loop_level' for both break and continue), status 1.
-        sh.errorf("%s: %s: loop count out of range\n", cmd.c_str(), a.c_str());
-        sh.break_count = sh.loop_depth;
-        st = 1;
-      } else {
-        // Requesting more levels than are active caps at the outermost loop, so
-        // the remaining count never unwinds past the loop nest.
-        n = static_cast<int>(v);
-        if (n > sh.loop_depth) n = sh.loop_depth;
-        if (cmd == "break") sh.break_count = n;
-        else sh.continue_count = n;
-        st = 0;
-      }
-    }
-  } else if (cmd == "eval") {
-    // `eval' takes no options besides `--'; a leading `-X' is an error.
-    size_t ai = 1;
-    if (ai < argv.size() && argv[ai] != "--" && argv[ai].size() >= 2 && argv[ai][0] == '-') {
-      sh.errorf("eval: %s: invalid option\n", argv[ai].c_str());
-      std::fprintf(stderr, "eval: usage: eval [arg ...]\n");
-      st = 2;
-    } else {
-      if (ai < argv.size() && argv[ai] == "--") ai++;
-      std::string saved_ctx = sh.error_context;
-      sh.error_context = "eval";  // parse errors report `NAME: eval: line N: ...'
-      // $LINENO inside eval continues from the eval command's line (bash), so an
-      // eval on line 42 whose body is `echo $LINENO' prints 42.
-      int saved_base = sh.lineno_base;
-      if (sh.cur_lineno > 0) sh.lineno_base = sh.cur_lineno - 1;
-      st = sh.run_string(join(argv, ai));
-      sh.lineno_base = saved_base;
-      sh.error_context = saved_ctx;
-    }
-  } else if (cmd == "source" || cmd == ".") {
-    // `-p PATH' gives an explicit colon-separated search path (bash 5.2+).
-    size_t ai = 1;
-    bool pflag = false;
-    std::string ppath;
-    for (; ai < argv.size(); ai++) {
-      if (argv[ai] == "--") { ai++; break; }
-      if (argv[ai] == "-p") { pflag = true; if (ai + 1 < argv.size()) ppath = argv[++ai]; continue; }
-      if (argv[ai].size() >= 2 && argv[ai][0] == '-') {  // `. -i': unknown option
-        sh.errorf("%s: %s: invalid option\n", cmd.c_str(), argv[ai].c_str());
-        std::fprintf(stderr, "%s: usage: %s [-p path] filename [arguments]\n",
-                     cmd.c_str(), cmd.c_str());
-        if (status) *status = 2;
-        return true;
-      }
-      break;
-    }
-    if (ai >= argv.size()) {
-      sh.errorf("%s: filename argument required\n", cmd.c_str());
-      std::fprintf(stderr, "%s: usage: %s [-p path] filename [arguments]\n",
-                   cmd.c_str(), cmd.c_str());
-      if (status) *status = 2;
-      return true;
-    }
-    const std::string &fname = argv[ai];
-    if (sh.opt_restricted && fname.find('/') != std::string::npos) {
-      sh.errorf("%s: %s: restricted\n", cmd.c_str(), fname.c_str());
-      if (status) *status = 1;
-      return true;
-    }
-    // Resolve the file: a name with a slash is used as-is; otherwise search the
-    // `-p' path, or $PATH when the `sourcepath' shopt is on, falling back to the
-    // current directory.
-    std::string path = fname;
-    auto search = [&](const std::string &plist) -> bool {
-      size_t start = 0;
-      while (start <= plist.size()) {
-        size_t e = plist.find(':', start);
-        std::string dir = plist.substr(start, e == std::string::npos ? std::string::npos : e - start);
-        if (dir.empty()) dir = ".";
-        std::string cand = dir + "/" + fname;
-        if (access(cand.c_str(), R_OK) == 0) { path = cand; return true; }
-        if (e == std::string::npos) break;
-        start = e + 1;
-      }
-      return false;
-    };
-    bool giveup = false;
-    if (fname.find('/') != std::string::npos) {
-      // used directly
-    } else if (pflag) {
-      // `-p' searches only the given path; a miss is a hard failure.
-      if (!search(ppath)) {
-        sh.errorf("%s: %s: file not found\n", cmd.c_str(), fname.c_str());
-        st = 1;
-        giveup = true;
-        sh.posix_special_builtin_error(st);  // `.'/source: fatal in posix
-      }
-    } else if (sh.opt_posix) {
-      // POSIX `.'/source: search $PATH only -- NO current-directory fallback
-      // even when the file exists there.  A miss is `.: NAME: file not found'
-      // and (unshielded) fatal for a non-interactive posix shell.
-      const char *penv = std::getenv("PATH");
-      if (!search(penv ? penv : "")) {
-        sh.errorf("%s: %s: file not found\n", cmd.c_str(), fname.c_str());
-        st = 1;
-        giveup = true;
-        sh.posix_special_builtin_error(st);
-      }
-    } else if (sh.shopt_opts["sourcepath"] && access(fname.c_str(), R_OK) != 0) {
-      const char *penv = std::getenv("PATH");
-      search(penv ? penv : "");  // on a miss, path stays fname (current directory)
-    }
-    if (!giveup) {
-      std::ifstream f(path);
-      if (f) {
-        std::ostringstream ss; ss << f.rdbuf();
-        // Extra arguments become the sourced file's positional parameters
-        // (`. file a b'); with none, it inherits the caller's positionals.
-        std::vector<std::string> saved_pos;
-        bool set_pos = argv.size() > ai + 1;
-        bool saved_params_flag = sh.params_set_builtin;
-        if (set_pos) {
-          saved_pos = sh.positional;
-          sh.positional.assign(argv.begin() + ai + 1, argv.end());
-          sh.params_set_builtin = false;
-        }
-        // A sourced file becomes the innermost BASH_SOURCE frame; use the
-        // resolved path (bash records the PATH-found path, not the bare name),
-        // so ${BASH_SOURCE[0]} lets a script locate itself.  The call line is
-        // where `source' appears in the current file.
-        int src_call_line = sh.cur_lineno;  // where `source' appears; see below
-        sh.push_src_frame("source", path, sh.cur_lineno, false);
-        // A sourced file has its own line numbering starting at 1 ($LINENO, the
-        // DEBUG trap, and functions it defines all use the file's own lines).
-        int saved_src_base = sh.lineno_base;
-        sh.lineno_base = 0;
-        // A sourced file does not inherit the DEBUG trap unless functrace is
-        // set (source.def restores the default for the duration).  bash lifts
-        // the suppression in an unwind frame that runs AFTER `source_file',
-        // and `source_file' is what fires the RETURN trap -- so the RETURN
-        // trap's own body produces no DEBUG line either.  Hence the window
-        // below closes past the RETURN trap, not at the end of the file.
-        std::string hidden_debug;
-        bool hid_debug = false;
-        if (!sh.opt_functrace) {
-          auto dit = sh.traps.find("DEBUG");
-          if (dit != sh.traps.end()) {
-            hidden_debug = dit->second;
-            hid_debug = true;
-            sh.traps.erase(dit);
-          }
-        }
-        sh.source_depth++;  // `return' is legal while sourcing
-        st = sh.run_string(ss.str());
-        sh.source_depth--;
-        sh.lineno_base = saved_src_base;
-        // `return' inside a sourced file ends the file (and sets its status),
-        // like reaching EOF -- it must not unwind past `source' or exit the
-        // shell (bash semantics; e.g. /etc/bashrc does `[ -z "$PS1" ] && return').
-        if (sh.returning) { sh.returning = false; st = sh.exit_status; }
-        sh.pop_src_frame();
-        // A sourced file is a FUNCTION FRAME to bash: leaving it fires the
-        // DEBUG and RETURN traps, reporting the line `source' was called on --
-        // exactly as leaving a function body re-reports its definition line.
-        // The frame is already popped, so $FUNCNAME names the caller.
-        {
-          sh.cur_lineno = src_call_line;
-          // Only the RETURN trap is fired here: the DEBUG line that precedes it
-          // is the one its own body produces under functrace, exactly as when a
-          // function body returns.
-          //
-          // Unlike a function, a sourced file does NOT gate this on functrace:
-          // `source_file' runs the trap unconditionally, so a `source' at top
-          // level fires it either way.  Inside a function it follows the
-          // function's own rule, because that is where bash restored the
-          // default trap.  See Shell::return_trap_fires().
-          if (sh.return_trap_fires()) sh.run_return_trap(st);
-        }
-        // Restore the DEBUG trap -- but only if the sourced file did not set
-        // one of its own, which is what bash's trap_if_untrapped() amounts to.
-        if (hid_debug && !sh.traps.count("DEBUG")) sh.traps["DEBUG"] = hidden_debug;
-        // Restore the caller's parameters UNLESS the sourced script ran the
-        // `set' builtin at top level -- then its parameters stick (bash).
-        if (set_pos) {
-          if (!(!sh.in_function() && sh.params_set_builtin)) sh.positional = saved_pos;
-          sh.params_set_builtin = saved_params_flag;
-        }
-      } else {
-        sh.errorf("%s: %s\n", fname.c_str(), std::strerror(errno));
-        st = 1;
-        sh.posix_special_builtin_error(st);  // `.'/source: fatal in posix
-      }
-    }
-  } else if (cmd == "local") {
+  }
+  else if (cmd == "local") {
     if (!sh.in_function()) {
       sh.errorf("local: can only be used in a function\n");
       st = 1;
@@ -7462,498 +8008,19 @@ bool run_builtin(Shell &sh, const std::vector<std::string> &argv, int *status) {
     st = bi_declare(sh, argv, false, true);
     // POSIX: like export, a failing readonly is fatal unless `command'-run.
     if (st != 0) sh.posix_special_builtin_error(st);
-  } else if (cmd == "let") {
-    st = bi_let(sh, argv);
-  } else if (cmd == "type") {
-    st = bi_type(sh, argv);
-  } else if (cmd == "help") {
-    st = bi_help(sh, argv);
-  } else if (cmd == "builtin") {
-    st = bi_builtin(sh, argv);
-  } else if (cmd == "logout") {
-    st = bi_logout(sh, argv);
-  } else if (cmd == "hash") {
-    st = bi_hash(sh, argv);
-  } else if (cmd == "shopt") {
-    st = bi_shopt(sh, argv);
-  } else if (cmd == "ulimit") {
-    st = bi_ulimit(sh, argv);
-  } else if (cmd == "enable") {
-    st = bi_enable(sh, argv);
-  } else if (cmd == "caller") {
-    st = bi_caller(sh, argv);
-  } else if (cmd == "alias") {
-    st = bi_alias(sh, argv);
-  } else if (cmd == "unalias") {
-    st = bi_unalias(sh, argv);
-  } else if (cmd == "history") {
-    st = bi_history(sh, argv);
-  } else if (cmd == "fc") {
-    st = bi_fc(sh, argv);
-  } else if (cmd == "compgen") {
-    st = bi_compgen(sh, argv);
-  } else if (cmd == "complete") {
-    st = bi_complete(sh, argv);
-  } else if (cmd == "compopt") {
-    st = bi_compopt(sh, argv);
-  } else if (cmd == "bind") {
-    st = bi_bind(sh, argv);
-  } else if (cmd == "trap") {
-    st = bi_trap(sh, argv);
-  } else if (cmd == "umask") {
-    st = bi_umask(sh, argv);
-  } else if (cmd == "getopts") {
-    st = bi_getopts(sh, argv);
-  } else if (cmd == "times") {
-    st = 0;
-  } else if (cmd == "wait") {
-    // Options: -f (wait for termination, not just a status change), -n (return
-    // after the next job finishes) and -p VAR (store the finished job's pid in
-    // VAR).  A leading `-<digit>' is a (negative) id, not an option.
-    bool nflag = false, have_p = false, opt_err = false;
-    std::string pvar, badopt;
-    size_t ai = 1;
-    for (; ai < argv.size(); ai++) {
-      const std::string &o = argv[ai];
-      if (o == "--") { ai++; break; }
-      if (o.size() < 2 || o[0] != '-' ||
-          std::isdigit(static_cast<unsigned char>(o[1])))
-        break;
-      bool consumed_p = false;
-      for (size_t k = 1; k < o.size() && !opt_err; k++) {
-        char c = o[k];
-        if (c == 'n') nflag = true;
-        else if (c == 'f') { /* no async status tracking: -f is a no-op here */ }
-        else if (c == 'p') {
-          have_p = true;
-          if (k + 1 < o.size()) pvar = o.substr(k + 1);
-          else if (ai + 1 < argv.size()) pvar = argv[++ai];
-          consumed_p = true;
-          break;
-        } else { opt_err = true; badopt = std::string("-") + c; }
-      }
-      if (opt_err || consumed_p) { if (opt_err) break; else continue; }
-    }
-    if (opt_err) {
-      sh.errorf("wait: %s: invalid option\n", badopt.c_str());
-      std::fprintf(stderr, "wait: usage: wait [-fn] [-p var] [id ...]\n");
-      st = 2;
-    } else {
-      long finished_pid = -1;
-      bool found = false;
-      if (nflag) {
-        // `-n': return after the NEXT of the named jobs finishes (or any job
-        // when none are named).  Resolve each id to a job; an unknown `%spec'
-        // reports "no such job" but the wait proceeds with the rest.
-        std::vector<int> ids;
-        for (size_t k = ai; k < argv.size(); k++) {
-          Shell::Job *j = sh.job_by_spec(argv[k]);
-          if (j) ids.push_back(j->id);
-          else {
-            sh.errorf("wait: %s: no such job\n", argv[k].c_str());
-            st = 127;
-          }
-        }
-        // With ids named but none resolvable, there is nothing to wait for.
-        if (ai < argv.size() && ids.empty()) st = 127;
-        else st = sh.wait_next(ids, &finished_pid, &found);
-      } else if (ai < argv.size()) {
-        // Wait for every named id (bash waits for all of them).  The last one's
-        // pid is the -p result.
-        for (size_t k = ai; k < argv.size(); k++) {
-          const std::string &spec = argv[k];
-          if (!spec.empty() && spec[0] == '%') {
-            // A `%jobspec' that names no job: bash reports it and returns 127.
-            Shell::Job *j = sh.job_by_spec(spec);
-            if (!j) {
-              sh.errorf("wait: %s: no such job\n", spec.c_str());
-              st = 127;
-              continue;
-            }
-            int wid = j->id;
-            if (!j->pids.empty()) { finished_pid = j->pids.front(); found = true; }
-            for (long p : j->pids) st = sh.wait_for_pid(p);
-            // A waited-for job is consumed: bash removes it so its number frees
-            // up for reuse by the next async job.
-            sh.remove_jobs_if([wid](const Shell::Job &x) { return x.id == wid; });
-          } else {
-            // Anything not a `%jobspec' must be a decimal pid.
-            bool numeric = !spec.empty();
-            for (char c : spec)
-              if (!std::isdigit(static_cast<unsigned char>(c))) { numeric = false; break; }
-            if (!numeric) {
-              sh.errorf("wait: `%s': not a pid or valid job spec\n", spec.c_str());
-              st = 1;
-              continue;
-            }
-            long pp = std::atol(spec.c_str());
-            Shell::Job *pj = sh.job_by_spec(spec);
-            if (!pj) {
-              // A process-substitution child is waitable too, though it is not
-              // a job: `cat <(exit 123); wait "$!"' reports 123 (procsub1.sub).
-              bool is_procsub = false;
-              for (const auto &ps : sh.procsubs)
-                if (ps.pid == pp) { is_procsub = true; break; }
-              if (is_procsub) {
-                st = sh.wait_for_pid(pp);
-                finished_pid = pp;
-                found = true;
-                continue;
-              }
-              auto rps = sh.reaped_procsub_status.find(pp);
-              if (rps != sh.reaped_procsub_status.end()) {
-                st = rps->second;
-                finished_pid = pp;
-                found = true;
-                sh.reaped_procsub_status.erase(rps);
-                continue;
-              }
-              sh.errorf("wait: pid %ld is not a child of this shell\n", pp);
-              st = 127;
-              continue;
-            }
-            int wid = pj->id;
-            st = sh.wait_for_pid(pp);
-            finished_pid = pp;
-            found = true;
-            // The waited-for job is consumed once it is fully done, so its
-            // number frees up for reuse (bash removes it after `wait pid').
-            sh.remove_jobs_if(
-                [wid](const Shell::Job &x) { return x.id == wid && x.done; });
-          }
-        }
-      } else if (!have_p) {
-        st = sh.wait_all();
-      } else {
-        // `-p var' with no ids and no `-n': reap without blocking; the var is
-        // left unset (bash) when no job supplied a pid.
-        sh.reap_jobs(false);
-        st = 0;
-      }
-      // -p VAR: store the finished pid, or unset VAR when no job was waited for.
-      // The name is validated like other builtins, and an array-element
-      // subscript is arithmetic (a bad one raises bash's arithmetic diagnostic).
-      if (have_p) {
-        auto lb = pvar.find('[');
-        std::string base = pvar, psub;
-        bool subscripted = lb != std::string::npos && !pvar.empty() && pvar.back() == ']';
-        if (subscripted) {
-          base = pvar.substr(0, lb);
-          psub = pvar.substr(lb + 1, pvar.size() - lb - 2);
-        }
-        if (!valid_identifier(base)) {
-          sh.errorf("wait: `%s': not a valid identifier\n", pvar.c_str());
-          st = 1;
-        } else if (found && finished_pid >= 0) {
-          if (subscripted) {
-            if (!sh.array_expand_once_ok(base, psub)) st = 1;  // arith error printed
-            else sh.array_set(base, psub, std::to_string(finished_pid));
-          } else {
-            sh.set(pvar, std::to_string(finished_pid));
-          }
-        } else if (!subscripted) {
-          // No job finished: bash unsets the -p variable.  A readonly target
-          // cannot be unset and is reported as such.
-          auto it = sh.vars.find(sh.deref(base));
-          if (it != sh.vars.end() && it->second.readonly) {
-            sh.errorf("wait: %s: cannot unset: readonly variable\n", base.c_str());
-            st = 1;
-          } else {
-            sh.unset(pvar);
-          }
-        }
-      }
-    }
-  } else if (cmd == "jobs") {
-    // jobs [-lnprs] [jobspec]: -l long (with pgid), -p pids only, -r running
-    // only, -s stopped only, -n changed-only (we have no async change tracking).
-    bool jl = false, jp = false, jr = false, js = false;
-    std::string jspec;
-    bool jbad = false;
-    for (size_t k = 1; k < argv.size(); k++) {
-      const std::string &o = argv[k];
-      if (o == "--") continue;
-      if (o.size() >= 2 && o[0] == '-' && o[1] != '%') {
-        for (size_t c = 1; c < o.size(); c++) {
-          switch (o[c]) {
-            case 'l': jl = true; break;
-            case 'p': jp = true; break;
-            case 'r': jr = true; break;
-            case 's': js = true; break;
-            case 'n': break;  // no async change tracking: nothing extra to show
-            default: jbad = true; break;
-          }
-        }
-      } else {
-        jspec = o;
-      }
-    }
-    if (jbad) {
-      std::fprintf(stderr, "jobs: usage: jobs [-lnprs] [jobspec ...] or jobs -x command [args]\n");
-      st = 1;
-    } else {
-      sh.print_jobs(jspec, jl, jp, jr, js);
-      st = 0;
-    }
-  } else if (cmd == "fg") {
-    std::string spec = argv.size() > 1 ? argv[1] : "";
-    bool cur_spec = spec.empty() || spec == "%" || spec == "%%" || spec == "%+" || spec == "%-";
-    if (!sh.job_control && !sh.opt_monitor) {
-      sh.errorf("fg: no job control\n");
-      st = 1;
-    } else if (sh.no_current_job && cur_spec) {
-      // A command-substitution subshell has no current job to bring forward.
-      sh.errorf("fg: no current jobs\n");
-      st = 1;
-    } else if (Shell::Job *j = sh.job_by_spec(spec)) {
-      if (!j->monitored) {
-        // The job was started when job control was inactive (bash's
-        // IS_JOBCONTROL(job) == 0), so it cannot be brought to the foreground
-        // even though monitor mode is on now.
-        sh.errorf("fg: job %d started without job control\n", j->id);
-        st = 1;
-      } else {
-        std::printf("%s\n", j->command.c_str());  // bash echoes the command
-        std::fflush(stdout);
-        st = sh.foreground_job(*j, true);
-      }
-    } else {
-      sh.errorf("fg: %s: no such job\n", spec.empty() ? "current" : spec.c_str());
-      st = 1;
-    }
-  } else if (cmd == "bg") {
-    std::string spec = argv.size() > 1 ? argv[1] : "";
-    if (!sh.job_control) {
-      sh.errorf("bg: no job control\n");
-      st = 1;
-    } else if (Shell::Job *j = sh.job_by_spec(spec)) {
-      sh.background_job(*j, true);
-      std::printf("[%d]+ %s &\n", j->id, j->command.c_str());  // bash echoes it
-      std::fflush(stdout);
-      st = 0;
-    } else {
-      sh.errorf("bg: %s: no such job\n", spec.empty() ? "current" : spec.c_str());
-      st = 1;
-    }
-  } else if (cmd == "disown") {
-    // disown [-h] [-ar] [jobspec ... | pid ...]: -a all jobs, -r running jobs
-    // only, -h keep the job but mark it to skip SIGHUP.  With no jobspec (and no
-    // -a/-r) it acts on the current job.  We drop disowned jobs from the table
-    // (the -h "keep but no HUP" nuance is not modelled -- we have no HUP-on-exit).
-    bool all = false, running_only = false, hold = false;
-    std::vector<std::string> specs;
-    for (size_t k = 1; k < argv.size(); k++) {
-      const std::string &o = argv[k];
-      if (o.size() >= 2 && o[0] == '-' && o != "--") {
-        for (size_t c = 1; c < o.size(); c++) {
-          if (o[c] == 'a') all = true;
-          else if (o[c] == 'r') running_only = true;
-          else if (o[c] == 'h') hold = true;
-        }
-      } else if (o == "--") {
-        continue;
-      } else {
-        specs.push_back(o);
-      }
-    }
-    std::vector<int> drop;
-    if (all || running_only) {
-      for (const auto &x : sh.jobs)
-        if (!running_only || (x.running && !x.done)) drop.push_back(x.id);
-    } else if (!specs.empty()) {
-      for (const auto &s : specs)
-        if (Shell::Job *j = sh.job_by_spec(s)) drop.push_back(j->id);
-    } else if (Shell::Job *j = sh.job_by_spec("")) {
-      drop.push_back(j->id);
-    }
-    if (!hold) {
-      sh.jobs.erase(std::remove_if(sh.jobs.begin(), sh.jobs.end(),
-                                   [&](const Shell::Job &x) {
-                                     return std::find(drop.begin(), drop.end(), x.id) !=
-                                            drop.end();
-                                   }),
-                    sh.jobs.end());
-    }
-    st = 0;
-  } else if (cmd == "kill") {
-    st = bi_kill(sh, argv);
-  } else if (cmd == "suspend") {
-    st = 0;
-  } else if (cmd == "command") {
-    // Execution of `command NAME args' is handled in the executor (run_simple),
-    // which runs NAME through the normal builtin/external path with shell
-    // functions bypassed.  Only the describe forms (-v/-V) and option errors
-    // reach here; the name-lookup helpers this needs live in this file.
-    size_t i = 1;
-    bool desc_v = false, desc_V = false, bad = false;
-    std::string badopt;
-    for (; i < argv.size(); i++) {
-      const std::string &o = argv[i];
-      if (o == "--") { i++; break; }
-      if (o.size() < 2 || o[0] != '-') break;
-      for (size_t k = 1; k < o.size(); k++) {
-        if (o[k] == 'v') desc_v = true;
-        else if (o[k] == 'V') desc_V = true;
-        else if (o[k] == 'p') {  // default PATH; disallowed under restricted
-          if (sh.opt_restricted) {
-            sh.errorf("command: -p: restricted\n");
-            if (status) *status = 2;
-            return true;
-          }
-        }
-        else { bad = true; badopt = std::string("-") + o[k]; break; }
-      }
-      if (bad) break;
-    }
-    if (bad) {
-      sh.errorf("command: %s: invalid option\n", badopt.c_str());
-      std::fprintf(stderr, "command: usage: command [-pVv] command [arg ...]\n");
-      st = 2;
-    } else if (desc_V) {
-      // `command -V NAME...' == `type NAME...', but a not-found name is reported
-      // against `command' (bi_type uses argv[0] for that diagnostic).
-      std::vector<std::string> t = {"command"};
-      t.insert(t.end(), argv.begin() + i, argv.end());
-      st = bi_type(sh, t);
-    } else if (desc_v) {
-      // For each name print the alias definition (reusable form), the name
-      // (function/builtin/keyword), or the full path (hashed, then $PATH);
-      // 0 if all resolved, 1 otherwise.  Like `type', an alias is reported
-      // only when aliases would actually expand, and a hashed path is
-      // reported (and counted as a hit) before any $PATH search.
-      bool aliases_on = sh.interactive;
-      auto eit = sh.shopt_opts.find("expand_aliases");
-      if (eit != sh.shopt_opts.end() && eit->second) aliases_on = true;
-      st = (i < argv.size()) ? 0 : 1;
-      for (size_t j = i; j < argv.size(); j++) {
-        const std::string &n = argv[j];
-        if (aliases_on && sh.aliases.count(n)) {
-          std::printf("alias %s=%s\n", n.c_str(), single_quote(sh.aliases.at(n)).c_str());
-        } else if (sh.functions.count(n) || is_builtin_name(n) || is_reserved_word(n)) {
-          std::printf("%s\n", n.c_str());
-        } else if (const std::string *hp = sh.hash_lookup(n)) {
-          std::printf("%s\n", hp->c_str());
-        } else {
-          std::string p = find_in_path(sh, n);
-          if (!p.empty()) std::printf("%s\n", p.c_str());
-          else st = 1;
-        }
-      }
-    } else {
-      // No -v/-V: execution is handled in run_simple; reached only defensively
-      // (e.g. run_builtin called directly).  Run the target if it is a builtin.
-      std::vector<std::string> rest(argv.begin() + i, argv.end());
-      if (!rest.empty()) run_builtin(sh, rest, &st);
-      else st = 0;
-    }
-  } else if (cmd == "exec") {
-    if (sh.opt_restricted) {
-      sh.errorf("exec: restricted\n");
-      if (status) *status = 2;
-      return true;
-    }
-    // Options: -a NAME (argv[0] for the command), -c (empty environment),
-    // -l (login: prefix argv[0] with '-').
-    size_t i = 1;
-    std::string a_name;
-    bool have_a = false, clear_env = false, login = false, bad_opt = false;
-    for (; i < argv.size(); i++) {
-      const std::string &o = argv[i];
-      if (o == "--") { i++; break; }
-      if (o.size() < 2 || o[0] != '-') break;
-      bool consumed_next = false;
-      for (size_t k = 1; k < o.size(); k++) {
-        if (o[k] == 'c') clear_env = true;
-        else if (o[k] == 'l') login = true;
-        else if (o[k] == 'a') {
-          have_a = true;
-          if (k + 1 < o.size()) { a_name = o.substr(k + 1); }
-          else if (i + 1 < argv.size()) { a_name = argv[i + 1]; consumed_next = true; }
-          k = o.size();
-        } else { bad_opt = true; break; }
-      }
-      if (bad_opt) break;
-      if (consumed_next) i++;
-    }
-    if (bad_opt) {
-      sh.errorf("exec: %s: invalid option\n", argv[i].c_str());
-      std::fprintf(stderr, "exec: usage: exec [-cl] [-a name] [command "
-                           "[argument ...]] [redirection ...]\n");
-      st = 2;
-    } else if (i >= argv.size()) {
-      // No command word: `exec' with only options/redirections is a no-op here
-      // (redirections are applied by the caller and made permanent).
-      st = 0;
-    } else {
-      const std::string &target = argv[i];
-      // Resolve through the shell's $PATH (what `type'/normal execution use), so
-      // exec finds exactly what the rest of the shell would run.
-      std::string full;
-      bool found = false;
-      if (target.find('/') != std::string::npos) {
-        full = target;
-        found = true;  // let execve report ENOENT/EACCES for an explicit path
-      } else {
-        std::vector<std::string> m = find_all_in_path(sh, target);
-        if (!m.empty()) { full = m[0]; found = true; }
-        else {
-          // No executable match: if a file by that name merely exists on $PATH,
-          // use it so execve reports the real error (e.g. EACCES), as bash does.
-          std::string path = sh.get("PATH");
-          size_t p = 0;
-          while (p <= path.size()) {
-            size_t q = path.find(':', p);
-            std::string dir = path.substr(p, q == std::string::npos ? std::string::npos : q - p);
-            if (dir.empty()) dir = ".";
-            std::string cand = dir + "/" + target;
-            if (access(cand.c_str(), F_OK) == 0) { full = cand; found = true; break; }
-            if (q == std::string::npos) break;
-            p = q + 1;
-          }
-        }
-      }
-      // argv[0] for the command: -a NAME, else the name as typed; -l adds '-'.
-      std::string a0 = have_a ? a_name : target;
-      if (login) a0 = "-" + a0;
-      std::vector<char *> cargv;
-      cargv.push_back(const_cast<char *>(a0.c_str()));
-      for (size_t j = i + 1; j < argv.size(); j++)
-        cargv.push_back(const_cast<char *>(argv[j].c_str()));
-      cargv.push_back(nullptr);
-      // Pass the shell's current environment (empty under -c) explicitly via
-      // execve, so the live shell's `environ' is never disturbed on failure.
-      std::vector<std::string> envs;
-      if (!clear_env) envs = sh.environ_block();
-      std::vector<char *> envp;
-      for (auto &e : envs) envp.push_back(const_cast<char *>(e.c_str()));
-      envp.push_back(nullptr);
-
-      int code = 127;
-      if (found) {
-        // The process image is about to be replaced, so an interactive
-        // session's history has to reach $HISTFILE now or be lost.  Not from a
-        // subshell: that history belongs to the parent, which will write it.
-        if (sh.interactive && sh.subshell_level == 0) save_shell_history(sh);
-        std::fflush(nullptr);
-        execve(full.c_str(), cargv.data(), envp.data());
-        // execve returned: it failed.  bash reports this as "<path>: <error>"
-        // (no "exec:" prefix), using the resolved path.
-        code = (errno == EACCES) ? 126 : 127;
-        sh.errorf("%s: %s\n", full.c_str(), std::strerror(errno));
-      } else {
-        sh.errorf("exec: %s: not found\n", target.c_str());
-      }
-      // bash: an interactive shell (or `shopt -s execfail') stays alive and
-      // returns failure; a non-interactive shell exits.
-      auto ef = sh.shopt_opts.find("execfail");
-      bool execfail = ef != sh.shopt_opts.end() && ef->second;
-      if (sh.interactive || execfail)
-        st = code;
-      else
-        _exit(code);
-    }
+  } else if (cmd == "export") {
+    st = bi_export(sh, argv);
+    // POSIX: a failing export (invalid identifier, assignment error) is a
+    // special-builtin error, fatal to a non-interactive shell unless run via
+    // `command' (errors11.sub).
+    if (st != 0) sh.posix_special_builtin_error(st);
   } else {
-    return false;
+    // Every other builtin is a plain `int (Shell &, argv)' function in the
+    // table above.
+    bool handled = false;
+    for (const auto &e : kBuiltinTable)
+      if (cmd == e.name) { st = e.fn(sh, argv); handled = true; break; }
+    if (!handled) return false;
   }
   if (status) *status = st;
   return true;
