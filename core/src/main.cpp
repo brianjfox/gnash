@@ -417,9 +417,9 @@ int main(int argc, char **argv) {
         case 'B': apply_set_o_option(sh, "braceexpand", set); break;
         case 'm': case 'H':
           break;  // accepted, not (yet) acted on
-        // `-c' takes its command from the next word, but other flags grouped in
-        // the same word still apply -- `-ce cmd' means both `-c' and `-e'.  So
-        // mark have_c and keep scanning the remaining letters of this word.
+        // `-c' only records that a command string is wanted; option parsing
+        // runs on to the first non-option word, which is that string.  So both
+        // `-ce CMD' and `-c -e CMD' set errexit and run CMD, as bash does.
         case 'c': have_c = true; break;
         case 'o': {
           std::string name = (k + 1 < a.size()) ? a.substr(k + 1)
@@ -448,8 +448,6 @@ int main(int argc, char **argv) {
       }
       if (stop_after) break;
     }
-    if (have_c) { idx++; break; }
-    if (stop_after) continue;
   }
   sh.login_shell = login;
   // Keep the `login_shell' shopt in sync: it was seeded from the (still false)

@@ -94,6 +94,13 @@ if(BASH_EXECUTABLE)
     COMMAND ${BASH_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/harness/errfmt.sh
             $<TARGET_FILE:gnash> ${BASH_EXECUTABLE})
 
+  # Differential check of argv handling at invocation (which word is the -c
+  # command string, what becomes $0 and the positional parameters).
+  add_test(
+    NAME invocation_test
+    COMMAND ${BASH_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/harness/invocation_test.sh
+            $<TARGET_FILE:gnash> ${BASH_EXECUTABLE})
+
   # Regression gate over the bash tests/ files gnash passes byte-for-byte.
   add_test(
     NAME conformance_gate
