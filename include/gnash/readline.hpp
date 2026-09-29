@@ -28,6 +28,14 @@ void set_point(int p);
 // The line length.
 int end();
 
+// True while readline() has the terminal in its own (cbreak, no-echo) mode,
+// i.e. between prep_terminal and deprep_terminal.  The shell consults this
+// before recording the terminal's settings as its saved state (bash checks
+// RL_STATE_TERMPREPPED for the same reason): a command run from inside
+// readline -- a programmable-completion function, say -- must not make
+// readline's transient modes the state later restored after a signal.
+bool terminal_prepped();
+
 }  // namespace gnash::readline
 
 #endif  // GNASH_READLINE_HPP

@@ -10,6 +10,7 @@
 #include <termios.h>
 #include <unistd.h>
 
+#include "gnash/readline.hpp"
 #include "gnash/readline_internal.hpp"
 
 namespace gnash::readline {
@@ -42,5 +43,7 @@ void deprep_terminal(int fd) {
   tcsetattr(fd, TCSADRAIN, &saved_tio);
   tio_saved = false;
 }
+
+bool terminal_prepped() { return tio_saved; }
 
 }  // namespace gnash::readline
