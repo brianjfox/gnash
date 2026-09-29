@@ -72,6 +72,15 @@ if(NOT APPLE)
 endif()
 add_test(NAME job_notify_test COMMAND job_notify_test $<TARGET_FILE:gnash>)
 
+# Terminal settings after a foreground job is killed by a signal (bash's
+# wait_for() set_tty_state/get_tty_state rule), driven over a pty.
+add_executable(tty_restore_test tty_restore_test.cpp)
+target_link_libraries(tty_restore_test PRIVATE gnash_warnings)
+if(NOT APPLE)
+  target_link_libraries(tty_restore_test PRIVATE util)  # forkpty lives in libutil
+endif()
+add_test(NAME tty_restore_test COMMAND tty_restore_test $<TARGET_FILE:gnash>)
+
 # The prompt after output without a trailing newline (cursor-position query),
 # driven over a pty against the built shell.
 add_executable(prompt_column_test prompt_column_test.cpp)

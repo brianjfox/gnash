@@ -21,6 +21,8 @@
 #include <termios.h>
 #include <unistd.h>
 
+#include "gnash/readline.hpp"
+
 namespace gnash::core {
 
 void Shell::init_job_control(bool interactive_shell) {
@@ -44,6 +46,7 @@ void Shell::init_job_control(bool interactive_shell) {
     if (setpgid(shell_pgid, shell_pgid) < 0 && errno != EPERM) { /* ignore */ }
     tcsetpgrp(job_terminal, shell_pgid);
     job_control = true;
+    get_tty_state();  // bash initialize_job_control(): the sane state to fall back to
   } else {
     static bool warned = false;
     if (interactive_shell && !warned) {
@@ -57,6 +60,32 @@ void Shell::init_job_control(bool interactive_shell) {
     job_control = false;
     shell_pgid = getpgrp();
   }
+}
+
+void Shell::get_tty_state() {
+  if (job_terminal < 0) return;
+  if (tcgetattr(job_terminal, &shell_tty_info) == 0) tty_state_saved = true;
+}
+
+void Shell::set_tty_state() {
+  if (job_terminal < 0 || !tty_state_saved) return;
+  tcsetattr(job_terminal, TCSADRAIN, &shell_tty_info);
+}
+
+// bash wait_for(): in an interactive shell, once a foreground job has ended,
+// a job killed or stopped by a signal is assumed to have left the terminal
+// however it was mid-run (e.g. raw mode from a full-screen program that got
+// C-c), so the saved settings are put back before the next prompt.  A job
+// that exited normally meant whatever it did to the terminal (`stty -echo'),
+// and that becomes the new saved state -- unless readline currently has the
+// terminal prepped (a command run by programmable completion), whose transient
+// modes must not be recorded.
+void Shell::settle_tty_after_job(bool signaled_or_stopped) {
+  if (!interactive || job_terminal < 0 || subshell_level > 0) return;
+  if (signaled_or_stopped)
+    set_tty_state();
+  else if (!gnash::readline::terminal_prepped())
+    get_tty_state();
 }
 
 Shell::Job *Shell::add_job(long pgid, const std::vector<long> &pids, const std::string &cmd,
@@ -185,7 +214,9 @@ Shell::Job *Shell::job_by_spec(const std::string &spec) {
 
 namespace {
 // Wait for a single job to stop or complete; returns the last member's status.
-int wait_job(Shell::Job &j) {
+// *abnormal is set when any member stopped or was killed by a signal (bash's
+// job_signal_status), which decides whether the tty settings are restored.
+int wait_job(Shell::Job &j, bool *abnormal) {
   int status = 0;
   for (long pid : j.pids) {
     int st = 0;
@@ -193,8 +224,10 @@ int wait_job(Shell::Job &j) {
     if (WIFSTOPPED(st)) {
       j.stopped = true;
       j.running = false;
+      *abnormal = true;
       return 128 + WSTOPSIG(st);
     }
+    if (WIFSIGNALED(st)) *abnormal = true;
     status = WIFEXITED(st) ? WEXITSTATUS(st) : (128 + (WIFSIGNALED(st) ? WTERMSIG(st) : 0));
   }
   j.done = true;
@@ -262,11 +295,13 @@ int Shell::foreground_job(Job &j, bool cont) {
     j.stopped = false;
     j.running = true;
   }
-  int st = wait_job(j);
+  bool abnormal = false;
+  int st = wait_job(j, &abnormal);
   reap_coproc();
   if (job_control) {
     tcsetpgrp(job_terminal, static_cast<pid_t>(shell_pgid));
   }
+  settle_tty_after_job(abnormal);
   last_status = st;
   return st;
 }

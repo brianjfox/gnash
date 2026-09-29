@@ -1199,12 +1199,14 @@ int Executor::run_pipeline(const Connection *c) {
   if (sh_.job_control) tcsetpgrp(sh_.job_terminal, static_cast<pid_t>(pgid));
   int last_st = 0, pipefail_st = 0;
   bool any_stopped = false;
+  bool any_signaled = false;  // some stage was killed by a signal (tty restore)
   std::vector<int> pstat;  // per-stage status, in pipeline order, for $PIPESTATUS
   for (size_t i = 0; i < pids.size(); i++) {
     int wst = 0;
     waitpid(pids[i], &wst, WUNTRACED);
     if (WIFSTOPPED(wst)) { any_stopped = true; pstat.push_back(128 + WSTOPSIG(wst)); continue; }
     sh_.note_child_reaped();  // a pipeline stage that terminated
+    if (WIFSIGNALED(wst)) any_signaled = true;
     int s = WIFEXITED(wst) ? WEXITSTATUS(wst) : (128 + WTERMSIG(wst));
     pstat.push_back(s);
     if (i == pids.size() - 1) last_st = s;
@@ -1228,6 +1230,7 @@ int Executor::run_pipeline(const Connection *c) {
   // failure is not masked by a later success.
   int st = sh_.opt_pipefail ? pipefail_st : last_st;
   if (sh_.job_control) tcsetpgrp(sh_.job_terminal, static_cast<pid_t>(sh_.shell_pgid));
+  sh_.settle_tty_after_job(any_stopped || any_signaled);
 
   if (any_stopped) {
     std::vector<long> lp(pids.begin(), pids.end());
@@ -2070,6 +2073,7 @@ int Executor::run_simple(const SimpleCommand *c) {
     int wst = 0;
     waitpid(pid, &wst, WUNTRACED);
     if (sh_.job_control) tcsetpgrp(sh_.job_terminal, static_cast<pid_t>(sh_.shell_pgid));
+    sh_.settle_tty_after_job(WIFSTOPPED(wst) || WIFSIGNALED(wst));
     if (WIFSTOPPED(wst)) {
       std::string cmd;
       for (size_t k = 0; k < argv.size(); k++) { if (k) cmd += ' '; cmd += argv[k]; }

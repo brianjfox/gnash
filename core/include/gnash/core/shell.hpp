@@ -17,6 +17,8 @@
 #include <tuple>
 #include <vector>
 
+#include <termios.h>
+
 #include "gnash/core/ast.hpp"
 
 namespace gnash::core {
@@ -355,6 +357,18 @@ class Shell {
   int job_terminal = -1;        // controlling-terminal fd, or -1
   bool job_control = false;     // interactive + tty
   bool interactive = false;
+  // The terminal settings a foreground job is restored to when it is killed or
+  // stopped by a signal (bash's shell_tty_info): a program in raw mode that
+  // dies from C-c never gets to clean up, so the shell does it.  Recorded at
+  // job-control startup and again after every foreground job that ends
+  // normally, so a deliberate `stty -echo' persists the way it does in bash.
+  struct termios shell_tty_info {};
+  bool tty_state_saved = false;
+  void get_tty_state();                        // bash get_tty_state(): record current settings
+  void set_tty_state();                        // bash set_tty_state(): put saved settings back
+  // Called once a foreground job has ended: restore the saved settings if it
+  // was killed or stopped by a signal, otherwise record the current ones.
+  void settle_tty_after_job(bool signaled_or_stopped);
   // A command-substitution subshell inherits the job table (so `jobs' still
   // lists them) but bash resets the notion of the current job -- `fg %%'/`bg'
   // with no explicit spec report "no current jobs" there.
