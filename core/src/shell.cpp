@@ -2865,7 +2865,9 @@ std::string Shell::run_and_capture(const std::string &script, int *status) {
   int wst = 0;
   waitpid(pid, &wst, 0);
   note_child_reaped();  // a command-substitution child terminated
-  if (status) *status = WIFEXITED(wst) ? WEXITSTATUS(wst) : 128;
+  // bash execs a lone command in `$(...)' in place, so a killed command's
+  // signal is the substitution's: `x=$(sh -c "kill -TERM \$\$")' sets $? to 143.
+  if (status) *status = WIFEXITED(wst) ? WEXITSTATUS(wst) : 128 + WTERMSIG(wst);
   // Strip trailing newlines, as command substitution does.
   while (!out.empty() && out.back() == '\n') out.pop_back();
   return out;
