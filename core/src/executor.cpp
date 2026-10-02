@@ -1101,6 +1101,7 @@ int Executor::run_pipeline(const Connection *c) {
   std::vector<const Command *> stages;
   gather_pipeline(c, stages);
   size_t n = stages.size();
+  sh_.fg_termsig = 0;
   int prev_read = -1;
   std::vector<pid_t> pids;
   long pgid = 0;
@@ -1206,7 +1207,7 @@ int Executor::run_pipeline(const Connection *c) {
     waitpid(pids[i], &wst, WUNTRACED);
     if (WIFSTOPPED(wst)) { any_stopped = true; pstat.push_back(128 + WSTOPSIG(wst)); continue; }
     sh_.note_child_reaped();  // a pipeline stage that terminated
-    if (WIFSIGNALED(wst)) any_signaled = true;
+    if (WIFSIGNALED(wst)) { any_signaled = true; sh_.fg_termsig = WTERMSIG(wst); }
     int s = WIFEXITED(wst) ? WEXITSTATUS(wst) : (128 + WTERMSIG(wst));
     pstat.push_back(s);
     if (i == pids.size() - 1) last_st = s;
@@ -1290,6 +1291,7 @@ int Executor::run_simple(const SimpleCommand *c) {
   // (eval/source) or function invoked by this command goes on to run.
   bool exec_replace = sh_.can_exec_replace;
   sh_.can_exec_replace = false;
+  sh_.fg_termsig = 0;  // not (yet) a command killed by a signal
   // DEBUG trap: fires before the command, with $BASH_COMMAND set.  If the trap
   // runs `return'/`exit', skip the command and let the unwind propagate.
   if (sh_.traps.count("DEBUG") && !sh_.in_debug_trap) {
@@ -2074,6 +2076,7 @@ int Executor::run_simple(const SimpleCommand *c) {
     waitpid(pid, &wst, WUNTRACED);
     if (sh_.job_control) tcsetpgrp(sh_.job_terminal, static_cast<pid_t>(sh_.shell_pgid));
     sh_.settle_tty_after_job(WIFSTOPPED(wst) || WIFSIGNALED(wst));
+    sh_.fg_termsig = WIFSIGNALED(wst) ? WTERMSIG(wst) : 0;
     if (WIFSTOPPED(wst)) {
       std::string cmd;
       for (size_t k = 0; k < argv.size(); k++) { if (k) cmd += ' '; cmd += argv[k]; }
@@ -2242,8 +2245,10 @@ int Executor::run_subshell(const Subshell *c) {
     sh_.can_exec_replace = false;
     // Run the subshell's own EXIT trap, if it installed one, with $? set to the
     // status of the last command (bash semantics).
+    bool ran_exit_trap = false;
     auto it = sh_.traps.find("EXIT");
     if (it != sh_.traps.end()) {
+      ran_exit_trap = true;
       std::string cmd = it->second;
       sh_.traps.erase(it);
       sh_.last_status = s;
@@ -2252,12 +2257,26 @@ int Executor::run_subshell(const Subshell *c) {
       if (sh_.exiting) s = sh_.exit_status;  // the trap ran `exit N'
     }
     std::fflush(nullptr);
+    // bash execs a subshell's last external command in place, so a subshell
+    // whose final command was killed by a signal dies by that signal itself:
+    // the parent's wait sees WIFSIGNALED, puts the saved tty settings back
+    // (`( cd proj && bun run dev )' then C-c, #709) and reports 128+sig.  The
+    // same holds for a keyboard SIGINT that ended the body early (bash's
+    // wait_for re-raises it).  Without the exec, re-raise the signal to the
+    // same effect -- unless an EXIT trap ran, which rules out bash's exec too.
+    if (sh_.fg_termsig && s == 128 + sh_.fg_termsig && !ran_exit_trap) {
+      signal(sh_.fg_termsig, SIG_DFL);
+      kill(getpid(), sh_.fg_termsig);
+    }
     _exit(s & 0xff);
   }
   int wst = 0;
   waitpid(pid, &wst, 0);
-  sh_.note_child_reaped();  // a foreground external command that terminated
-  return WIFEXITED(wst) ? WEXITSTATUS(wst) : 128;
+  sh_.note_child_reaped();  // a foreground subshell that terminated
+  // A subshell killed by a signal left the terminal however its program had
+  // it; put the saved settings back, as after any other foreground job.
+  sh_.settle_tty_after_job(WIFSIGNALED(wst));
+  return WIFEXITED(wst) ? WEXITSTATUS(wst) : 128 + WTERMSIG(wst);
 }
 
 int Executor::run_group(const Group *c) { return run(c->body.get()); }

@@ -369,6 +369,11 @@ class Shell {
   // Called once a foreground job has ended: restore the saved settings if it
   // was killed or stopped by a signal, otherwise record the current ones.
   void settle_tty_after_job(bool signaled_or_stopped);
+  // The signal that killed the most recent foreground job, or 0 if it exited
+  // normally; reset as each command starts.  A subshell whose last command was
+  // killed by a signal dies by that same signal (see Executor::run_subshell),
+  // as bash's does because it execs that command in place.
+  int fg_termsig = 0;
   // A command-substitution subshell inherits the job table (so `jobs' still
   // lists them) but bash resets the notion of the current job -- `fg %%'/`bg'
   // with no explicit spec report "no current jobs" there.
