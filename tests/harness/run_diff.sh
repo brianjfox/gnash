@@ -775,6 +775,12 @@ E'
   'for f in _; do exit abcde; done; echo after: $?'
   '(f(){ return 42 43; echo in; }; f); echo rc=$?'
   '(exit 42 43); echo rc=$?'
+  # A subshell or command substitution whose last command is killed by a
+  # signal reports 128+sig: bash execs that command in place (#709).
+  '( sh -c "kill -TERM \$\$" ); echo rc=$?'
+  '( true; sh -c "kill -TERM \$\$" ); echo rc=$?'
+  '( sh -c "kill -TERM \$\$"; true ); echo rc=$?'
+  'x=$(sh -c "kill -TERM \$\$"); echo rc=$?'
   '(shift 1 2; echo in); echo rc=$?'
   '(for f in _; do break 1 2; done; echo in); echo rc=$?'
   'set -- a b c; shift 12; echo st=$?'

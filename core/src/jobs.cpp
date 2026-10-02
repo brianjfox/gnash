@@ -215,8 +215,9 @@ Shell::Job *Shell::job_by_spec(const std::string &spec) {
 namespace {
 // Wait for a single job to stop or complete; returns the last member's status.
 // *abnormal is set when any member stopped or was killed by a signal (bash's
-// job_signal_status), which decides whether the tty settings are restored.
-int wait_job(Shell::Job &j, bool *abnormal) {
+// job_signal_status), which decides whether the tty settings are restored;
+// *termsig is the signal that killed a member, if any.
+int wait_job(Shell::Job &j, bool *abnormal, int *termsig) {
   int status = 0;
   for (long pid : j.pids) {
     int st = 0;
@@ -227,7 +228,7 @@ int wait_job(Shell::Job &j, bool *abnormal) {
       *abnormal = true;
       return 128 + WSTOPSIG(st);
     }
-    if (WIFSIGNALED(st)) *abnormal = true;
+    if (WIFSIGNALED(st)) { *abnormal = true; *termsig = WTERMSIG(st); }
     status = WIFEXITED(st) ? WEXITSTATUS(st) : (128 + (WIFSIGNALED(st) ? WTERMSIG(st) : 0));
   }
   j.done = true;
@@ -296,12 +297,14 @@ int Shell::foreground_job(Job &j, bool cont) {
     j.running = true;
   }
   bool abnormal = false;
-  int st = wait_job(j, &abnormal);
+  int termsig = 0;
+  int st = wait_job(j, &abnormal, &termsig);
   reap_coproc();
   if (job_control) {
     tcsetpgrp(job_terminal, static_cast<pid_t>(shell_pgid));
   }
   settle_tty_after_job(abnormal);
+  fg_termsig = termsig;
   last_status = st;
   return st;
 }

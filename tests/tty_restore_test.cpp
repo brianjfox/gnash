@@ -114,6 +114,28 @@ int main(int argc, char **argv) {
     failures++;
   }
 
+  // A subshell (#709).  A lone command in parens is exec'd in place, so the
+  // subshell itself dies by the signal; with a compound body, the subshell
+  // re-raises the signal that killed its last command.  Either way the parent
+  // sees a signaled child and restores the terminal, as bash does.
+  send(master, "( sh -c 'stty -echo; kill -INT $$' )\r", out);
+  drain(master, out, 600);
+  st = echo_state(master);
+  if (st != "on") {
+    std::fprintf(stderr, "FAIL expected echo restored after a subshell killed by SIGINT, got %s\n",
+                 st.c_str());
+    failures++;
+  }
+  send(master, "( true; sh -c 'stty -echo; kill -INT $$' )\r", out);
+  drain(master, out, 600);
+  st = echo_state(master);
+  if (st != "on") {
+    std::fprintf(stderr,
+                 "FAIL expected echo restored after a compound subshell's last command was killed, got %s\n",
+                 st.c_str());
+    failures++;
+  }
+
   // A job that exits normally after `stty -echo' meant it: the change stays,
   // and becomes the state a later signal-killed job is restored to.
   send(master, "stty -echo\r", out);
