@@ -28,6 +28,9 @@ void build_vi_keymaps();
 // Terminal raw-mode setup / restore (no-ops on non-ttys); see tty.cpp.
 void prep_terminal(int fd);
 void deprep_terminal(int fd);
+// Put the prepped modes back if something changed them underneath readline
+// while it waits for a key (a process that outlived the last job, #712).
+void reassert_terminal(int fd);
 
 // Ensure rl_line_buffer is allocated.
 void maybe_init_line();
