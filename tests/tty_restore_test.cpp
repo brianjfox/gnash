@@ -18,6 +18,7 @@
 #include <poll.h>
 #include <signal.h>
 #include <sys/wait.h>
+#include <termios.h>
 #include <unistd.h>
 
 #if defined(__APPLE__)
@@ -133,6 +134,28 @@ int main(int argc, char **argv) {
     std::fprintf(stderr,
                  "FAIL expected echo restored after a compound subshell's last command was killed, got %s\n",
                  st.c_str());
+    failures++;
+  }
+
+  // A job whose child outlives it and resets the terminal (#712).  The
+  // orchestrator dies on C-c at once, the shell preps the tty for readline and
+  // shows the prompt -- and only then does a lingering grandchild that had been
+  // reading the tty exit and write back the cooked settings it saved at
+  // startup (as bun and node do).  Readline must notice and take its modes
+  // back; otherwise every key is buffered by the kernel until Return.  SIGTTOU
+  // is ignored so the orphaned background process is allowed to change them.
+  send(master, "sh -c '(trap \"\" TTOU; sleep 0.4; stty icanon echo <&1) & exit 0'\r", out);
+  drain(master, out, 1200);
+  struct termios tio;
+  if (tcgetattr(master, &tio) != 0 || (tio.c_lflag & ICANON) != 0) {
+    std::fprintf(stderr,
+                 "FAIL expected readline to take the terminal back after a lingering child reset it\n");
+    failures++;
+  }
+  send(master, "echo RES\"\"ULT=alive\r", out);
+  drain(master, out, 300);
+  if (out.find("RESULT=alive") == std::string::npos) {
+    std::fprintf(stderr, "FAIL expected the typed line to reach readline after a lingering child reset the tty\n");
     failures++;
   }
 

@@ -144,25 +144,31 @@ int read_key_raw() {
 
   for (;;) {
     if (gnash::readline::rl_sigint_flag) return EOF;  // C-c pending: abort read
-    if (rl_event_hook) {
-      fd_set rfds;
-      FD_ZERO(&rfds);
-      FD_SET(fd, &rfds);
-      struct timeval tv;
-      tv.tv_sec = 0;
-      tv.tv_usec = kIdlePollUsec;
-      int r = select(fd + 1, &rfds, nullptr, nullptr, &tv);
-      if (gnash::readline::rl_sigint_flag) return EOF;  // C-c: let the loop abort
-      if (r == 0) {          // idle: let the hook run, then keep waiting
-        rl_event_hook();
+    // Wait for a byte, waking every kIdlePollUsec while idle.  An idle tick
+    // gives the event hook a turn (job notifications) and lets readline check
+    // that the terminal is still in the mode it set -- a process that
+    // outlived the last job may have reset it (#712).
+    fd_set rfds;
+    FD_ZERO(&rfds);
+    FD_SET(fd, &rfds);
+    struct timeval tv;
+    tv.tv_sec = 0;
+    tv.tv_usec = kIdlePollUsec;
+    int r = select(fd + 1, &rfds, nullptr, nullptr, &tv);
+    if (gnash::readline::rl_sigint_flag) return EOF;  // C-c: let the loop abort
+    if (r == 0) {  // idle
+      gnash::readline::reassert_terminal(fd);
+      if (rl_event_hook) rl_event_hook();
+      continue;
+    }
+    if (r < 0) {
+      if (errno == EINTR) {
+        if (rl_event_hook) rl_event_hook();
         continue;
       }
-      if (r < 0) {
-        if (errno == EINTR) { rl_event_hook(); continue; }
-        return EOF;
-      }
-      // fd is readable -- fall through to read the byte.
+      return EOF;
     }
+    // fd is readable -- read the byte.
     unsigned char ch;
     ssize_t n = read(fd, &ch, 1);
     if (n == 1) return ch;

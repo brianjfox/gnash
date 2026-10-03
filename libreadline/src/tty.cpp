@@ -16,7 +16,8 @@
 namespace gnash::readline {
 
 namespace {
-struct termios saved_tio;
+struct termios saved_tio;    // what deprep_terminal restores
+struct termios prepped_tio;  // what prep_terminal set
 bool tio_saved = false;
 }  // namespace
 
@@ -35,7 +36,28 @@ void prep_terminal(int fd) {
   t.c_iflag &= static_cast<tcflag_t>(~(ICRNL | INLCR | IXON));
   t.c_cc[VMIN] = 1;
   t.c_cc[VTIME] = 0;
+  prepped_tio = t;
   tcsetattr(fd, TCSADRAIN, &t);
+}
+
+// prep_terminal's modes do not necessarily hold until deprep_terminal.  A
+// process that outlived the last foreground job -- a dev server's child doing
+// a graceful shutdown after the C-c that killed its parent, say -- may still
+// hold the tty open, and when it finally exits it writes back the cooked
+// settings it saved at startup (bun and node both do).  That lands after the
+// shell has taken the terminal back and readline has prepped it, and leaves
+// readline blocked in read() on a canonical-mode tty: nothing arrives until
+// Return (#712).  Called from the key-wait loop's idle tick: if the modes we
+// set are gone, and the shell still owns the terminal, set them again.
+void reassert_terminal(int fd) {
+  if (!tio_saved) return;
+  struct termios cur;
+  if (tcgetattr(fd, &cur) != 0) return;
+  if (cur.c_lflag == prepped_tio.c_lflag && cur.c_iflag == prepped_tio.c_iflag &&
+      cur.c_cc[VMIN] == prepped_tio.c_cc[VMIN] && cur.c_cc[VTIME] == prepped_tio.c_cc[VTIME])
+    return;
+  if (tcgetpgrp(fd) != getpgrp()) return;  // someone else has the terminal
+  tcsetattr(fd, TCSANOW, &prepped_tio);
 }
 
 void deprep_terminal(int fd) {
